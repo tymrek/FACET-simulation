@@ -365,3 +365,20 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
 - Ground observer view: a topocentric sky from any site, to show what FACET does
   to ground astronomy.
 - Optical-link budget and real link scheduling.
+
+## Licence
+
+The code is licensed under either of the **Apache License 2.0**
+([LICENSE-APACHE](LICENSE-APACHE)) or the **MIT licence**
+([LICENSE-MIT](LICENSE-MIT)), at your option. This permissive dual licence is
+the Rust-ecosystem standard, chosen so that agencies, universities and
+companies can use FACET's simulator as a shared reference without legal
+friction. Apache-2.0 adds an explicit patent grant.
+
+Bundled data keeps its own terms (details in [NOTICE](NOTICE)):
+- the star catalogue derived from HYG v4.0 is **CC BY-SA 4.0**;
+- the Natural Earth coastlines are public domain.
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion is dual-licensed as above, without additional terms or conditions.
+
