@@ -73,6 +73,12 @@ pub struct Draft {
     pub priority: i32,
 }
 
+impl Case {
+    pub fn weight(&self) -> f64 {
+        self.weight
+    }
+}
+
 impl Draft {
     pub fn cost(&self) -> f64 {
         self.telescopes as f64 * self.exposure_s
@@ -221,7 +227,21 @@ impl Generator {
     /// Advance the generator by `dt` sim seconds; returns the requests that
     /// arrive. `room` caps how many more programme requests may be open.
     #[allow(clippy::too_many_arguments)]
-    pub fn tick(&mut self, dt: f64, n_sats: usize, room: usize, sun: V3, sun_excl_deg: f64, moon: V3, moon_excl_deg: f64, planets: &[V3]) -> Vec<Draft> {
+    /// `room` caps the total of new open requests; `case_room` caps each
+    /// science case, so a backlog in one case (low-priority deep fields
+    /// waiting for their deadline) cannot starve the others.
+    pub fn tick(
+        &mut self,
+        dt: f64,
+        n_sats: usize,
+        room: usize,
+        case_room: &mut [usize],
+        sun: V3,
+        sun_excl_deg: f64,
+        moon: V3,
+        moon_excl_deg: f64,
+        planets: &[V3],
+    ) -> Vec<Draft> {
         let mut out = Vec::new();
         if !self.on || n_sats == 0 || self.investigators.is_empty() {
             return out;
@@ -233,12 +253,21 @@ impl Generator {
             self.primed = true;
         }
         self.credit = (self.credit + rate * dt).min(rate * 3600.0 + 1e6);
-        while out.len() < 1500 && out.len() < room {
+        let mut skipped = 0;
+        while out.len() < 1500 && out.len() < room && skipped < 200 {
             let d = match self.pending.take() {
                 Some(d) => d,
                 None => self.draft(sun, sun_excl_deg, moon, moon_excl_deg, planets),
             };
+            if case_room.get(d.case).map_or(false, |&r| r == 0) {
+                // This team's case is saturated: the proposal waits for the next cycle.
+                skipped += 1;
+                continue;
+            }
             if self.credit >= d.cost() {
+                if let Some(r) = case_room.get_mut(d.case) {
+                    *r -= 1;
+                }
                 self.credit -= d.cost();
                 out.push(d);
             } else {
@@ -440,7 +469,8 @@ mod tests {
         let mut work = 0.0;
         let mut n = 0;
         for _ in 0..3600 {
-            for d in g.tick(1.0, 1000, 10_000, sun, 45.0, moon, 15.0, &planets) {
+            let mut cr = [10_000usize; 10];
+            for d in g.tick(1.0, 1000, 10_000, &mut cr, sun, 45.0, moon, 15.0, &planets) {
                 assert!(d.dir.dot(sun) < rad(45.0).cos() + 1e-9 || d.body.is_some());
                 assert!(d.dir.dot(moon) < rad(15.0).cos() + 1e-9 || d.body.is_some());
                 work += d.cost();

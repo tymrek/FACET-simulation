@@ -330,7 +330,7 @@ impl App {
                 "waiting: public share of telescopes fully booked",
             ),
             (
-                all.iter().copied().filter(|&i| sh.requests[i].programme.is_some()).take(400).collect(),
+                all.iter().copied().filter(|&i| sh.requests[i].programme.is_some()).take((n / 2).max(400)).collect(),
                 if matches!(self.mode, Mode::Survey | Mode::NeoSweep) { 0 } else { usize::MAX },
                 false,
                 if matches!(self.mode, Mode::Survey | Mode::NeoSweep) {
@@ -540,13 +540,30 @@ impl App {
             return;
         }
         let mut sh = web.lock().unwrap();
-        let open = sh.requests.iter().filter(|r| r.state.is_open() && r.programme.is_some()).count();
-        let room = 1200usize.saturating_sub(open);
+        // Open-request caps scale with the fleet; each case gets a share in
+        // proportion to its weight (×2 headroom, at least 40).
+        let cap = (1.5 * self.shell.len() as f64).max(1200.0) as usize;
+        let mut per_case = vec![0usize; crate::programme::CASES.len()];
+        let mut open = 0;
+        for r in sh.requests.iter().filter(|r| r.state.is_open() && r.programme.is_some()) {
+            open += 1;
+            if let Some(c) = r.case_idx {
+                per_case[c] += 1;
+            }
+        }
+        let room = cap.saturating_sub(open);
+        let wsum: f64 = crate::programme::CASES.iter().map(|c| c.weight()).sum();
+        let mut case_room: Vec<usize> = crate::programme::CASES
+            .iter()
+            .enumerate()
+            .map(|(k, c)| ((cap as f64 * c.weight() / wsum * 2.0).max(40.0) as usize).saturating_sub(per_case[k]))
+            .collect();
         let planets: Vec<V3> = self.bodies.iter().map(|b| b.dir).collect();
         let drafts = self.gen.tick(
             dt_sim,
             self.shell.len(),
             room,
+            &mut case_room,
             self.bodies[0].dir,
             self.obs_params.sun_excl_deg,
             self.bodies[1].dir,
