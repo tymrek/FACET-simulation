@@ -78,6 +78,27 @@ pub struct ObsParams {
     pub jitter_arcsec: f64,
     /// Longest sub-frame (cosmic rays, drift), s.
     pub sub_max_s: f64,
+    // --- Attitude / agility assumptions (see attitude.rs)
+    /// Transverse moment of inertia, kg·m² (~150 kg: 0.6 m bus + 1 m optical tube).
+    pub inertia_kgm2: f64,
+    /// Usable reaction-wheel torque about a slew axis, N·m.
+    pub wheel_torque_nm: f64,
+    /// Usable wheel momentum about a slew axis, N·m·s.
+    pub wheel_momentum_nms: f64,
+    /// Software slew-rate limit, °/s.
+    pub rate_limit_dps: f64,
+    /// Settling decay time constant, s.
+    pub settle_tau_s: f64,
+    /// Post-slew residual as a fraction of the slew angle.
+    pub overshoot_frac: f64,
+    /// Fine-guidance capture radius, arcsec.
+    pub capture_arcsec: f64,
+    /// Fine-guidance acquisition time, s.
+    pub acquire_s: f64,
+    /// Star-tracker-only pointing jitter when no guide star is available, arcsec RMS.
+    pub coarse_jitter_arcsec: f64,
+    /// Faintest usable guide star (V) in the science field.
+    pub guide_mag: f64,
 }
 
 impl Default for ObsParams {
@@ -104,6 +125,16 @@ impl Default for ObsParams {
             full_well_e: 51_000.0,
             jitter_arcsec: 1.0,
             sub_max_s: 300.0,
+            inertia_kgm2: 20.0,
+            wheel_torque_nm: 0.15,
+            wheel_momentum_nms: 2.0,
+            rate_limit_dps: 2.0,
+            settle_tau_s: 3.0,
+            overshoot_frac: 0.0005,
+            capture_arcsec: 10.0,
+            acquire_s: 3.0,
+            coarse_jitter_arcsec: 6.0,
+            guide_mag: 13.0,
         }
     }
 }
@@ -129,6 +160,62 @@ pub struct ObsState {
     pub max_baseline_km: f64,
     pub links_blocked: usize,
     pub link_blocked: Vec<bool>,
+
+    // --- Task and attitude state (persists between frames)
+    /// Task id per satellite (0 = idle). See `job_*` helpers.
+    pub job: Vec<u64>,
+    pub prev_job: Vec<u64>,
+    /// Fine guidance available for the commanded pointing.
+    pub fine: Vec<bool>,
+    pub att: Vec<crate::attitude::Att>,
+    /// Locked integration seconds per satellite in the last step.
+    pub obs_dt: Vec<f64>,
+    pub n_slewing: usize,
+    pub n_settling: usize,
+    pub n_locked: usize,
+    /// Locked on the director's target (stack/mosaic).
+    pub n_locked_target: usize,
+    /// Repoints started in the last step: (satellite, job, angle rad).
+    pub new_slews: Vec<(usize, u64, f64)>,
+}
+
+pub const TAG_SURVEY: u64 = 1;
+pub const TAG_STACK: u64 = 2;
+pub const TAG_MOSAIC: u64 = 3;
+pub const TAG_NEO: u64 = 4;
+pub const TAG_QUEUE: u64 = 5;
+pub fn job(tag: u64, v: u64) -> u64 {
+    (tag << 56) | (v & ((1 << 56) - 1))
+}
+pub fn job_tag(j: u64) -> u64 {
+    j >> 56
+}
+pub fn job_val(j: u64) -> u64 {
+    j & ((1 << 56) - 1)
+}
+/// Stable 20-bit key for a sky direction (0.05° cells).
+fn dir_key(d: V3) -> u64 {
+    let (ra, dec) = d.to_radec();
+    let a = (ra.to_degrees() * 20.0) as u64;
+    let b = ((dec.to_degrees() + 90.0) * 20.0) as u64;
+    (a.wrapping_mul(7_919) ^ b.wrapping_mul(104_729)) & 0xF_FFFF
+}
+
+/// Spiral tile offsets (col, row) outward from the centre.
+fn spiral(n: usize) -> &'static [(i32, i32)] {
+    use std::sync::OnceLock;
+    static S: OnceLock<Vec<(i32, i32)>> = OnceLock::new();
+    let v = S.get_or_init(|| {
+        let r = 60i32;
+        let mut v: Vec<(i32, i32)> = (-r..=r).flat_map(|y| (-r..=r).map(move |x| (x, y))).collect();
+        v.sort_by(|a, b| {
+            let ka = (a.0.abs().max(a.1.abs()), (a.1 as f64).atan2(a.0 as f64));
+            let kb = (b.0.abs().max(b.1.abs()), (b.1 as f64).atan2(b.0 as f64));
+            ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        v
+    });
+    &v[..n.min(v.len())]
 }
 
 pub struct Metrics {
@@ -197,10 +284,23 @@ pub fn update(
     sun: V3,
     moon: V3,
     target: Option<V3>,
+    target_is_body: bool,
 ) {
     let n = pos.len();
     st.rhat.clear();
     st.rhat.extend(pos.iter().map(|p| p.unit()));
+    if st.att.len() != n {
+        // Shell rebuilt: everyone starts idle, pointing at zenith.
+        st.att = st.rhat.iter().map(|&z| crate::attitude::Att::new(z)).collect();
+        st.job = vec![0; n];
+    }
+    std::mem::swap(&mut st.prev_job, &mut st.job);
+    st.prev_job.resize(n, 0);
+    st.job.clear();
+    st.job.resize(n, 0);
+    st.fine.clear();
+    st.fine.resize(n, true);
+    let guide = |d: V3| crate::imaging::guide_star_available(d, o.fov_deg, o.guide_mag);
     st.lit.clear();
     st.lit.extend(pos.iter().map(|&p| !in_shadow(p, sun)));
     st.n_lit = st.lit.iter().filter(|&&l| l).count();
@@ -236,6 +336,8 @@ pub fn update(
                 let z = st.rhat[i];
                 if ok(z) {
                     st.pointing[i] = Some(z);
+                    st.job[i] = job(TAG_SURVEY, 0);
+                    st.fine[i] = guide(z);
                 }
             }
         }
@@ -248,31 +350,62 @@ pub fn update(
                     Vec::new()
                 };
                 st.n_target_visible = visible.len();
+                // Bright solar-system targets are their own guide source.
+                let tkey = if target_is_body { 0xF_FFFF } else { dir_key(t) };
                 if mode == Mode::Stack {
+                    let fine = target_is_body || guide(t);
                     for &i in &visible {
                         st.pointing[i] = Some(t);
+                        st.job[i] = job(TAG_STACK, tkey);
+                        st.fine[i] = fine;
                     }
                     st.max_baseline_km = projected_max_baseline(pos, &visible, t);
                 } else {
+                    // Sticky spiral mosaic: satellites keep their tile while they
+                    // can see it; free tiles (inner first) go to the satellites
+                    // with the shortest slew.
                     let (e, nn) = tangent_basis(t);
-                    let g = (visible.len() as f64).sqrt().ceil().max(1.0) as usize;
                     let step = rad(o.fov_deg);
-                    let half = (g as f64 - 1.0) / 2.0;
-                    // Assign tiles by sorting satellites along the tangent axes so
-                    // neighbours on the sky are neighbours in orbit (short slews).
-                    let mut order = visible.clone();
-                    order.sort_by(|&a, &b| {
-                        let ka = (pos[a].dot(nn), pos[a].dot(e));
-                        let kb = (pos[b].dot(nn), pos[b].dot(e));
-                        ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
+                    let tiles = spiral(visible.len());
+                    let tile_dir = |k: usize| {
+                        let (c, r) = tiles[k];
+                        (t + e * (c as f64 * step).tan() + nn * (r as f64 * step).tan()).unit()
+                    };
+                    let mut used = vec![false; tiles.len()];
+                    let mut free_sats = Vec::new();
+                    for &i in &visible {
+                        let pj = st.prev_job[i];
+                        let k = (job_val(pj) >> 20) as usize;
+                        if job_tag(pj) == TAG_MOSAIC && (job_val(pj) & 0xF_FFFF) == tkey && k < tiles.len() && !used[k] {
+                            let d = tile_dir(k);
+                            if ok(d) && d.dot(st.rhat[i]) > cos_lim {
+                                used[k] = true;
+                                st.pointing[i] = Some(d);
+                                st.job[i] = job(TAG_MOSAIC, ((k as u64) << 20) | tkey);
+                                st.fine[i] = guide(d);
+                                continue;
+                            }
+                        }
+                        free_sats.push(i);
+                    }
+                    free_sats.sort_by(|&a, &b| {
+                        st.att[a].dir.angle(t).partial_cmp(&st.att[b].dir.angle(t)).unwrap_or(std::cmp::Ordering::Equal)
                     });
-                    for (k, &i) in order.iter().enumerate() {
-                        let (row, col) = (k / g, k % g);
-                        let x = (col as f64 - half) * step;
-                        let y = (row as f64 - half) * step;
-                        let d = (t + e * x.tan() + nn * y.tan()).unit();
-                        if ok(d) && d.dot(st.rhat[i]) > cos_lim {
+                    let mut fs = free_sats.into_iter();
+                    for k in 0..tiles.len() {
+                        if used[k] {
+                            continue;
+                        }
+                        let d = tile_dir(k);
+                        if !ok(d) {
+                            continue;
+                        }
+                        let Some(i) = fs.next() else { break };
+                        if d.dot(st.rhat[i]) > cos_lim {
+                            used[k] = true;
                             st.pointing[i] = Some(d);
+                            st.job[i] = job(TAG_MOSAIC, ((k as u64) << 20) | tkey);
+                            st.fine[i] = guide(d);
                         }
                     }
                 }
@@ -289,6 +422,8 @@ pub fn update(
                 let d = sun.rot_axis(perp, el).rot_axis(sun, az).unit();
                 if ok(d) && d.dot(st.rhat[i]) > cos_lim {
                     st.pointing[i] = Some(d);
+                    st.job[i] = job(TAG_NEO, i as u64);
+                    st.fine[i] = guide(d);
                 }
             }
         }
@@ -301,42 +436,66 @@ pub struct QueueItem {
     pub id: u64,
     pub dir: V3,
     pub want: usize,
+    /// Fine guidance possible (bright body target, or a guide star in the field).
+    pub fine: bool,
 }
 
 pub struct QueueResult {
+    #[allow(dead_code)]
     pub id: u64,
     pub assigned: usize,
     pub blocked: Option<&'static str>,
 }
 
-/// Greedy allocator: items in priority order each take up to `want` idle
-/// telescopes that have a clear line of sight. Deliberately simple — a
-/// baseline to compare smarter schedulers against (slew cost, handover,
-/// fairness, airmass-free but limb-proximity weighting, …).
+/// Slew-aware greedy allocator. Items in priority order each take up to
+/// `want` telescopes with a clear line of sight: first those already working
+/// on this request (so nobody repoints needlessly), then idle telescopes with
+/// the shortest slew, and only then telescopes pre-empted from lower-priority work.
 pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: V3, moon: V3) -> Vec<QueueResult> {
     let n = st.rhat.len();
     let mut out = Vec::with_capacity(items.len());
-    let mut idle = n;
+    let mut taken = vec![false; n];
     for it in items {
         if let Some(why) = sky_blocked(o, it.dir, sun, moon) {
             out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(why) });
             continue;
         }
+        let me = job(TAG_QUEUE, it.id);
         let mut got = 0;
-        if idle > 0 {
-            for i in 0..n {
-                if got >= it.want {
-                    break;
-                }
-                if st.pointing[i].is_none() && it.dir.dot(st.rhat[i]) > st.cos_lim {
-                    st.pointing[i] = Some(it.dir);
-                    got += 1;
-                    idle -= 1;
-                }
+        let mut cands: Vec<(f64, usize)> = Vec::new();
+        for i in 0..n {
+            if taken[i] || it.dir.dot(st.rhat[i]) <= st.cos_lim {
+                continue;
+            }
+            if st.prev_job[i] == me && got < it.want {
+                taken[i] = true;
+                st.pointing[i] = Some(it.dir);
+                st.job[i] = me;
+                st.fine[i] = it.fine;
+                got += 1;
+            } else {
+                let busy = st.prev_job[i] != 0 && st.prev_job[i] != me;
+                let cost = st.att[i].dir.angle(it.dir) + if busy { 10.0 } else { 0.0 };
+                cands.push((cost, i));
             }
         }
+        let need = it.want.saturating_sub(got);
+        if need > 0 && !cands.is_empty() {
+            let k = need.min(cands.len());
+            if k < cands.len() {
+                cands.select_nth_unstable_by(k - 1, |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            }
+            for &(_, i) in &cands[..k] {
+                taken[i] = true;
+                st.pointing[i] = Some(it.dir);
+                st.job[i] = me;
+                st.fine[i] = it.fine;
+                got += 1;
+            }
+        }
+        let free = taken.iter().filter(|t| !**t).count();
         let blocked = if got == 0 {
-            Some(if idle == 0 { "no free telescopes" } else { "Earth blocks every free telescope" })
+            Some(if free == 0 { "no free telescopes" } else { "Earth blocks every free telescope" })
         } else {
             None
         };
@@ -344,6 +503,41 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
     }
     st.n_active = st.pointing.iter().filter(|p| p.is_some()).count();
     out
+}
+
+/// Advance every satellite's attitude by `dt` seconds toward its command.
+pub fn advance_attitudes(st: &mut ObsState, ag: &crate::attitude::Agility, dt: f64, target: Option<V3>) {
+    use crate::attitude::Phase;
+    let n = st.att.len();
+    st.obs_dt.clear();
+    st.obs_dt.resize(n, 0.0);
+    st.new_slews.clear();
+    let (mut sl, mut se, mut lk, mut lt) = (0, 0, 0, 0);
+    for i in 0..n {
+        let cmd = st.pointing[i].map(|d| (d, st.job[i], st.fine[i]));
+        let r = st.att[i].step(cmd, dt, ag);
+        st.obs_dt[i] = r.observed_s;
+        if let Some(a) = r.new_slew {
+            st.new_slews.push((i, st.job[i], a));
+        }
+        match st.att[i].phase() {
+            Phase::Slewing => sl += 1,
+            Phase::Settling | Phase::Acquiring => se += 1,
+            Phase::Locked => {
+                lk += 1;
+                if let Some(t) = target {
+                    if matches!(job_tag(st.job[i]), TAG_STACK) && st.att[i].dir.angle(t) < 1e-6 {
+                        lt += 1;
+                    }
+                }
+            }
+            Phase::Idle => {}
+        }
+    }
+    st.n_slewing = sl;
+    st.n_settling = se;
+    st.n_locked = lk;
+    st.n_locked_target = lt;
 }
 
 /// Two-pass farthest-point heuristic on positions projected onto the plane ⟂ t.
@@ -444,7 +638,7 @@ mod tests {
         // asin((6378+100)/6928) ≈ 69.2°
         let mut st = ObsState::default();
         let pos = vec![V3::new(6928.137, 0.0, 0.0)];
-        update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[], V3::new(0.0, 1.0, 0.0), V3::Z, None);
+        update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[], V3::new(0.0, 1.0, 0.0), V3::Z, None, false);
         assert!((st.earth_cone_deg - 69.2).abs() < 0.2, "{}", st.earth_cone_deg);
     }
 
@@ -452,7 +646,7 @@ mod tests {
     fn opposite_pair_link_blocked() {
         let pos = vec![V3::new(6928.0, 0.0, 0.0), V3::new(-6928.0, 0.0, 0.0)];
         let mut st = ObsState::default();
-        update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[(0, 1)], V3::new(0.0, 1.0, 0.0), V3::Z, None);
+        update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[(0, 1)], V3::new(0.0, 1.0, 0.0), V3::Z, None, false);
         assert_eq!(st.links_blocked, 1);
     }
 }

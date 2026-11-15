@@ -6,12 +6,15 @@ use crate::astro::{self, BODY_NAMES, EARTH_RADIUS_KM};
 use crate::catalog::bv_to_rgb;
 use crate::draw::{rgba, Batch};
 use crate::math::{deg, rad, V3};
+use crate::attitude::Phase;
 use crate::obs::{tangent_basis, Mode};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
 
 const C_ACTIVE: (u8, u8, u8) = (90, 255, 150);
 const C_LIT: (u8, u8, u8) = (255, 236, 205);
 const C_ECLIPSED: (u8, u8, u8) = (95, 115, 180);
+const C_SLEWING: (u8, u8, u8) = (255, 150, 40);
+const C_SETTLING: (u8, u8, u8) = (255, 225, 80);
 const BODY_COLORS: [(u8, u8, u8); 9] = [
     (255, 225, 120),
     (215, 215, 205),
@@ -259,9 +262,18 @@ impl App {
             let len = cam.norm() * 0.06;
             let stride = (self.obs.n_active / 700).max(1);
             for i in (0..n).step_by(stride) {
-                if let (Some(pa), Some(d)) = (vis[i], self.obs.pointing[i]) {
-                    if let Some(pb) = proj(pos[i] + d * len) {
-                        b.line(pa, pb, 1.0, c3(C_ACTIVE, 0.35));
+                let Some(a) = self.obs.att.get(i) else { continue };
+                if a.job == 0 {
+                    continue;
+                }
+                let col = match a.phase() {
+                    Phase::Slewing => C_SLEWING,
+                    Phase::Settling | Phase::Acquiring => C_SETTLING,
+                    _ => C_ACTIVE,
+                };
+                if let Some(pa) = vis[i] {
+                    if let Some(pb) = proj(pos[i] + a.dir * len) {
+                        b.line(pa, pb, 1.0, c3(col, 0.4));
                     }
                 }
             }
@@ -269,12 +281,13 @@ impl App {
         let sr = (3.4 - 0.5 * (n as f32).log10()).max(1.1);
         for i in 0..n {
             if let Some(p) = vis[i] {
-                let col = if self.obs.pointing[i].is_some() {
-                    C_ACTIVE
-                } else if self.obs.lit[i] {
-                    C_LIT
-                } else {
-                    C_ECLIPSED
+                let phase = self.obs.att.get(i).map(|a| a.phase()).unwrap_or(Phase::Idle);
+                let col = match phase {
+                    Phase::Locked => C_ACTIVE,
+                    Phase::Slewing => C_SLEWING,
+                    Phase::Settling | Phase::Acquiring => C_SETTLING,
+                    Phase::Idle if self.obs.lit[i] => C_LIT,
+                    Phase::Idle => C_ECLIPSED,
                 };
                 b.point(p, sr, c3(col, 1.0));
             }
@@ -579,8 +592,20 @@ impl App {
             let h = rad(self.obs_params.fov_deg / 2.0).tan();
             let mut drawn = 0usize;
             let stack = self.mode == Mode::Stack;
-            for (i, pt) in self.obs.pointing.iter().enumerate() {
-                let Some(d) = *pt else { continue };
+            for (i, a) in self.obs.att.iter().enumerate() {
+                if a.job == 0 {
+                    continue;
+                }
+                let d = a.dir;
+                let phase = a.phase();
+                if phase != Phase::Locked {
+                    // Moving boresight: small marker only.
+                    if let Some(p) = proj(d) {
+                        let c = if phase == Phase::Slewing { C_SLEWING } else { C_SETTLING };
+                        b.point(p, 1.6, c3(c, 0.85));
+                    }
+                    continue;
+                }
                 stack_count += 1;
                 if (stack && drawn > 0) || drawn > 6000 {
                     continue;
@@ -644,7 +669,7 @@ impl App {
                     if let Some(why) = self.obs.target_blocked_by {
                         s += &format!("  ·  {why}");
                     } else {
-                        s += &format!("  ·  {} telescopes", self.obs.n_target_visible);
+                        s += &format!("  ·  {} locked / {} can see it", self.obs.n_locked_target, self.obs.n_target_visible);
                     }
                 }
                 text(&painter, p + egui::vec2(18.0, 14.0), Align2::LEFT_TOP, s, 13.0, col);
@@ -653,7 +678,7 @@ impl App {
                         &painter,
                         p + egui::vec2(18.0, 30.0),
                         Align2::LEFT_TOP,
-                        format!("{}° FOV, stacked ×{}", self.obs_params.fov_deg, stack_count),
+                        format!("{}° FOV, stacking ×{} locked", self.obs_params.fov_deg, stack_count),
                         11.0,
                         Color32::from_gray(160),
                     );
@@ -698,7 +723,9 @@ impl App {
 
 fn legend(p: &egui::Painter, rect: Rect) {
     let items = [
-        (C_ACTIVE, "observing"),
+        (C_ACTIVE, "locked, observing"),
+        (C_SLEWING, "slewing"),
+        (C_SETTLING, "settling / acquiring guide star"),
         (C_LIT, "idle, sunlit"),
         (C_ECLIPSED, "idle, eclipsed"),
         ((80, 200, 255), "laser link"),

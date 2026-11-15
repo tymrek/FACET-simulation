@@ -11,6 +11,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+fn r1(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
+}
 fn r2(x: f64) -> f64 {
     (x * 100.0).round() / 100.0
 }
@@ -58,6 +61,7 @@ impl App {
             public_url: None,
             errors: Vec::new(),
             results: Default::default(),
+            jd_now: self.jd,
         };
         let shared = Arc::new(Mutex::new(shared));
         server::start(
@@ -151,6 +155,13 @@ impl App {
                     jitter_arcsec,
                     read_noise_e,
                     sub_max_s,
+                    rate_limit_dps,
+                    wheel_torque_nm,
+                    inertia_kgm2,
+                    settle_tau_s,
+                    acquire_s,
+                    coarse_jitter_arcsec,
+                    guide_mag,
                     overhead_s,
                     sun_excl_deg,
                     moon_excl_deg,
@@ -170,6 +181,13 @@ impl App {
                     set(&mut o.jitter_arcsec, jitter_arcsec, 0.1, 5.0);
                     set(&mut o.read_noise_e, read_noise_e, 0.5, 10.0);
                     set(&mut o.sub_max_s, sub_max_s, 10.0, 1200.0);
+                    set(&mut o.rate_limit_dps, rate_limit_dps, 0.1, 10.0);
+                    set(&mut o.wheel_torque_nm, wheel_torque_nm, 0.01, 2.0);
+                    set(&mut o.inertia_kgm2, inertia_kgm2, 2.0, 200.0);
+                    set(&mut o.settle_tau_s, settle_tau_s, 0.2, 30.0);
+                    set(&mut o.acquire_s, acquire_s, 0.0, 60.0);
+                    set(&mut o.coarse_jitter_arcsec, coarse_jitter_arcsec, 0.5, 60.0);
+                    set(&mut o.guide_mag, guide_mag, 6.0, 18.0);
                     set(&mut o.overhead_s, overhead_s, 0.0, 120.0);
                     set(&mut o.sun_excl_deg, sun_excl_deg, 5.0, 120.0);
                     set(&mut o.moon_excl_deg, moon_excl_deg, 0.0, 45.0);
@@ -183,17 +201,17 @@ impl App {
         }
     }
 
-    /// Allocate telescopes to approved requests and integrate their exposure.
-    pub fn run_queue(&mut self, dt_sim: f64) {
+    /// Allocate telescopes to approved requests (pointing commands only).
+    pub fn queue_assign(&mut self) {
         let Some(web) = self.web.clone() else { return };
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
         let mut sh = web.lock().unwrap();
-        let utc = astro::format_utc(self.jd);
         let mut order: Vec<usize> = (0..sh.requests.len())
             .filter(|&i| sh.requests[i].state.is_schedulable())
             .collect();
         order.sort_by_key(|&i| (std::cmp::Reverse(sh.requests[i].priority), sh.requests[i].id));
         order.truncate(300);
+        let o = &self.obs_params;
         let items: Vec<QueueItem> = order
             .iter()
             .map(|&i| {
@@ -204,31 +222,87 @@ impl App {
                     r.ra_deg = deg(ra);
                     r.dec_deg = deg(dec);
                 }
-                QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize }
+                let fine = r.body.is_some() || crate::imaging::guide_star_available(r.dir, o.fov_deg, o.guide_mag);
+                QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine }
             })
             .collect();
         let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon);
         for (res, &i) in results.iter().zip(&order) {
             let r = &mut sh.requests[i];
-            debug_assert_eq!(r.id, res.id);
             r.assigned_now = res.assigned as u32;
             r.blocked = res.blocked.map(String::from);
-            if res.assigned > 0 {
-                if r.hw.is_none() {
-                    r.hw = Some(crate::imaging::Hardware::from_obs(&self.obs_params));
+            if res.assigned > 0 && r.hw.is_none() {
+                r.hw = Some(crate::imaging::Hardware::from_obs(&self.obs_params));
+                r.agility = Some(crate::attitude::Agility::from_obs(&self.obs_params));
+            }
+        }
+    }
+
+    /// After the attitude step: credit locked integration to requests, track
+    /// slews, jitter and first light.
+    pub fn queue_credit(&mut self) {
+        let Some(web) = self.web.clone() else { return };
+        let ag = crate::attitude::Agility::from_obs(&self.obs_params);
+        let mut per: HashMap<u64, (f64, f64, f64, u32)> = HashMap::new(); // id -> (s, jit²·s, fine s, locked sats)
+        for i in 0..self.obs.att.len() {
+            let j = self.obs.job[i];
+            if obs::job_tag(j) != obs::TAG_QUEUE {
+                continue;
+            }
+            let e = per.entry(obs::job_val(j)).or_default();
+            let dt = self.obs.obs_dt[i];
+            let a = &self.obs.att[i];
+            if a.phase() == crate::attitude::Phase::Locked {
+                e.3 += 1;
+            }
+            if dt > 0.0 {
+                let jit = a.jitter(&ag);
+                e.0 += dt;
+                e.1 += dt * jit * jit;
+                if a.fine {
+                    e.2 += dt;
                 }
-                r.obs_jd = self.jd;
-                r.state = ReqState::Observing;
-                r.progress_s += res.assigned as f64 * dt_sim;
+            }
+        }
+        let mut slews: HashMap<u64, (u32, f64)> = HashMap::new();
+        for &(_, j, ang) in &self.obs.new_slews {
+            if obs::job_tag(j) == obs::TAG_QUEUE {
+                let e = slews.entry(obs::job_val(j)).or_default();
+                e.0 += 1;
+                e.1 += ang.to_degrees();
+            }
+        }
+        let mut sh = web.lock().unwrap();
+        let utc = astro::format_utc(self.jd);
+        let jd = self.jd;
+        for r in sh.requests.iter_mut().filter(|r| r.state.is_schedulable()) {
+            if let Some(&(n, sum)) = slews.get(&r.id) {
+                r.slews += n;
+                r.slew_deg_sum += sum;
+            }
+            let (got, jit2, fine_s, locked) = per.get(&r.id).copied().unwrap_or_default();
+            r.locked_now = locked;
+            if r.full_lock_jd.is_none() && locked >= r.telescopes {
+                r.full_lock_jd = Some(jd);
+            }
+            if got > 0.0 {
+                if r.first_light_jd.is_none() {
+                    r.first_light_jd = Some(jd);
+                }
+                r.obs_jd = jd;
+                r.progress_s += got;
+                r.jit2_s += jit2;
+                r.fine_s += fine_s;
                 if r.progress_s >= r.required_s() {
                     r.progress_s = r.required_s();
                     r.state = ReqState::Done;
                     r.assigned_now = 0;
+                    r.locked_now = 0;
                     r.completed_utc = Some(utc.clone());
+                    continue;
                 }
-            } else if r.state == ReqState::Observing {
-                r.state = ReqState::Approved;
             }
+            r.state = if r.assigned_now > 0 { ReqState::Observing } else { ReqState::Approved };
         }
     }
 
@@ -241,20 +315,25 @@ impl App {
         let sp = &self.shell_params;
         let o = &self.obs_params;
         let n = self.shell.len();
-        let stride = (self.obs.n_active / 1500).max(1);
+        // Footprints at the ACTUAL boresight: 0 locked & eclipsed, 1 locked & sunlit, 2 slewing/settling.
+        let tasked = self.obs.att.iter().filter(|a| a.job != 0).count();
+        let stride = (tasked / 1500).max(1);
         let mut fps = Vec::new();
         let mut seen = 0usize;
-        for (i, p) in self.obs.pointing.iter().enumerate() {
-            if let Some(d) = p {
-                if self.mode == Mode::Stack && !fps.is_empty() {
-                    break;
-                }
-                if seen % stride == 0 {
-                    let (ra, dec) = d.to_radec();
-                    fps.push(serde_json::json!([r2(deg(ra)), r2(deg(dec)), self.obs.lit[i] as u8]));
-                }
-                seen += 1;
+        for (i, a) in self.obs.att.iter().enumerate() {
+            if a.job == 0 {
+                continue;
             }
+            let locked = a.phase() == crate::attitude::Phase::Locked;
+            if self.mode == Mode::Stack && locked && fps.iter().any(|f: &serde_json::Value| f[2] != 2) {
+                continue;
+            }
+            if seen % stride == 0 {
+                let (ra, dec) = a.dir.to_radec();
+                let code = if !locked { 2 } else { self.obs.lit[i] as u8 };
+                fps.push(serde_json::json!([r2(deg(ra)), r2(deg(dec)), code]));
+            }
+            seen += 1;
         }
         let bodies: Vec<serde_json::Value> = self
             .bodies
@@ -268,9 +347,11 @@ impl App {
         let target = self.target_dir().map(|t| {
             let (ra, dec) = t.to_radec();
             serde_json::json!({ "name": self.target_name(), "ra": r2(deg(ra)), "dec": r2(deg(dec)),
-                                "visible": self.obs.n_target_visible, "blocked": self.obs.target_blocked_by })
+                                "visible": self.obs.n_target_visible, "locked": self.obs.n_locked_target,
+                                "blocked": self.obs.target_blocked_by })
         });
-        let m = obs::metrics(o, self.obs.n_target_visible, self.obs.max_baseline_km, 0);
+        let m = obs::metrics(o, self.obs.n_locked_target, self.obs.max_baseline_km, 0);
+        let ag = crate::attitude::Agility::from_obs(o);
         let status = serde_json::json!({
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,
@@ -290,12 +371,19 @@ impl App {
                 "aperture_cm": o.aperture_cm, "fov_deg": o.fov_deg, "exp_s": o.exp_s,
                 "overhead_s": o.overhead_s,
                 "jitter_arcsec": o.jitter_arcsec, "read_noise_e": o.read_noise_e, "sub_max_s": o.sub_max_s,
+                "inertia_kgm2": o.inertia_kgm2, "wheel_torque_nm": o.wheel_torque_nm, "wheel_momentum_nms": o.wheel_momentum_nms,
+                "rate_limit_dps": o.rate_limit_dps, "settle_tau_s": o.settle_tau_s, "acquire_s": o.acquire_s,
+                "coarse_jitter_arcsec": o.coarse_jitter_arcsec, "guide_mag": o.guide_mag,
+                "alpha_dps2": r2(ag.alpha.to_degrees()), "omega_dps": r2(ag.omega.to_degrees()),
+                "repoint_10_s": r1(ag.repoint_time(10f64.to_radians())), "repoint_90_s": r1(ag.repoint_time(90f64.to_radians())),
                 "lim_1tel_60s": r2(crate::imaging::point_lim_mag(&crate::imaging::Hardware::from_obs(o), 60.0, 60.0f64.min(o.sub_max_s), 22.0)),
                 "sun_excl_deg": o.sun_excl_deg, "moon_excl_deg": o.moon_excl_deg,
                 "limb_margin_deg": o.limb_margin_deg, "neo_elong_deg": o.neo_elong_deg, "neo_band_deg": o.neo_band_deg,
             },
             "stats": {
                 "lit": self.obs.n_lit, "eclipsed": n - self.obs.n_lit, "active": self.obs.n_active,
+                "locked": self.obs.n_locked, "slewing": self.obs.n_slewing, "settling": self.obs.n_settling,
+                "locked_on_target": self.obs.n_locked_target,
                 "earth_cone_deg": r2(self.obs.earth_cone_deg),
                 "sky_reachable": r2(self.cov_frac * 100.0), "sky_allowed": r2(self.cov_sky_allowed * 100.0),
                 "mean_per_point": r2(self.cov_mean),
@@ -308,6 +396,7 @@ impl App {
         });
         let mut sh = web.lock().unwrap();
         sh.status_json = status.to_string();
+        sh.jd_now = self.jd;
         sh.utc_now = astro::format_utc(self.jd);
     }
 
@@ -362,6 +451,7 @@ impl App {
                 if r.state == ReqState::Pending {
                     if ui.small_button("✔").on_hover_text("approve").clicked() {
                         r.state = ReqState::Approved;
+                        r.approved_jd = Some(self.jd);
                     }
                     if ui.small_button("✖").on_hover_text("reject").clicked() {
                         r.state = ReqState::Rejected;

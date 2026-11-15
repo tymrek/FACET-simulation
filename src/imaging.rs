@@ -170,6 +170,20 @@ pub fn zodi_sb(d: V3, sun: V3) -> f64 {
     -2.5 * (f_pole + (f_ecl - f_pole).max(0.0) * w).log10()
 }
 
+/// Is there a usable guide star (V ≤ guide_mag) in a square field of side
+/// `fov_deg` centred on `d`? Poisson draw from the star-count model, seeded by
+/// sky position so the answer is stable for a given field.
+pub fn guide_star_available(d: V3, fov_deg: f64, guide_mag: f64) -> bool {
+    let expect = star_counts(guide_mag, galactic_lat_deg(d)) * fov_deg * fov_deg;
+    let p = 1.0 - (-expect).exp();
+    if p > 0.9999 {
+        return true;
+    }
+    let (ra, dec) = d.to_radec();
+    let cell = ((deg(ra) / fov_deg.max(0.05)).floor() as i64, (deg(dec) / fov_deg.max(0.05)).floor() as i64);
+    hash3(cell.0, cell.1, 17, 0x6A1D) < p
+}
+
 fn galactic_lat_deg(d: V3) -> f64 {
     let ngp = V3::from_radec(rad(192.859_48), rad(27.128_25));
     deg(d.dot(ngp).asin())
@@ -597,6 +611,15 @@ pub struct Spec {
     pub exposure_s: f64,
     pub hw: Hardware,
     pub done: bool,
+    /// Fraction of integration taken under fine guidance.
+    pub fine_frac: f64,
+    /// Approval → first locked photon, seconds.
+    pub response_s: Option<f64>,
+    /// Approval → all requested telescopes locked, seconds.
+    pub full_lock_s: Option<f64>,
+    pub slews: u32,
+    pub mean_slew_deg: f64,
+    pub agility: Option<crate::attitude::Agility>,
 }
 
 pub struct Output {
@@ -934,6 +957,12 @@ pub fn render(spec: &Spec) -> Output {
     if matches!(spec.target_name.as_str(), "Orion Nebula (M42)" | "Andromeda (M31)" | "LMC" | "Pleiades (M45)" | "Galactic Centre") {
         notes.push("Extended deep-sky objects (nebulae, galaxies, clusters) are not modelled yet: the field shows its stars and a synthetic background only.".into());
     }
+    if spec.fine_frac < 0.999 {
+        notes.push(format!(
+            "No guide star brighter than the fine-guidance limit for {:.0} % of the integration: those frames used star-tracker pointing only, which blurs the stack.",
+            100.0 * (1.0 - spec.fine_frac)
+        ));
+    }
     if spec.body == Some(1) {
         notes.push("Lunar parallax from low Earth orbit (up to ~1°) is not modelled: the Moon is placed at its geocentric position.".into());
     }
@@ -1002,6 +1031,25 @@ pub fn render(spec: &Spec) -> Output {
             "phase_angle_deg": phase.map(r1),
             "angular_diameter_arcsec": ang_diam.map(r2),
             "saturn_ring_tilt_deg": ring_tilt.map(r2),
+        },
+        "pointing": {
+            "effective_jitter_arcsec_rms": r2(hw.jitter_arcsec),
+            "fine_guided_fraction": r2(spec.fine_frac),
+            "repoints": spec.slews,
+            "mean_slew_deg": r1(spec.mean_slew_deg),
+            "response_s": spec.response_s.map(r1),
+            "full_lock_s": spec.full_lock_s.map(r1),
+            "agility": spec.agility.map(|a| serde_json::json!({
+                "alpha_dps2": r2(a.alpha.to_degrees()), "omega_dps": r2(a.omega.to_degrees()),
+                "settle_tau_s": a.settle_tau_s, "capture_arcsec": a.capture_arcsec, "acquire_s": a.acquire_s,
+                "slew_s": r1(a.slew_time(spec.mean_slew_deg.to_radians())),
+                "settle_s": r1(a.settle_time(spec.mean_slew_deg.to_radians())),
+                "repoint_s": r1(a.repoint_time(spec.mean_slew_deg.to_radians())),
+            })),
+            "trace": spec.agility.map(|a| {
+                crate::attitude::trace(&a, spec.mean_slew_deg.max(0.5).to_radians(), spec.fine_frac >= 0.5, spec.id + 1)
+                    .iter().map(|&(t, e)| [r1(t), r2(e)]).collect::<Vec<_>>()
+            }),
         },
         "images": {
             "full": { "px": full.w, "arcsec_per_px": r3(full.scale), "bin": r1(full.scale / ps) },
@@ -1088,6 +1136,12 @@ mod tests {
                 exposure_s: 60.0,
                 hw: hw(),
                 done: true,
+                fine_frac: 1.0,
+                response_s: None,
+                full_lock_s: None,
+                slews: 0,
+                mean_slew_deg: 0.0,
+                agility: None,
             };
             let out = render(&spec);
             assert!(out.full_png.len() > 1000 && out.crop_png.len() > 1000);
@@ -1115,7 +1169,8 @@ mod gallery {
         ];
         for (name, body, dir, total, n, exp) in cases {
             let spec = Spec { id: 7, target_name: name.into(), dir, body, jd, total_s: total, required_s: total,
-                              telescopes: n, exposure_s: exp, hw: Hardware::from_obs(&ObsParams::default()), done: true };
+                              telescopes: n, exposure_s: exp, hw: Hardware::from_obs(&ObsParams::default()), done: true,
+                              fine_frac: 1.0, response_s: None, full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None };
             let t = std::time::Instant::now();
             let out = render(&spec);
             std::fs::write(format!("/tmp/g_{name}_full.png"), &out.full_png).unwrap();

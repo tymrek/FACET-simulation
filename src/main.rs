@@ -3,6 +3,7 @@
 
 mod app;
 mod astro;
+mod attitude;
 mod catalog;
 mod constellation;
 mod draw;

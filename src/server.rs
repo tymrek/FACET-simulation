@@ -80,6 +80,40 @@ pub struct ObsRequest {
     /// Sim time of the most recent integration.
     #[serde(skip)]
     pub obs_jd: f64,
+    /// Telescopes locked on and integrating right now.
+    pub locked_now: u32,
+    #[serde(skip)]
+    pub approved_jd: Option<f64>,
+    #[serde(skip)]
+    pub first_light_jd: Option<f64>,
+    /// First time every requested telescope was locked on.
+    #[serde(skip)]
+    pub full_lock_jd: Option<f64>,
+    /// Σ(locked seconds × jitter²) and fine-guided seconds, for the result model.
+    #[serde(skip)]
+    pub jit2_s: f64,
+    #[serde(skip)]
+    pub fine_s: f64,
+    pub slews: u32,
+    #[serde(skip)]
+    pub slew_deg_sum: f64,
+    #[serde(skip)]
+    pub agility: Option<crate::attitude::Agility>,
+}
+
+impl ObsRequest {
+    /// Approval → first locked photon, seconds of sim time.
+    pub fn response_s(&self) -> Option<f64> {
+        Some((self.first_light_jd? - self.approved_jd?) * 86_400.0)
+    }
+    /// Approval → all requested telescopes locked, seconds.
+    pub fn full_lock_s(&self) -> Option<f64> {
+        Some((self.full_lock_jd? - self.approved_jd?) * 86_400.0)
+    }
+    /// Integration-weighted pointing jitter, arcsec RMS.
+    pub fn eff_jitter(&self) -> Option<f64> {
+        (self.progress_s > 0.0 && self.jit2_s > 0.0).then(|| (self.jit2_s / self.progress_s).sqrt())
+    }
 }
 
 impl ObsRequest {
@@ -121,6 +155,13 @@ pub enum Command {
         jitter_arcsec: Option<f64>,
         read_noise_e: Option<f64>,
         sub_max_s: Option<f64>,
+        rate_limit_dps: Option<f64>,
+        wheel_torque_nm: Option<f64>,
+        inertia_kgm2: Option<f64>,
+        settle_tau_s: Option<f64>,
+        acquire_s: Option<f64>,
+        coarse_jitter_arcsec: Option<f64>,
+        guide_mag: Option<f64>,
         overhead_s: Option<f64>,
         sun_excl_deg: Option<f64>,
         moon_excl_deg: Option<f64>,
@@ -162,6 +203,8 @@ pub struct Shared {
     pub public_url: Option<String>,
     pub errors: Vec<String>,
     pub results: ResultCache,
+    /// Sim Julian date at the last status publish.
+    pub jd_now: f64,
 }
 
 /// Rendered observation results, keyed by (request id, progress bucket).
@@ -225,8 +268,20 @@ fn handle_result(shared: SharedRef, req: Request, path: String) {
                 required_s: required,
                 telescopes: r.telescopes,
                 exposure_s: r.exposure_s,
-                hw,
+                hw: {
+                    let mut hw = hw;
+                    if let Some(j) = r.eff_jitter() {
+                        hw.jitter_arcsec = j;
+                    }
+                    hw
+                },
                 done,
+                fine_frac: if r.progress_s > 0.0 { r.fine_s / r.progress_s } else { 1.0 },
+                response_s: r.response_s(),
+                full_lock_s: r.full_lock_s(),
+                slews: r.slews,
+                mean_slew_deg: if r.slews > 0 { r.slew_deg_sum / r.slews as f64 } else { 0.0 },
+                agility: r.agility,
             },
         )
     };
@@ -382,6 +437,12 @@ fn requests_json(sh: &Shared, director: bool) -> serde_json::Value {
             let mut j = serde_json::to_value(r).unwrap_or_default();
             j["required_s"] = serde_json::json!(r.required_s());
             j["has_result"] = serde_json::json!(r.hw.is_some() && r.progress_s > 0.0);
+            j["response_s"] = serde_json::json!(r.response_s());
+            j["full_lock_s"] = serde_json::json!(r.full_lock_s());
+            j["waiting_s"] = serde_json::json!(match (r.approved_jd, r.first_light_jd) {
+                (Some(a), None) if r.state.is_schedulable() => Some((sh.jd_now - a) * 86_400.0),
+                _ => None,
+            });
             if director {
                 j["ip"] = serde_json::json!(r.ip);
             }
@@ -484,6 +545,15 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         dir,
         hw: None,
         obs_jd: 0.0,
+        locked_now: 0,
+        approved_jd: if state == ReqState::Approved { Some(sh.jd_now) } else { None },
+        first_light_jd: None,
+        full_lock_jd: None,
+        jit2_s: 0.0,
+        fine_s: 0.0,
+        slews: 0,
+        slew_deg_sum: 0.0,
+        agility: None,
     };
     sh.requests.push(r);
     // Bound memory: drop the oldest closed requests.
@@ -504,6 +574,7 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
 }
 
 fn apply_request_cmd(sh: &mut Shared, id: u64, action: &str, priority: Option<i32>, telescopes: Option<u32>) -> Result<(), &'static str> {
+    let jd = sh.jd_now;
     let r = sh.requests.iter_mut().find(|r| r.id == id).ok_or("no such request")?;
     if let Some(p) = priority {
         r.priority = p.clamp(-100, 100);
@@ -512,7 +583,10 @@ fn apply_request_cmd(sh: &mut Shared, id: u64, action: &str, priority: Option<i3
         r.telescopes = t.clamp(1, 10_000);
     }
     match action {
-        "approve" if r.state == ReqState::Pending => r.state = ReqState::Approved,
+        "approve" if r.state == ReqState::Pending => {
+            r.state = ReqState::Approved;
+            r.approved_jd = Some(jd);
+        }
         "reject" if r.state.is_open() => r.state = ReqState::Rejected,
         "cancel" if r.state.is_open() => r.state = ReqState::Cancelled,
         "requeue" if !r.state.is_open() => {
@@ -520,6 +594,13 @@ fn apply_request_cmd(sh: &mut Shared, id: u64, action: &str, priority: Option<i3
             r.progress_s = 0.0;
             r.completed_utc = None;
             r.hw = None;
+            r.approved_jd = Some(jd);
+            r.first_light_jd = None;
+            r.full_lock_jd = None;
+            r.jit2_s = 0.0;
+            r.fine_s = 0.0;
+            r.slews = 0;
+            r.slew_deg_sum = 0.0;
         }
         "update" => {}
         "approve" | "reject" | "cancel" | "requeue" => return Err("not valid in this state"),

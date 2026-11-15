@@ -307,9 +307,15 @@ impl App {
             sun,
             moon,
             target,
+            matches!(self.target, Some(Target::Body(_))),
         );
         if self.mode == Mode::Queue {
-            self.run_queue(dt_sim);
+            self.queue_assign();
+        }
+        let ag = crate::attitude::Agility::from_obs(&self.obs_params);
+        obs::advance_attitudes(&mut self.obs, &ag, dt_sim, target);
+        if self.mode == Mode::Queue {
+            self.queue_credit();
         }
         self.publish_status(now);
 
@@ -448,16 +454,16 @@ impl App {
         ui.add(egui::Slider::new(&mut o.aperture_cm, 5.0..=100.0).text("aperture cm"));
         ui.add(egui::Slider::new(&mut o.fov_deg, 0.1..=5.0).logarithmic(true).text("FOV ° (square)"));
         ui.add(egui::Slider::new(&mut o.exp_s, 1.0..=3600.0).logarithmic(true).text("exposure s"));
-        ui.add(egui::Slider::new(&mut o.jitter_arcsec, 0.1..=5.0).text("pointing jitter ″ RMS"))
-            .on_hover_text("ASSUMPTION: bus pointing stability over a sub-frame. Small-sat buses: ~0.5–2″.");
-        ui.add(egui::Slider::new(&mut o.read_noise_e, 0.5..=10.0).text("read noise e⁻"));
+        ui.add(egui::Slider::new(&mut o.jitter_arcsec, 0.1..=5.0).text("pointing jitter arcsec RMS"))
+            .on_hover_text("ASSUMPTION: bus pointing stability over a sub-frame. Small-sat buses: ~0.5–2 arcsec.");
+        ui.add(egui::Slider::new(&mut o.read_noise_e, 0.5..=10.0).text("read noise e-"));
         ui.add(egui::Slider::new(&mut o.sub_max_s, 10.0..=1200.0).logarithmic(true).text("max sub-frame s"));
         {
             let hw = crate::imaging::Hardware::from_obs(o);
             let lim = crate::imaging::point_lim_mag(&hw, o.exp_s, o.exp_s.min(o.sub_max_s), 22.0);
             ui.label(
                 RichText::new(format!(
-                    "f/{:.1}, {:.0} mm, {:.2}″/px, FWHM {:.2}″ · 1 telescope, {:.0} s: V≈{:.1} (5σ, dark sky)",
+                    "f/{:.1}, {:.0} mm, {:.2}\"/px, FWHM {:.2}\" · 1 telescope, {:.0} s: V≈{:.1} (5σ, dark sky)",
                     hw.f_ratio(),
                     hw.focal_mm(),
                     hw.pixel_scale(),
@@ -471,6 +477,38 @@ impl App {
         }
         ui.add(egui::Slider::new(&mut o.overhead_s, 0.0..=120.0).text("slew+settle overhead s"))
             .on_hover_text("ASSUMPTION: dead time per pointing (slew, settle, readout).");
+        ui.separator();
+
+        // ---------------- Agility
+        ui.label(RichText::new("Attitude control (per satellite)").strong());
+        let o = &mut self.obs_params;
+        ui.add(egui::Slider::new(&mut o.inertia_kgm2, 2.0..=200.0).logarithmic(true).text("inertia kg·m²"))
+            .on_hover_text("ASSUMPTION: ~150 kg, 0.6 m bus + 1 m optical tube → ≈17–20 kg·m² about a transverse axis.");
+        ui.add(egui::Slider::new(&mut o.wheel_torque_nm, 0.01..=1.0).logarithmic(true).text("wheel torque N·m"))
+            .on_hover_text("ASSUMPTION: usable reaction-wheel torque about the slew axis (small-sat wheels: 0.05–0.25 N·m).");
+        ui.add(egui::Slider::new(&mut o.rate_limit_dps, 0.1..=10.0).logarithmic(true).text("slew-rate limit °/s"));
+        ui.add(egui::Slider::new(&mut o.settle_tau_s, 0.2..=30.0).logarithmic(true).text("settling τ s"));
+        ui.add(egui::Slider::new(&mut o.acquire_s, 0.0..=60.0).text("guide-star acquisition s"));
+        ui.add(egui::Slider::new(&mut o.coarse_jitter_arcsec, 0.5..=60.0).logarithmic(true).text("star-tracker-only jitter arcsec"));
+        ui.add(egui::Slider::new(&mut o.guide_mag, 6.0..=18.0).text("guide-star limit V"));
+        {
+            let ag = crate::attitude::Agility::from_obs(o);
+            let t = |d: f64| ag.repoint_time(d.to_radians());
+            ui.label(
+                RichText::new(format!(
+                    "α {:.2}°/s², ω {:.1}°/s · repoint (slew+settle+lock): 1° {:.0} s, 10° {:.0} s, 45° {:.0} s, 90° {:.0} s, 180° {:.0} s",
+                    ag.alpha.to_degrees(),
+                    ag.omega.to_degrees(),
+                    t(1.0),
+                    t(10.0),
+                    t(45.0),
+                    t(90.0),
+                    t(180.0)
+                ))
+                .small()
+                .weak(),
+            );
+        }
         ui.separator();
 
         // ---------------- Constraints
@@ -579,7 +617,12 @@ impl App {
             };
             row(ui, "Sunlit / eclipsed", format!("{} / {}", self.obs.n_lit, n - self.obs.n_lit));
             row(ui, "Earth keep-out cone", format!("{:.1}° + {:.0}° margin", self.obs.earth_cone_deg, self.obs_params.limb_margin_deg));
-            row(ui, "Telescopes observing", format!("{} of {}", self.obs.n_active, n));
+            row(ui, "Tasked telescopes", format!("{} of {}", self.obs.n_active, n));
+            row(
+                ui,
+                "Locked / slewing / settling",
+                format!("{} / {} / {}", self.obs.n_locked, self.obs.n_slewing, self.obs.n_settling),
+            );
             row(
                 ui,
                 "Sky reachable now",
@@ -617,7 +660,8 @@ impl App {
             }
             let nv = self.obs.n_target_visible;
             let tiles = if self.mode == Mode::Mosaic { self.obs.n_active } else { 0 };
-            let m = obs::metrics(&self.obs_params, nv, self.obs.max_baseline_km, tiles);
+            let nl = if self.mode == Mode::Stack { self.obs.n_locked_target } else { nv };
+            let m = obs::metrics(&self.obs_params, nl, self.obs.max_baseline_km, tiles);
             egui::Grid::new("metrics").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
                 let row = |ui: &mut egui::Ui, k: &str, v: String| {
                     ui.label(RichText::new(k).weak());
@@ -625,6 +669,9 @@ impl App {
                     ui.end_row();
                 };
                 row(ui, "Telescopes with clear view", format!("{nv}"));
+                if self.mode == Mode::Stack {
+                    row(ui, "Locked on (integrating)", format!("{}", self.obs.n_locked_target));
+                }
                 if self.mode == Mode::Stack {
                     row(ui, "Collecting area", format!("{:.2} m²", m.area_m2));
                     row(ui, "Equivalent aperture", format!("{:.2} m", m.d_eq_m));

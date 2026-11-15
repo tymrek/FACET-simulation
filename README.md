@@ -161,6 +161,55 @@ The 5σ limits are checked in tests:
 | 100 × 60 s | about 2.5 mag deeper |
 | 300 telescopes × 300 s, North Galactic Pole | V ≈ 24.1 |
 
+## Attitude: slewing, settling, guide-star lock, jitter
+
+Telescopes are no longer pointed instantly. Each satellite has its own
+boresight (`src/attitude.rs`), and every repoint runs this sequence:
+
+1. **Slew.** A time-optimal rest-to-rest manoeuvre (bang-bang, or bang-coast-bang)
+   about the eigen-axis. Angular acceleration α = wheel torque / inertia, and
+   rate is capped by the slew-rate limit and 80 % of wheel momentum.
+2. **Settle.** The residual error e₀ (0.05 % of the slew angle, at least 20″)
+   rings down as a damped oscillation with τ = 3 s until it's inside the 10″
+   fine-guidance capture radius.
+3. **Acquire.** The fine-guidance loop locks onto a guide star in the science
+   field (3 s). A planet or the Moon serves as its own guide source.
+4. **Locked.** Photons count only now. Pointing wanders with the steady-state
+   jitter: 1″ RMS under fine guidance. If no guide star brighter than the limit
+   (V 13) falls in the field, the star tracker alone gives about 6″ RMS. The odds
+   of a guide star come from the star-count model, so narrow fields at high
+   galactic latitude often lack one.
+
+The default ~150 kg, bus-dominated spacecraft: I ≈ 20 kg·m² (0.6 m bus + 1 m
+optical tube), 0.15 N·m usable wheel torque, 2 N·m·s momentum, 2 °/s rate limit.
+That gives α ≈ 0.43 °/s². Full repoint times (slew + settle + lock):
+
+| slew | repoint time |
+|---|---|
+| 1° | 8 s |
+| 10° | 15 s |
+| 45° | 36 s |
+| 90° | 61 s |
+| 180° | 108 s |
+
+**Schedulers are slew-aware.** A telescope keeps its task while it can, so
+nobody repoints for nothing. New work goes first to idle telescopes with the
+shortest slew; pre-empting lower-priority work comes last. Mosaic tiles are
+"sticky", filling outward from the centre. Targets that move slowly compared
+with the rate limit (planets, a zenith stare) are tracked without breaking lock,
+whatever the time step.
+
+**What changes in the outputs:**
+- Requests track their **response time**: approval to first locked photon,
+  and to all requested telescopes locked. They also track repoints and mean slew.
+- Each request's **effective jitter** and **fine-guided fraction** are
+  integration-weighted. They set the PSF of its simulated image, so a stack
+  taken without guide stars comes out visibly blurred.
+- The result report adds a **pointing panel** with a pointing-error-vs-time trace
+  for a typical repoint.
+- In the views, orange = slewing, yellow = settling / acquiring, green =
+  locked. Sky footprints sit at the *actual* boresight.
+
 ## Use it with Stellarium
 
 1. Click **Export TLEs** to write `facet_<N>_sats.tle`.
@@ -214,12 +263,13 @@ Every performance number is an **unchecked soft estimate**:
 | `src/app.rs` | state, clock, control panel |
 | `src/tle.rs` | TLE export |
 | `src/server.rs` | HTTP ports, auth, limits, request book |
+| `src/attitude.rs` | slew / settle / guide-lock state machine, agility model |
 | `src/imaging.rs` | hardware + photometry model, simulated images and reports |
 | `src/webapp.rs` | sim ↔ web glue: commands, queue scheduling, status |
 | `web/` | director and public pages, all-sky map |
 | `assets/` | stars (HYG v4.0, CC BY-SA 4.0), coastlines (Natural Earth, public domain) |
 
-`cargo test` runs 24 checks (`cargo test -- --ignored` also writes a gallery of sample results to /tmp): ephemeris vs ERFA, orbital period, SSO inclination,
+`cargo test` runs 28 checks (`cargo test -- --ignored` also writes a gallery of sample results to /tmp): ephemeris vs ERFA, orbital period, SSO inclination,
 nodal regression, Earth-cone geometry, stacking maths and TLE format.
 
 ## Next steps

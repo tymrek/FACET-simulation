@@ -79,7 +79,18 @@
         <div><label>Read noise e⁻</label><input id="read_noise_e" type="number" min="0.5" max="10" step="0.1"></div>
         <div><label>Max sub-frame s</label><input id="sub_max_s" type="number" min="10" max="1200"></div>
       </div>
+      <h2 style="margin-top:14px">Attitude control</h2>
+      <div class="row">
+        <div><label>Inertia kg·m²</label><input id="inertia_kgm2" type="number" min="2" max="200" step="0.5"></div>
+        <div><label>Wheel torque N·m</label><input id="wheel_torque_nm" type="number" min="0.01" max="2" step="0.01"></div>
+        <div><label>Rate limit °/s</label><input id="rate_limit_dps" type="number" min="0.1" max="10" step="0.1"></div>
+        <div><label>Settling τ s</label><input id="settle_tau_s" type="number" min="0.2" max="30" step="0.1"></div>
+        <div><label>Guide acquisition s</label><input id="acquire_s" type="number" min="0" max="60" step="0.5"></div>
+        <div><label>Star-tracker jitter ″</label><input id="coarse_jitter_arcsec" type="number" min="0.5" max="60" step="0.5"></div>
+        <div><label>Guide-star limit V</label><input id="guide_mag" type="number" min="6" max="18" step="0.5"></div>
+      </div>
       <div class="btns"><button class="primary" id="applytel">Apply</button></div>
+      <p class="note" id="agilityinfo"></p>
     </div>
     <div class="msg small" id="msg"></div>
   </aside>

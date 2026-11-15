@@ -41,7 +41,8 @@ $("applyshell").addEventListener("click", () => {
   if (!$("sso").checked) b.inc_deg = +$("inc").value;
   cmd(b);
 });
-const telKeys = ["aperture_cm", "fov_deg", "sun_excl_deg", "moon_excl_deg", "limb_margin_deg", "neo_elong_deg", "jitter_arcsec", "read_noise_e", "sub_max_s"];
+const telKeys = ["aperture_cm", "fov_deg", "sun_excl_deg", "moon_excl_deg", "limb_margin_deg", "neo_elong_deg", "jitter_arcsec", "read_noise_e", "sub_max_s",
+                 "inertia_kgm2", "wheel_torque_nm", "rate_limit_dps", "settle_tau_s", "acquire_s", "coarse_jitter_arcsec", "guide_mag"];
 const viewer = new ResultViewer($("result"), `?token=${encodeURIComponent(token)}`);
 $("applytel").addEventListener("click", () => {
   const b = { cmd: "telescope" }; for (const k of telKeys) b[k] = +$(k).value; cmd(b);
@@ -83,19 +84,21 @@ function render(s) {
     for (const k of telKeys) $(k).value = s.telescope[k];
     formsLoaded = true;
   }
+  const t = s.telescope;
+  $("agilityinfo").textContent = `α ${t.alpha_dps2}°/s², ω ${t.omega_dps}°/s · repoint 10°: ${t.repoint_10_s} s, 90°: ${t.repoint_90_s} s (slew + settle + guide lock)`;
   $("shellinfo").textContent = `${s.shell.planes} planes · period ${s.shell.period_min} min · node drift ${s.shell.node_drift_deg_day}°/day · ` +
     `${s.shell.links} laser links (${s.shell.links_blocked} through atmosphere)`;
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
   const busyQ = open.reduce((a, r) => a + r.assigned_now, 0);
   $("stats").replaceChildren(
     stat("Satellites", s.shell.n.toLocaleString()),
-    stat("Telescopes busy", s.stats.active.toLocaleString()),
+    stat("Locked / slewing / settling", `${s.stats.locked} / ${s.stats.slewing} / ${s.stats.settling}`),
     stat("Sunlit / eclipsed", `${s.stats.lit} / ${s.stats.eclipsed}`),
     stat("Sky reachable", `${s.stats.sky_reachable}%`),
     stat("Open requests", `${open.length} (${open.filter(r => r.state === "pending").length} pending)`),
     stat("On queue now", `${busyQ} telescopes`),
     ...(["stack", "mosaic"].includes(s.mode) && s.target ? [
-      stat("Target", `${s.target.name}: ${s.target.blocked || s.target.visible + " tel."}`),
+      stat("Target", `${s.target.name}: ${s.target.blocked || `${s.target.locked} locked of ${s.target.visible}`}`),
       stat("Stacked depth (est.)", s.target.visible ? `V ≈ ${s.stats.stack_lim_mag}` : "—"),
     ] : []),
   );

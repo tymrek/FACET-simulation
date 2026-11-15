@@ -137,8 +137,9 @@ class SkyMap {
     zone(moon, tel.moon_excl_deg, "180,180,200");
     if (st.mode === "neo") this.polyline(this.ring(sun.ra, sun.dec, Math.max(tel.neo_elong_deg, tel.sun_excl_deg)), "rgba(255,120,60,0.7)", 1.2, [4, 4]);
     // Telescope pointings
-    for (const [ra, dec, lit] of st.footprints || []) {
-      this.dot(ra, dec, 1.6, lit ? "rgba(90,255,150,0.75)" : "rgba(120,200,255,0.75)");
+    for (const [ra, dec, code] of st.footprints || []) {
+      this.dot(ra, dec, code === 2 ? 1.3 : 1.6,
+        code === 2 ? "rgba(255,150,40,0.85)" : code ? "rgba(90,255,150,0.75)" : "rgba(120,200,255,0.75)");
     }
     // Bodies
     const colors = ["#ffe178", "#d7d7cd", "#beb4aa", "#fff5d7", "#ff8250", "#ebcda0", "#f0d782", "#96e1eb", "#6e96ff"];
@@ -189,8 +190,43 @@ function stateCell(r) {
   const s = el("span", { class: `state ${r.state}` }, r.state);
   const td = el("td", {}, s);
   if (r.blocked && (r.state === "approved" || r.state === "observing")) td.append(el("div", { class: "small warn" }, r.blocked));
-  else if (r.state === "observing") td.append(el("div", { class: "small muted" }, `${r.assigned_now} telescopes`));
+  else if (r.state === "observing") {
+    const slewing = r.assigned_now - r.locked_now;
+    td.append(el("div", { class: "small muted" }, `${r.locked_now} locked` + (slewing > 0 ? `, ${slewing} slewing` : "")));
+  }
+  if (r.response_s !== null && r.response_s !== undefined)
+    td.append(el("div", { class: "small muted" }, `first light +${fmtDur(r.response_s)}` + (r.full_lock_s != null ? `, full +${fmtDur(r.full_lock_s)}` : "")));
+  else if (r.waiting_s !== null && r.waiting_s !== undefined) td.append(el("div", { class: "small muted" }, `waiting ${fmtDur(r.waiting_s)}`));
   return td;
+}
+
+// Pointing-error trace (log scale) for a result report.
+function traceCanvas(tr, ag) {
+  const c = el("canvas", { class: "trace" });
+  requestAnimationFrame(() => {
+    const dpr = window.devicePixelRatio || 1, w = c.clientWidth * dpr, h = c.clientHeight * dpr;
+    c.width = w; c.height = h; const g = c.getContext("2d");
+    const m = { l: 44 * dpr, r: 8 * dpr, t: 8 * dpr, b: 22 * dpr };
+    const tmax = tr[tr.length - 1][0], ymin = 0.1, ymax = Math.max(1e4, ...tr.map(p => p[1]));
+    const X = t => m.l + (w - m.l - m.r) * t / tmax;
+    const Y = e => m.t + (h - m.t - m.b) * (1 - (Math.log10(Math.max(e, ymin)) - Math.log10(ymin)) / (Math.log10(ymax) - Math.log10(ymin)));
+    g.font = `${10 * dpr}px system-ui`; g.fillStyle = "#8590a6"; g.strokeStyle = "#1e2533"; g.lineWidth = dpr;
+    for (let d = -1; d <= Math.log10(ymax); d++) {
+      const y = Y(10 ** d); g.beginPath(); g.moveTo(m.l, y); g.lineTo(w - m.r, y); g.stroke();
+      g.fillText(d >= 4 ? `${(10 ** d / 3600).toFixed(0)}°` : `${10 ** d}″`, 2 * dpr, y + 3 * dpr);
+    }
+    if (ag) {
+      const phases = [[0, ag.slew_s, "slew", "rgba(255,150,40,0.10)"], [ag.slew_s, ag.slew_s + ag.settle_s, "settle", "rgba(255,225,80,0.10)"],
+                      [ag.slew_s + ag.settle_s, ag.repoint_s, "acquire", "rgba(99,200,255,0.10)"], [ag.repoint_s, tmax, "locked", "rgba(90,255,150,0.07)"]];
+      for (const [a, b, name, col] of phases) {
+        g.fillStyle = col; g.fillRect(X(a), m.t, X(b) - X(a), h - m.t - m.b);
+        if (X(b) - X(a) > 34 * dpr) { g.fillStyle = "#8590a6"; g.fillText(name, X(a) + 3 * dpr, h - 8 * dpr); }
+      }
+    }
+    g.strokeStyle = "#5affa0"; g.lineWidth = 1.2 * dpr; g.beginPath();
+    tr.forEach(([t, e], k) => k ? g.lineTo(X(t), Y(e)) : g.moveTo(X(t), Y(e))); g.stroke();
+  });
+  return c;
 }
 
 // ---------------------------------------------------------------- results
@@ -248,6 +284,16 @@ class ResultViewer {
           ["Sky (zodiacal light)", `${s.zodiacal_mag_arcsec2} mag/arcsec² · elongation ${s.solar_elongation_deg}° · b ${s.galactic_latitude_deg}°`],
           ["Observed", r.utc],
         ])),
+        el("div", {}, el("h3", {}, "Pointing"), kv([
+          ["Response (approval → first light)", r.pointing.response_s !== null ? fmtDur(r.pointing.response_s) : null],
+          ["All requested telescopes locked", r.pointing.full_lock_s !== null ? `after ${fmtDur(r.pointing.full_lock_s)}` : "not reached (fewer could see the target at once)"],
+          ["Repoints for this request", `${r.pointing.repoints} (mean slew ${r.pointing.mean_slew_deg}°)`],
+          ["Repoint time (mean slew)", r.pointing.agility ? `${r.pointing.agility.repoint_s} s = slew ${r.pointing.agility.slew_s} + settle ${r.pointing.agility.settle_s} + acquire ${r.pointing.agility.acquire_s}` : null],
+          ["Agility", r.pointing.agility ? `α ${r.pointing.agility.alpha_dps2}°/s², ω ${r.pointing.agility.omega_dps}°/s` : null],
+          ["Effective jitter", `${r.pointing.effective_jitter_arcsec_rms}″ RMS`],
+          ["Fine-guided", `${Math.round(r.pointing.fine_guided_fraction * 100)} % of integration`],
+        ]), r.pointing.trace ? traceCanvas(r.pointing.trace, r.pointing.agility) : "",
+          el("div", { class: "small muted" }, "Typical repoint: pointing error vs time")),
         el("div", {}, el("h3", {}, "Hardware (per telescope)"), kv([
           ["Telescopes requested", h.telescopes_requested],
           ["Aperture", `${h.aperture_cm} cm, ${Math.round(h.obstruction * 100)} % obstruction, f/${h.f_ratio} (${h.focal_mm} mm)`],

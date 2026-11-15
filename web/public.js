@@ -31,7 +31,8 @@ function render(s) {
   const st = $("stats"); st.replaceChildren(
     stat("Satellites", s.shell.n.toLocaleString()),
     stat("Orbit", `${s.shell.alt_km.toFixed(0)} km · ${s.shell.inc_deg}°`),
-    stat("Telescopes busy", `${s.stats.active.toLocaleString()}`),
+    stat("Locked on target", `${s.stats.locked.toLocaleString()}`),
+    stat("Slewing / settling", `${s.stats.slewing} / ${s.stats.settling}`),
     stat("In sunlight", `${s.stats.lit.toLocaleString()}`),
     stat("Sky reachable now", `${s.stats.sky_reachable}%`),
     stat("Mode", s.mode_label),
