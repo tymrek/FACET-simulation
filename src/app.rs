@@ -19,12 +19,15 @@ pub enum View {
     Orbit,
     Sky,
     Split,
+    Unified,
 }
 
 pub struct OrbitCam {
     pub yaw: f64,
     pub pitch: f64,
     pub dist_km: f64,
+    /// Vertical field of view, degrees.
+    pub fov_deg: f64,
     /// Rotate the camera with the Earth (Earth-fixed view).
     pub earth_fixed: bool,
 }
@@ -125,6 +128,7 @@ impl App {
                 yaw: rad(30.0),
                 pitch: rad(25.0),
                 dist_km: 32_000.0,
+                fov_deg: 45.0,
                 earth_fixed: false,
             },
             // Start looking at the anti-Sun side of the sky (night sky).
@@ -175,6 +179,7 @@ impl App {
                 "--coverage" => self.show.coverage = true,
                 "--fov" => self.sky_cam.fov_deg = val().parse().unwrap_or(110.0),
                 "--zoom" => self.orbit_cam.dist_km = val().parse().unwrap_or(32_000.0),
+                "--camfov" => self.orbit_cam.fov_deg = val().parse().unwrap_or(45.0),
                 "--mode" => {
                     self.mode = match val().as_str() {
                         "survey" => Mode::Survey,
@@ -187,6 +192,7 @@ impl App {
                     self.view = match val().as_str() {
                         "orbit" => View::Orbit,
                         "sky" => View::Sky,
+                        "unified" => View::Unified,
                         _ => View::Split,
                     }
                 }
@@ -199,11 +205,7 @@ impl App {
                     }
                 }
                 "--look" => self.look_at_target(),
-                "--look-sun" => {
-                    let (ra, dec) = astro::bodies(self.jd)[0].dir.to_radec();
-                    self.sky_cam.ra = ra;
-                    self.sky_cam.dec = dec;
-                }
+                "--look-sun" => self.look_at(astro::bodies(self.jd)[0].dir),
                 _ => eprintln!("facet-sim: ignoring unknown argument {a}"),
             }
         }
@@ -211,10 +213,27 @@ impl App {
 
     fn look_at_target(&mut self) {
         if let Some(t) = self.target_dir() {
-            let (ra, dec) = t.to_radec();
-            self.sky_cam.ra = ra;
-            self.sky_cam.dec = dec;
+            self.look_at(t);
         }
+    }
+
+    /// Point both the sky camera and the 3D camera at a sky direction (the 3D
+    /// camera moves to the far side of Earth so the direction is behind it).
+    pub fn look_at(&mut self, d: V3) {
+        let (ra, dec) = d.to_radec();
+        self.sky_cam.ra = ra;
+        self.sky_cam.dec = dec;
+        // Aim the 3D camera a little to one side of `d` so the direction is
+        // visible just past Earth's limb instead of hidden behind the globe.
+        let earth_ang = (astro::EARTH_RADIUS_KM / self.orbit_cam.dist_km).asin();
+        let half_fov = rad(self.orbit_cam.fov_deg) / 2.0;
+        let off = (earth_ang * 1.35 + rad(4.0)).min(half_fov * 0.85);
+        let side = V3::Z.cross(d);
+        let side = if side.norm() < 1e-6 { V3::new(1.0, 0.0, 0.0) } else { side.unit() };
+        let axis = d.rot_axis(side, off); // camera looks along `axis`
+        let earth_rot = if self.orbit_cam.earth_fixed { astro::gmst(self.jd) } else { 0.0 };
+        self.orbit_cam.yaw = (-axis.y).atan2(-axis.x) - earth_rot;
+        self.orbit_cam.pitch = (-axis.z).clamp(-1.0, 1.0).asin().clamp(-1.55, 1.55);
     }
 
     pub fn target_dir(&self) -> Option<V3> {
@@ -459,9 +478,7 @@ impl App {
                 self.sky_cam.fov_deg = self.sky_cam.fov_deg.min(60.0);
             }
             if ui.small_button("Look at Sun").clicked() {
-                let (ra, dec) = self.bodies[0].dir.to_radec();
-                self.sky_cam.ra = ra;
-                self.sky_cam.dec = dec;
+                self.look_at(self.bodies[0].dir);
             }
         });
         ui.separator();
@@ -475,7 +492,9 @@ impl App {
             ui.selectable_value(&mut self.view, View::Orbit, "Orbit");
             ui.selectable_value(&mut self.view, View::Sky, "Sky");
             ui.selectable_value(&mut self.view, View::Split, "Split");
+            ui.selectable_value(&mut self.view, View::Unified, "Unified");
         });
+        ui.add(egui::Slider::new(&mut self.orbit_cam.fov_deg, 5.0..=120.0).text("3D camera FOV °"));
         let s = &mut self.show;
         ui.horizontal_wrapped(|ui| {
             ui.checkbox(&mut s.links, "laser links");
@@ -597,13 +616,14 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 match self.view {
-                    View::Orbit => self.orbit_view(ui, rect),
+                    View::Orbit => self.orbit_view(ui, rect, false),
+                    View::Unified => self.orbit_view(ui, rect, true),
                     View::Sky => self.sky_view(ui, rect),
                     View::Split => {
                         let mid = rect.center().x;
                         let left = egui::Rect::from_min_max(rect.min, egui::pos2(mid - 1.0, rect.max.y));
                         let right = egui::Rect::from_min_max(egui::pos2(mid + 1.0, rect.min.y), rect.max);
-                        self.orbit_view(ui, left);
+                        self.orbit_view(ui, left, false);
                         self.sky_view(ui, right);
                         ui.painter().line_segment(
                             [egui::pos2(mid, rect.min.y), egui::pos2(mid, rect.max.y)],

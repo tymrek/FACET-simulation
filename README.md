@@ -35,6 +35,14 @@ laser links and pointing rays. Satellites are coloured green (observing),
 cream (idle, sunlit) or blue (idle, eclipsed). Links that would pass through the
 atmosphere show red. Drag to rotate, scroll to zoom.
 
+**Unified view.** The orbit scene placed inside the planetarium: the full sky
+(stars, grid, ecliptic, Sun/Moon/planets, keep-out zones, FOV footprints,
+stacking-depth map, labels) is drawn as the celestial sphere behind Earth
+and the shell. Drag to orbit, scroll to change distance, shift+scroll to
+change the camera field of view, click the sky to set a target. *Look at
+target* / *Look at Sun* swing the camera so that direction sits just past
+Earth's limb.
+
 **Constellation.** Walker delta or star pattern with satellite count T (2–10,000,
 plus funding-stage presets), planes P (auto ≈ √T), phasing F, altitude,
 inclination (with a sun-synchronous lock) and RAAN. Orbits are circular,
@@ -70,11 +78,12 @@ observer in Maine sees.
 ```
 facet-sim --n 1000 --mode neo --view sky --look-sun --fov 160
 facet-sim --n 10000 --mode stack --target Jupiter --look --coverage
+facet-sim --view unified --n 300 --target Jupiter --camfov 60 --look
 facet-sim --n 50 --sso --mode survey --view orbit --zoom 20000
 ```
 
 Flags: `--n --planes --alt --inc --sso --star --aperture --rate --paused
---mode survey|stack|mosaic|neo --view orbit|sky|split --target <planet or star>
+--mode survey|stack|mosaic|neo --view orbit|sky|split|unified --camfov <deg> --target <planet or star>
 --look --look-sun --fov <deg> --zoom <km> --coverage`.
 `FACET_BENCH=1` prints the frame time.
 

@@ -50,8 +50,10 @@ fn c3(c: (u8, u8, u8), a: f32) -> Color32 {
 
 impl App {
     // ------------------------------------------------------------------ orbit
-    pub fn orbit_view(&mut self, ui: &mut egui::Ui, rect: Rect) {
-        let resp = ui.interact(rect, ui.id().with("orbit_view"), Sense::click_and_drag());
+    /// External 3D view. With `unified`, the full planetarium sky is drawn as
+    /// the celestial sphere behind Earth and the shell, and clicks pick targets.
+    pub fn orbit_view(&mut self, ui: &mut egui::Ui, rect: Rect, unified: bool) {
+        let resp = ui.interact(rect, ui.id().with(("orbit_view", unified)), Sense::click_and_drag());
         let cam_s = &mut self.orbit_cam;
         if resp.dragged() {
             let d = resp.drag_delta();
@@ -59,8 +61,14 @@ impl App {
             cam_s.pitch = (cam_s.pitch + d.y as f64 * 0.006).clamp(-1.55, 1.55);
         }
         if resp.hovered() {
-            let s = ui.input(|i| i.smooth_scroll_delta.y) as f64;
-            cam_s.dist_km = (cam_s.dist_km * (-s * 0.002).exp()).clamp(7_400.0, 1_200_000.0);
+            let (sd, shift) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers.shift));
+            // Shift turns vertical wheel motion into x on some platforms.
+            let s = (sd.y + sd.x) as f64;
+            if shift {
+                cam_s.fov_deg = (cam_s.fov_deg * (-s * 0.0015).exp()).clamp(5.0, 120.0);
+            } else {
+                cam_s.dist_km = (cam_s.dist_km * (-s * 0.002).exp()).clamp(7_400.0, 1_200_000.0);
+            }
         }
         let painter = ui.painter_at(rect);
         let gm = astro::gmst(self.jd);
@@ -74,7 +82,8 @@ impl App {
         let r = f.cross(V3::Z).unit();
         let u = r.cross(f);
         let c = rect.center();
-        let focal = rect.height() as f64 * 0.5 / rad(22.5).tan();
+        let focal = rect.height() as f64 * 0.5 / rad(cam_s.fov_deg / 2.0).tan();
+        let cam_fov = cam_s.fov_deg;
         let to_px = |x: f64, y: f64| Pos2::new(c.x + x as f32, c.y - y as f32);
         let proj = |p: V3| -> Option<Pos2> {
             let v = p - cam;
@@ -100,10 +109,17 @@ impl App {
         let surf_visible = |p: V3| p.dot(cam) > re * re;
         let sun = self.bodies[0].dir;
 
+        // The celestial sphere: full planetarium layers in unified mode.
+        if unified {
+            let px_per_rad = |d: V3| focal / d.dot(f).max(0.05);
+            let diag_fov = deg(2.0 * ((rect.width().hypot(rect.height()) as f64 * 0.5) / focal).atan());
+            self.sky_layers(&painter, rect, &proj_dir, &px_per_rad, f, diag_fov);
+        }
+
         let mut b = Batch::default();
 
         // Background stars
-        if self.show.orbit_stars {
+        if self.show.orbit_stars && !unified {
             for s in self.stars.iter().take_while(|s| s.mag < 5.5) {
                 if let Some(p) = proj_dir(s.dir) {
                     if rect.contains(p) {
@@ -114,14 +130,16 @@ impl App {
                 }
             }
         }
-        // Sun disk & Moon at true position
-        if let Some(p) = proj_dir(sun) {
-            b.glow_point(p, 7.0, c3(BODY_COLORS[0], 1.0));
-        }
-        let moon_pos = self.bodies[1].dir * self.bodies[1].dist_km;
-        if let Some(p) = proj(moon_pos) {
-            if !occluded(moon_pos) {
-                b.point(p, 3.0, c3(BODY_COLORS[1], 1.0));
+        // Sun disk & Moon at true position (the sky layers draw them in unified mode)
+        if !unified {
+            if let Some(p) = proj_dir(sun) {
+                b.glow_point(p, 7.0, c3(BODY_COLORS[0], 1.0));
+            }
+            let moon_pos = self.bodies[1].dir * self.bodies[1].dist_km;
+            if let Some(p) = proj(moon_pos) {
+                if !occluded(moon_pos) {
+                    b.point(p, 3.0, c3(BODY_COLORS[1], 1.0));
+                }
             }
         }
 
@@ -269,17 +287,29 @@ impl App {
         if let Some(p) = tgt_tip {
             text(&painter, p, Align2::LEFT_BOTTOM, format!("  {}", self.target_name()), 12.0, c3(C_ACTIVE, 1.0));
         }
+        if unified && resp.clicked() {
+            if let Some(mp) = resp.interact_pointer_pos() {
+                let unproj = |p: Pos2| -> V3 {
+                    let x = (p.x - c.x) as f64 / focal;
+                    let y = -(p.y - c.y) as f64 / focal;
+                    (f + r * x + u * y).unit()
+                };
+                self.target = Some(self.pick(mp, &proj_dir, &unproj));
+            }
+        }
         let sp = &self.shell_params;
         text(
             &painter,
             rect.left_top() + egui::vec2(10.0, 8.0),
             Align2::LEFT_TOP,
             format!(
-                "ORBIT  ·  {} satellites, {} planes  ·  {:.0} km  ·  {:.1}°",
+                "{}  ·  {} satellites, {} planes  ·  {:.0} km  ·  {:.1}°  ·  camera FOV {:.0}°",
+                if unified { "UNIFIED" } else { "ORBIT" },
                 n,
                 sp.effective_planes(),
                 sp.alt_km,
-                sp.inc_deg
+                sp.inc_deg,
+                cam_fov
             ),
             13.0,
             Color32::from_gray(200),
@@ -289,7 +319,11 @@ impl App {
             &painter,
             rect.left_bottom() + egui::vec2(10.0, -8.0),
             Align2::LEFT_BOTTOM,
-            "drag: rotate · scroll: zoom",
+            if unified {
+                "drag: rotate · scroll: zoom · shift+scroll: field of view · click sky: set target"
+            } else {
+                "drag: rotate · scroll: zoom · shift+scroll: field of view"
+            },
             11.0,
             Color32::from_gray(110),
         );
@@ -342,6 +376,54 @@ impl App {
             let s = (1.0 + z) / 2.0;
             (f * z + west * (x * s) + north * (y * s)).unit()
         };
+        let painter = ui.painter_at(rect);
+        let px_per_rad = |d: V3| kp * local_scale(d);
+        self.sky_layers(&painter, rect, &proj, &px_per_rad, f, self.sky_cam.fov_deg);
+
+        // Picking
+        if resp.clicked() {
+            if let Some(mp) = resp.interact_pointer_pos() {
+                self.target = Some(self.pick(mp, &proj, &unproj));
+            }
+        }
+
+        // HUD
+        text(
+            &painter,
+            rect.left_top() + egui::vec2(10.0, 8.0),
+            Align2::LEFT_TOP,
+            format!(
+                "SKY  ·  geocentric J2000  ·  centre {} {}  ·  FOV {:.1}°  ·  {}",
+                fmt_ra(ra0),
+                fmt_dec(dec0),
+                self.sky_cam.fov_deg,
+                self.mode.label()
+            ),
+            13.0,
+            Color32::from_gray(200),
+        );
+        let hint = if let Some(hp) = resp.hover_pos() {
+            let (ra, dec) = unproj(hp).to_radec();
+            format!("{} {}   ·   drag: pan · scroll: zoom · click: set target", fmt_ra(ra), fmt_dec(dec))
+        } else {
+            "drag: pan · scroll: zoom · click: set target".into()
+        };
+        text(&painter, rect.left_bottom() + egui::vec2(10.0, -8.0), Align2::LEFT_BOTTOM, hint, 11.0, Color32::from_gray(120));
+    }
+
+    /// Draw the celestial sphere (everything the planetarium shows) through an
+    /// arbitrary direction → screen projection. Shared by the sky view and the
+    /// unified view.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sky_layers(
+        &self,
+        painter: &egui::Painter,
+        rect: Rect,
+        proj: &dyn Fn(V3) -> Option<Pos2>,
+        px_per_rad: &dyn Fn(V3) -> f64,
+        f: V3,
+        fov_deg: f64,
+    ) {
         let maxjump = rect.width() * 0.6;
         let curve = |b: &mut Batch, pts: &mut dyn Iterator<Item = V3>, w: f32, col: Color32| {
             let mut prev: Option<Pos2> = None;
@@ -355,7 +437,6 @@ impl App {
                 prev = p;
             }
         };
-        let painter = ui.painter_at(rect);
         let sun = self.bodies[0].dir;
         let moon = self.bodies[1].dir;
         let mut b = Batch::default();
@@ -432,7 +513,7 @@ impl App {
             }
             let pts = ring(center, r_deg);
             let pp: Vec<Option<Pos2>> = pts.iter().map(|&d| proj(d)).collect();
-            if !dashed && pp.iter().all(|p| p.is_some()) && center.dot(f) > -0.2 {
+            if !dashed && pp.iter().all(|p| p.is_some()) && center.dot(f) > -0.2 && pp.iter().all(|p| p.map_or(false, |p| p.x.abs() < 1e6 && p.y.abs() < 1e6)) {
                 let v: Vec<Pos2> = pp.iter().map(|p| p.unwrap()).collect();
                 b.convex_fill(&v, c3(col, 0.08));
             }
@@ -455,8 +536,8 @@ impl App {
         }
 
         // Stars
-        let zf = (90.0 / self.sky_cam.fov_deg).powf(0.3).clamp(0.75, 2.2) as f32;
-        let mag_lim = if self.sky_cam.fov_deg > 150.0 { 5.8 } else { 6.5 };
+        let zf = (90.0 / fov_deg).powf(0.3).clamp(0.75, 2.2) as f32;
+        let mag_lim = if fov_deg > 150.0 { 5.8 } else { 6.5 };
         for s in self.stars.iter().take_while(|s| s.mag <= mag_lim) {
             if let Some(p) = proj(s.dir) {
                 if rect.contains(p) {
@@ -477,7 +558,7 @@ impl App {
         for (i, body) in self.bodies.iter().enumerate() {
             if let Some(p) = proj(body.dir) {
                 let ang = (body.radius_km / body.dist_km).asin();
-                let true_r = (ang * kp * local_scale(body.dir)) as f32;
+                let true_r = (ang * px_per_rad(body.dir)) as f32;
                 let min_r = match i {
                     0 => 7.0,
                     1 => 5.0,
@@ -530,7 +611,7 @@ impl App {
 
         // Star names
         if self.show.names {
-            let lim = if self.sky_cam.fov_deg > 120.0 { 1.6 } else { 2.6 };
+            let lim = if fov_deg > 120.0 { 1.6 } else { 2.6 };
             for s in self.names.iter().filter(|s| s.mag <= lim) {
                 if let Some(p) = proj(s.dir) {
                     if rect.contains(p) {
@@ -580,35 +661,6 @@ impl App {
             }
         }
 
-        // Picking
-        if resp.clicked() {
-            if let Some(mp) = resp.interact_pointer_pos() {
-                self.target = Some(self.pick(mp, &proj, &unproj));
-            }
-        }
-
-        // HUD
-        text(
-            &painter,
-            rect.left_top() + egui::vec2(10.0, 8.0),
-            Align2::LEFT_TOP,
-            format!(
-                "SKY  ·  geocentric J2000  ·  centre {} {}  ·  FOV {:.1}°  ·  {}",
-                fmt_ra(ra0),
-                fmt_dec(dec0),
-                self.sky_cam.fov_deg,
-                self.mode.label()
-            ),
-            13.0,
-            Color32::from_gray(200),
-        );
-        let hint = if let Some(hp) = resp.hover_pos() {
-            let (ra, dec) = unproj(hp).to_radec();
-            format!("{} {}   ·   drag: pan · scroll: zoom · click: set target", fmt_ra(ra), fmt_dec(dec))
-        } else {
-            "drag: pan · scroll: zoom · click: set target".into()
-        };
-        text(&painter, rect.left_bottom() + egui::vec2(10.0, -8.0), Align2::LEFT_BOTTOM, hint, 11.0, Color32::from_gray(120));
     }
 
     fn pick(&self, mp: Pos2, proj: &dyn Fn(V3) -> Option<Pos2>, unproj: &dyn Fn(Pos2) -> V3) -> Target {
