@@ -49,6 +49,9 @@ pub struct Hardware {
     pub wavelength_nm: f64,
     /// Photons s⁻¹ cm⁻² in the band for a V = 0 source.
     pub ph0: f64,
+    pub wfe_nm: f64,
+    pub spider_vanes: u32,
+    pub spider_mm: f64,
 }
 
 impl Hardware {
@@ -68,6 +71,9 @@ impl Hardware {
             sub_max_s: o.sub_max_s,
             wavelength_nm: o.wavelength_nm,
             ph0: 3.0e6,
+            wfe_nm: o.wfe_nm,
+            spider_vanes: o.spider_vanes,
+            spider_mm: o.spider_mm,
         }
     }
     pub fn area_cm2(&self) -> f64 {
@@ -89,15 +95,22 @@ impl Hardware {
     pub fn diffraction_fwhm(&self) -> f64 {
         1.03 * self.wavelength_nm * 1e-9 / (self.aperture_cm / 100.0) * ARCSEC
     }
-    /// Delivered FWHM (arcsec) for a given sub-frame length.
-    pub fn fwhm(&self, sub_s: f64) -> f64 {
-        let jitter_fwhm = if sub_s < 1.0 {
-            // Short registered frames: residual sub-frame smear only.
-            2.355 * (0.25f64).min(self.jitter_arcsec)
+    /// Pointing jitter (RMS, arcsec) that applies for a given sub-frame
+    /// length: short registered frames freeze most of it.
+    pub fn jitter_for(&self, sub_s: f64) -> f64 {
+        if sub_s < 1.0 {
+            self.jitter_arcsec.min(0.25)
         } else {
-            2.355 * self.jitter_arcsec
-        };
-        self.diffraction_fwhm().hypot(jitter_fwhm)
+            self.jitter_arcsec
+        }
+    }
+    /// The full Fourier-optics PSF (incl. jitter) for a sub-frame length.
+    pub fn psf(&self, sub_s: f64) -> std::sync::Arc<crate::optics::Psf> {
+        crate::optics::psf(self, self.jitter_for(sub_s))
+    }
+    /// Delivered FWHM (arcsec), measured from the Fourier-optics PSF.
+    pub fn fwhm(&self, sub_s: f64) -> f64 {
+        self.psf(sub_s).fwhm
     }
     /// Sky + dark electrons s⁻¹ per native pixel.
     pub fn bg_e_s(&self, sky_sb: f64) -> f64 {
@@ -112,11 +125,14 @@ pub fn point_lim_mag(hw: &Hardware, total_s: f64, sub_s: f64, sky_sb: f64) -> f6
         return f64::NAN;
     }
     let ps = hw.pixel_scale();
-    let fwhm = hw.fwhm(sub_s).max(ps);
-    // Aperture radius 0.67 FWHM encloses ~71 % of a Gaussian.
-    let r = 0.67 * fwhm / ps;
+    let psf = hw.psf(sub_s);
+    // Photometric aperture: the EE50 radius scaled up a little (≈ optimal for
+    // background-limited point sources), at least one pixel; encircled energy
+    // measured from the real PSF.
+    let r_as = (1.2 * psf.ee50_r).max(0.6 * ps);
+    let ee = psf.ee_at(r_as);
+    let r = r_as / ps;
     let npix = (PI * r * r).max(1.0);
-    let ee = 0.71;
     let nframes = (total_s / sub_s.max(1e-3)).max(1.0);
     let b = npix * (hw.bg_e_s(sky_sb) * total_s + nframes * hw.read_noise_e.powi(2));
     let a = ee * total_s;
@@ -243,21 +259,6 @@ fn fbm(p: V3, seed: u64, octaves: u32) -> f64 {
     sum / norm
 }
 
-fn erf(x: f64) -> f64 {
-    // Abramowitz & Stegun 7.1.26
-    let t = 1.0 / (1.0 + 0.327_591_1 * x.abs());
-    let y = 1.0
-        - (((((1.061_405_429 * t - 1.453_152_027) * t) + 1.421_413_741) * t - 0.284_496_736) * t
-            + 0.254_829_592)
-            * t
-            * (-x * x).exp();
-    if x >= 0.0 {
-        y
-    } else {
-        -y
-    }
-}
-
 fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -294,38 +295,19 @@ impl Frame {
         let eta = d.dot(self.n) / z * ARCSEC / self.scale;
         Some((self.w as f64 / 2.0 - xi, self.h as f64 / 2.0 - eta))
     }
-    /// Add a pixel-integrated Gaussian of total `flux` e⁻/s.
-    fn add_psf(&mut self, x: f64, y: f64, flux: f64, sigma: f64) {
-        let s = sigma.max(0.05);
-        let r = (4.0 * s).ceil().max(1.0) as i64;
-        let (cx, cy) = (x.floor() as i64, y.floor() as i64);
-        if cx + r < 0 || cy + r < 0 || cx - r >= self.w as i64 || cy - r >= self.h as i64 {
-            return;
-        }
-        let k = 1.0 / (s * std::f64::consts::SQRT_2);
-        let wx: Vec<f64> = (-r..=r)
-            .map(|i| {
-                let p = (cx + i) as f64;
-                0.5 * (erf((p + 1.0 - x) * k) - erf((p - x) * k))
-            })
-            .collect();
-        let wy: Vec<f64> = (-r..=r)
-            .map(|j| {
-                let p = (cy + j) as f64;
-                0.5 * (erf((p + 1.0 - y) * k) - erf((p - y) * k))
-            })
-            .collect();
-        for (j, wyj) in wy.iter().enumerate() {
-            let py = cy + j as i64 - r;
-            if py < 0 || py >= self.h as i64 {
-                continue;
-            }
-            for (i, wxi) in wx.iter().enumerate() {
-                let px = cx + i as i64 - r;
-                if px < 0 || px >= self.w as i64 {
-                    continue;
-                }
-                self.rate[py as usize * self.w + px as usize] += flux * wxi * wyj;
+    /// Add an ideal point source of total `flux` e⁻/s, split bilinearly
+    /// between the four nearest pixels (sub-pixel position preserved). The
+    /// optics are applied afterwards by convolving the whole scene with the
+    /// Fourier-optics PSF. (`_sigma` is unused; kept for call-site clarity.)
+    fn add_psf(&mut self, x: f64, y: f64, flux: f64, _sigma: f64) {
+        let (fx, fy) = (x - 0.5, y - 0.5);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        for (dx, dy, w) in [(0, 0, (1.0 - tx) * (1.0 - ty)), (1, 0, tx * (1.0 - ty)), (0, 1, (1.0 - tx) * ty), (1, 1, tx * ty)] {
+            let px = x0 as i64 + dx;
+            let py = y0 as i64 + dy;
+            if px >= 0 && py >= 0 && (px as usize) < self.w && (py as usize) < self.h {
+                self.rate[py as usize * self.w + px as usize] += flux * w;
             }
         }
     }
@@ -333,10 +315,10 @@ impl Frame {
     fn add_galaxy(&mut self, x: f64, y: f64, flux: f64, rs: f64, q: f64, pa: f64, sigma: f64) {
         let rs_px = rs / self.scale;
         if rs_px < 0.7 {
-            // Unresolved at this scale: treat as slightly broadened point.
-            return self.add_psf(x, y, flux, sigma.hypot(rs_px));
+            // Unresolved at this scale: a point (the PSF is applied later).
+            return self.add_psf(x, y, flux, sigma);
         }
-        let r = (6.0 * rs_px + 3.0 * sigma).ceil() as i64;
+        let r = (6.0 * rs_px).ceil() as i64;
         let (c, s) = (pa.cos(), pa.sin());
         let mut stamp = Vec::with_capacity(((2 * r + 1) * (2 * r + 1)) as usize);
         let mut sum = 0.0;
@@ -364,36 +346,6 @@ impl Frame {
                 }
                 k += 1;
             }
-        }
-    }
-}
-
-fn blur(buf: &mut [f64], w: usize, h: usize, sigma: f64) {
-    if sigma < 0.3 {
-        return;
-    }
-    let r = (3.5 * sigma).ceil() as i64;
-    let ker: Vec<f64> = (-r..=r).map(|i| (-(i * i) as f64 / (2.0 * sigma * sigma)).exp()).collect();
-    let ks: f64 = ker.iter().sum();
-    let mut tmp = vec![0.0; w * h];
-    for y in 0..h {
-        for x in 0..w {
-            let mut a = 0.0;
-            for (k, kv) in ker.iter().enumerate() {
-                let xx = (x as i64 + k as i64 - r).clamp(0, w as i64 - 1) as usize;
-                a += buf[y * w + xx] * kv;
-            }
-            tmp[y * w + x] = a / ks;
-        }
-    }
-    for y in 0..h {
-        for x in 0..w {
-            let mut a = 0.0;
-            for (k, kv) in ker.iter().enumerate() {
-                let yy = (y as i64 + k as i64 - r).clamp(0, h as i64 - 1) as usize;
-                a += tmp[yy * w + x] * kv;
-            }
-            buf[y * w + x] = a / ks;
         }
     }
 }
@@ -626,6 +578,8 @@ pub struct Output {
     pub report: serde_json::Value,
     pub full_png: Vec<u8>,
     pub crop_png: Vec<u8>,
+    /// The effective PSF (log stretch), for the report.
+    pub psf_png: Vec<u8>,
 }
 
 static STARS: OnceLock<Vec<Star>> = OnceLock::new();
@@ -833,7 +787,7 @@ pub fn render(spec: &Spec) -> Output {
             full.add_psf(x, y, flux, sig_px(fwhm) * ps / full.scale);
         }
         if let Some((x, y)) = crop.project(d) {
-            if x > -20.0 && y > -20.0 && x < crop.w as f64 + 20.0 && y < crop.h as f64 + 20.0 {
+            if x > -2.0 && y > -2.0 && x < crop.w as f64 + 2.0 && y < crop.h as f64 + 2.0 {
                 crop.add_psf(x, y, flux, (fwhm / 2.355 / crop.scale).max(0.3));
             }
         }
@@ -925,12 +879,22 @@ pub fn render(spec: &Spec) -> Output {
                     layer[y * fr.w + x] = acc / (ss * ss) as f64 * per_unit_area * pix_area;
                 }
             }
-            blur(&mut layer, fr.w, fr.h, fwhm / 2.355 / fr.scale);
             for (a, l) in fr.rate.iter_mut().zip(&layer) {
                 *a += l;
             }
         }
     }
+
+    // ---- Optics: convolve the ideal scene with the Fourier-optics PSF
+    // (diffraction from aperture, obstruction and spiders; wavefront error;
+    // 7-wavelength polychromatic; pointing jitter), pixel-integrated.
+    let psf = hw.psf(sub_s);
+    for fr in [&mut full, &mut crop] {
+        let (k, ker) = psf.kernel(fr.scale);
+        fr.rate = crate::optics::convolve(&fr.rate, fr.w, fr.h, &ker, k);
+    }
+    let psf_png = psf.png();
+    let optics_only = crate::optics::psf(hw, 0.0);
 
     // ---- Expose & noise
     let mut nrng = Rng(field_seed ^ spec.id.wrapping_mul(0xA24B_AED4_963E_E407) ^ (total_s as u64));
@@ -1020,6 +984,7 @@ pub fn render(spec: &Spec) -> Output {
         "results": {
             "fwhm_arcsec": r2(fwhm),
             "diffraction_fwhm_arcsec": r2(hw.diffraction_fwhm()),
+            "strehl": r2(psf.strehl),
             "fwhm_px": r2(nyq),
             "sampling": if nyq < 2.0 { "undersampled (FWHM < 2 px)" } else { "Nyquist-sampled" },
             "lim_mag_5sigma": r2(lim),
@@ -1031,6 +996,19 @@ pub fn render(spec: &Spec) -> Output {
             "phase_angle_deg": phase.map(r1),
             "angular_diameter_arcsec": ang_diam.map(r2),
             "saturn_ring_tilt_deg": ring_tilt.map(r2),
+        },
+        "optics": {
+            "model": format!(
+                "Fourier optics: {:.0} cm aperture, {:.0} % central obstruction, {} spider vane{} × {} mm, {:.0} nm RMS wavefront error, 7 wavelengths 420–690 nm, ⊗ {:.2}″ RMS jitter, pixel-integrated",
+                hw.aperture_cm, hw.obstruction * 100.0, hw.spider_vanes, if hw.spider_vanes == 1 { "" } else { "s" },
+                hw.spider_mm, hw.wfe_nm, hw.jitter_for(sub_s)
+            ),
+            "strehl": r2(psf.strehl),
+            "fwhm_optics_arcsec": r2(optics_only.fwhm),
+            "fwhm_delivered_arcsec": r2(psf.fwhm),
+            "ee50_radius_arcsec": r2(psf.ee50_r),
+            "ee80_radius_arcsec": r2(psf.ee80_r),
+            "psf_field_arcsec": r1(psf.scale * psf.n as f64),
         },
         "pointing": {
             "effective_jitter_arcsec_rms": r2(hw.jitter_arcsec),
@@ -1060,7 +1038,7 @@ pub fn render(spec: &Spec) -> Output {
         },
         "notes": notes,
     });
-    Output { report, full_png, crop_png }
+    Output { report, full_png, crop_png, psf_png }
 }
 
 fn r1(x: f64) -> f64 {
@@ -1166,6 +1144,7 @@ mod gallery {
             ("deep_ngp", None, V3::from_radec(rad(192.86), rad(27.13)), 300.0 * 300.0, 300, 300.0),
             ("single_60s", None, V3::from_radec(rad(192.86), rad(27.13)), 60.0, 1, 60.0),
             ("milkyway", None, V3::from_radec(rad(266.4), rad(-28.9)), 40.0 * 120.0, 40, 120.0),
+            ("vega", None, V3::from_radec(rad(279.2347 + 0.004), rad(38.7837 + 0.003)), 20.0 * 60.0, 20, 60.0),
         ];
         for (name, body, dir, total, n, exp) in cases {
             let spec = Spec { id: 7, target_name: name.into(), dir, body, jd, total_s: total, required_s: total,
@@ -1175,6 +1154,7 @@ mod gallery {
             let out = render(&spec);
             std::fs::write(format!("/tmp/g_{name}_full.png"), &out.full_png).unwrap();
             std::fs::write(format!("/tmp/g_{name}_crop.png"), &out.crop_png).unwrap();
+            std::fs::write(format!("/tmp/g_{name}_psf.png"), &out.psf_png).unwrap();
             println!("== {name} ({:.2}s)\n{}", t.elapsed().as_secs_f64(), serde_json::to_string(&out.report["results"]).unwrap());
             println!("{}", serde_json::to_string(&out.report["exposure"]).unwrap());
             println!("{}", serde_json::to_string(&out.report["sky"]).unwrap());

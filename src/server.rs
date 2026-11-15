@@ -438,6 +438,7 @@ fn handle_campaign(shared: SharedRef, req: Request, path: String) {
         "" => json(req, 200, out.report.clone()),
         "full.png" => send_bytes(req, "image/png", out.full_png.clone()),
         "crop.png" => send_bytes(req, "image/png", out.crop_png.clone()),
+        "psf.png" => send_bytes(req, "image/png", out.psf_png.clone()),
         _ => err(req, 404, "not found"),
     }
 }
@@ -518,6 +519,7 @@ fn handle_result(shared: SharedRef, req: Request, path: String) {
         "" => json(req, 200, out.report.clone()),
         "full.png" => send_bytes(req, "image/png", out.full_png.clone()),
         "crop.png" => send_bytes(req, "image/png", out.crop_png.clone()),
+        "psf.png" => send_bytes(req, "image/png", out.psf_png.clone()),
         _ => err(req, 404, "not found"),
     }
 }

@@ -257,6 +257,7 @@ function render(s) {
   const t2 = s.telescope;
   kvRows($("payloadkv"), [
     ["Telescope", `${t2.aperture_cm} cm aperture · ${t2.fov_deg}° field`],
+    ["Optics", `${t2.wfe_nm} nm RMS wavefront · Strehl ${t2.strehl} · ${t2.spider_vanes ? t2.spider_vanes + "-vane spider" : "unobstructed spider-free"}`],
     ["Pointing", `${t2.jitter_arcsec}″ RMS fine-guided · ${t2.coarse_jitter_arcsec}″ star tracker`],
     ["Agility", `${t2.omega_dps}°/s · repoint 10° ${t2.repoint_10_s} s, 90° ${t2.repoint_90_s} s`],
     ["Keep-out", `Sun ${t2.sun_excl_deg}° · Moon ${t2.moon_excl_deg}° · limb +${t2.limb_margin_deg}°`],

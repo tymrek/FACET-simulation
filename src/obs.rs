@@ -78,6 +78,11 @@ pub struct ObsParams {
     pub jitter_arcsec: f64,
     /// Longest sub-frame (cosmic rays, drift), s.
     pub sub_max_s: f64,
+    /// Optical wavefront error, nm RMS (figure + alignment + thermal).
+    pub wfe_nm: f64,
+    /// Secondary-mirror spider: number of vanes and vane width (mm).
+    pub spider_vanes: u32,
+    pub spider_mm: f64,
     // --- Attitude / agility assumptions (see attitude.rs)
     /// Transverse moment of inertia, kg·m² (~150 kg: 0.6 m bus + 1 m optical tube).
     pub inertia_kgm2: f64,
@@ -125,6 +130,9 @@ impl Default for ObsParams {
             full_well_e: 51_000.0,
             jitter_arcsec: 1.0,
             sub_max_s: 300.0,
+            wfe_nm: 60.0,
+            spider_vanes: 4,
+            spider_mm: 2.0,
             inertia_kgm2: 20.0,
             wheel_torque_nm: 0.15,
             wheel_momentum_nms: 2.0,

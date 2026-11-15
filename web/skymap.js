@@ -264,7 +264,7 @@ class ResultViewer {
     const bust = `${q ? "&" : "?"}t=${Date.now()}`;
     const kv = (rows) => el("table", { class: "kv" }, ...rows.filter(([, v]) => v !== null && v !== undefined && v !== "")
       .map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))));
-    const h = r.hardware, x = r.exposure, s = r.sky, m = r.results, im = r.images;
+    const h = r.hardware, x = r.exposure, s = r.sky, m = r.results, im = r.images, op = r.optics;
     const fig = (src, cap) => el("figure", {}, el("img", { src, alt: cap, loading: "lazy" }), el("figcaption", { class: "small muted" }, cap));
     this.box.hidden = false;
     this.box.replaceChildren(
@@ -310,6 +310,13 @@ class ResultViewer {
           ["Fine-guided", `${Math.round(r.pointing.fine_guided_fraction * 100)} % of integration`],
         ]), r.pointing.trace && this.base !== "/api/campaign" ? traceCanvas(r.pointing.trace, r.pointing.agility) : "",
           this.base !== "/api/campaign" ? el("div", { class: "small muted" }, "Typical repoint: pointing error vs time") : ""),
+        op ? el("div", {}, el("h3", {}, "Optics"), kv([
+          ["Strehl ratio", `${op.strehl}`],
+          ["FWHM optics / delivered", `${op.fwhm_optics_arcsec}″ / ${op.fwhm_delivered_arcsec}″`],
+          ["Encircled energy", `50 % within ${op.ee50_radius_arcsec}″ · 80 % within ${op.ee80_radius_arcsec}″`],
+        ]), el("figure", { class: "psf" }, el("img", { src: `${this.base}/${id}/psf.png${q}${bust}`, alt: "PSF" }),
+              el("figcaption", { class: "small muted" }, `Effective PSF, log scale, ${op.psf_field_arcsec}″ field`)),
+          el("div", { class: "small muted" }, op.model)) : "",
         el("div", {}, el("h3", {}, "Hardware (per telescope)"), kv([
           ["Telescopes requested", h.telescopes_requested],
           ["Aperture", `${h.aperture_cm} cm, ${Math.round(h.obstruction * 100)} % obstruction, f/${h.f_ratio} (${h.focal_mm} mm)`],

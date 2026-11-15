@@ -10,6 +10,7 @@ mod draw;
 mod imaging;
 mod math;
 mod obs;
+mod optics;
 mod server;
 mod webapp;
 mod tle;

@@ -480,6 +480,15 @@ impl App {
         ui.add(egui::Slider::new(&mut o.exp_s, 1.0..=3600.0).logarithmic(true).text("exposure s"));
         ui.add(egui::Slider::new(&mut o.jitter_arcsec, 0.1..=5.0).text("pointing jitter arcsec RMS"))
             .on_hover_text("ASSUMPTION: bus pointing stability over a sub-frame. Small-sat buses: ~0.5–2 arcsec.");
+        ui.add(egui::Slider::new(&mut o.wfe_nm, 0.0..=200.0).text("wavefront error nm RMS"))
+            .on_hover_text("ASSUMPTION: total figure + alignment + thermal wavefront error. λ/10 at 633 nm ≈ 63 nm.");
+        ui.horizontal(|ui| {
+            ui.label("spider:");
+            for v in [0u32, 3, 4] {
+                ui.selectable_value(&mut o.spider_vanes, v, if v == 0 { "none (off-axis)".to_string() } else { format!("{v} vanes") });
+            }
+        });
+        ui.add_enabled(o.spider_vanes > 0, egui::Slider::new(&mut o.spider_mm, 0.5..=10.0).text("vane width mm"));
         ui.add(egui::Slider::new(&mut o.read_noise_e, 0.5..=10.0).text("read noise e-"));
         ui.add(egui::Slider::new(&mut o.sub_max_s, 10.0..=1200.0).logarithmic(true).text("max sub-frame s"));
         {
@@ -487,10 +496,11 @@ impl App {
             let lim = crate::imaging::point_lim_mag(&hw, o.exp_s, o.exp_s.min(o.sub_max_s), 22.0);
             ui.label(
                 RichText::new(format!(
-                    "f/{:.1}, {:.0} mm, {:.2}\"/px, FWHM {:.2}\" · 1 telescope, {:.0} s: V≈{:.1} (5σ, dark sky)",
+                    "f/{:.1}, {:.0} mm, {:.2}\"/px, Strehl {:.2}, FWHM {:.2}\" · 1 telescope, {:.0} s: V≈{:.1} (5σ, dark sky)",
                     hw.f_ratio(),
                     hw.focal_mm(),
                     hw.pixel_scale(),
+                    hw.psf(o.exp_s.min(o.sub_max_s)).strehl,
                     hw.fwhm(o.exp_s.min(o.sub_max_s)),
                     o.exp_s,
                     lim

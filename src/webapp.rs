@@ -480,6 +480,8 @@ impl App {
                 "aperture_cm": o.aperture_cm, "fov_deg": o.fov_deg, "exp_s": o.exp_s,
                 "overhead_s": o.overhead_s,
                 "jitter_arcsec": o.jitter_arcsec, "read_noise_e": o.read_noise_e, "sub_max_s": o.sub_max_s,
+                "wfe_nm": o.wfe_nm, "spider_vanes": o.spider_vanes,
+                "strehl": r2(crate::imaging::Hardware::from_obs(o).psf(60.0).strehl),
                 "inertia_kgm2": o.inertia_kgm2, "wheel_torque_nm": o.wheel_torque_nm, "wheel_momentum_nms": o.wheel_momentum_nms,
                 "rate_limit_dps": o.rate_limit_dps, "settle_tau_s": o.settle_tau_s, "acquire_s": o.acquire_s,
                 "coarse_jitter_arcsec": o.coarse_jitter_arcsec, "guide_mag": o.guide_mag,
