@@ -1,0 +1,17 @@
+[package]
+name = "facet-sim"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "FACET constellation simulator: an Earth-centred planetarium with a scalable telescope shell"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+egui = "0.27"
+
+[profile.release]
+opt-level = 3
+
+[profile.dev]
+opt-level = 2
