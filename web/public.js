@@ -43,6 +43,16 @@ function renderDefence(s) {
     t("impact probability (ground only)", ip(b.ip)));
 }
 
+function renderWhy(s) {
+  const g = s.ground, c = $("why_card"); c.hidden = !g; if (!g) return;
+  const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
+  $("why_text").textContent = `Compared with the same number of identical telescopes at ${g.sites} of the world's good observatory sites: on the ground, telescopes only work at night, in clear weather, through the air.`;
+  $("why_tiles").replaceChildren(
+    t("of the time FACET is observing", `${Math.round(100 * g.facet_duty)} %`),
+    t("for a telescope on the ground", `${Math.round(100 * g.ground_duty)} %`),
+    t("ground telescopes to match one FACET telescope", `≈ ${g.equivalent_ground_telescopes.toFixed(0)}`));
+}
+
 function renderScience(s) {
   const sc = s.science; if (!sc) return;
   const d = sc.per_day, n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -51,7 +61,7 @@ function renderScience(s) {
   $("sci_tiles").replaceChildren(
     tile("observations completed per day", n(d.completed)),
     tile("finished in time to be useful", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`),
-    tile("of the time the shutters are open", `${sc.efficiency.integrating_pct.toFixed(0)} %`),
+    tile("of the time working telescopes are observing", `${(100 * sc.efficiency.integrating_pct / Math.max(1, 100 - sc.efficiency.hold_pct)).toFixed(0)} %`),
     tile("research teams served", `${sc.investigators_served}`));
   $("sci_cases").replaceChildren(...sc.cases.map(c => {
     const fin = c.completed + c.expired;
@@ -78,6 +88,7 @@ function render(s) {
   );
   renderScience(s);
   renderDefence(s);
+  renderWhy(s);
   const q = $("queue"); q.replaceChildren();
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
   const recent = s.requests.filter(r => r.state === "done").slice(0, 10);

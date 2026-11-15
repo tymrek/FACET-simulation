@@ -43,6 +43,7 @@
       <div class="bignums">
         <div><div class="n" id="f_service">—</div><div class="k">in service</div></div>
         <div><div class="n" id="f_hold">—</div><div class="k">safe hold</div></div>
+        <div><div class="n" id="f_failed">—</div><div class="k">failed</div></div>
         <div><div class="n" id="f_locked">—</div><div class="k">integrating</div></div>
       </div>
       <div class="phasebar" id="phasebar"></div>
@@ -131,6 +132,25 @@
         <div class="scroll"><table class="queue"><thead><tr><th>Science case</th><th class="num">Deadline</th><th class="num">Submitted</th><th class="num">Open</th><th class="num">Done</th><th class="num">Expired</th><th class="num">On time</th><th class="num">Median response</th><th class="num">Median depth</th><th class="num">Tel.-hours</th></tr></thead>
         <tbody id="sci_cases"></tbody></table></div>
         <div><h3 class="small muted" style="margin:4px 0">Most-served investigator teams</h3><table class="queue"><tbody id="sci_top"></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="span">
+    <div class="panel">
+      <h2>Resilience &amp; FACET vs the ground</h2>
+      <div class="trgrid2">
+        <div>
+          <h3 class="small muted">Fleet health vs science output (hourly)</h3>
+          <div class="tiles" id="rs_tiles"></div>
+          <canvas id="rs_chart" class="pdchart"></canvas>
+        </div>
+        <div>
+          <h3 class="small muted" id="gc_head">FACET vs a ground network</h3>
+          <table class="kv"><thead><tr><th></th><th>FACET</th><th>Ground</th></tr></thead><tbody id="gc_table"><tr><td class="muted small">computing…</td></tr></tbody></table>
+          <p class="gceq" id="gc_equiv"></p>
+          <p class="small muted" id="gc_notes"></p>
+        </div>
       </div>
     </div>
   </section>

@@ -147,3 +147,9 @@ tr.sel td { background: #10203a; }
 tr.lvl-red td { color: #ff8a8a; } tr.lvl-amber td { color: #ffc46b; }
 h2 select.tiny { width: auto; display: inline-block; padding: 2px 6px; }
 .trgrid table.queue td { white-space: nowrap; }
+.trgrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 1200px) { .trgrid2 { grid-template-columns: 1fr; } }
+.trgrid2 h3 { margin: 4px 0 2px; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+.gceq { font-size: 16px; font-weight: 600; color: #9fd0ff; margin: 10px 0 4px; }
+.bignums { grid-template-columns: repeat(4, 1fr); }
+.alerts li.bad { border-color: #ff5a5a; color: #ffb0b0; } .log li.bad { color: #ffb0b0; }

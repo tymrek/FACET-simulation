@@ -21,7 +21,7 @@ async function cmd(body) {
 }
 
 // ---------------------------------------------------------------- ground map
-const PHASE_COL = ["#e9e2d0", "#5f73b4", "#ff9628", "#ffe150", "#5affa0", "#ff4b4b"];
+const PHASE_COL = ["#e9e2d0", "#5f73b4", "#ff9628", "#ffe150", "#5affa0", "#ff4b4b", "#7a2b2b"];
 class GroundMap {
   constructor(canvas, onPick) {
     this.c = canvas; this.g = canvas.getContext("2d"); this.onPick = onPick;
@@ -86,7 +86,7 @@ class GroundMap {
     }
     // satellites
     const r = (fleet.sats.length > 3000 ? 1.2 : fleet.sats.length > 500 ? 1.7 : 2.4) * this.dpr;
-    for (const code of [0, 1, 3, 2, 4, 5]) {
+    for (const code of [0, 1, 3, 2, 4, 5, 6]) {
       g.fillStyle = PHASE_COL[code];
       for (const [lo, la, c] of fleet.sats) if (c === code) { const [x, y] = this.xy(lo, la); g.fillRect(x - r, y - r, 2 * r, 2 * r); }
     }
@@ -212,12 +212,12 @@ async function loadInspector() {
 function renderInspector(s) {
   const kv = (rows) => el("table", { class: "kv" }, ...rows.filter(([, v]) => v !== null && v !== undefined)
     .map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))));
-  const lamp = s.hold ? "red" : s.phase.startsWith("locked") ? "green" : s.phase === "idle" ? "grey" : "amber";
+  const lamp = s.failed || s.hold ? "red" : s.phase.startsWith("locked") ? "green" : s.phase === "idle" ? "grey" : "amber";
   $("inspector").className = "";
   $("inspector").replaceChildren(
     el("div", { class: "insphead" }, el("span", { class: `lamp ${lamp}` }), el("b", {}, s.name), el("span", { class: "muted small" }, ` plane ${s.plane} · slot ${s.slot}`)),
     kv([
-      ["State", s.phase],
+      ["State", s.failed ? "FAILED (no telemetry)" : s.phase],
       ["Task", s.task],
       ["Position", `${s.lat >= 0 ? s.lat + "° N" : -s.lat + "° S"}, ${s.lon >= 0 ? s.lon + "° E" : -s.lon + "° W"} · ${s.alt_km} km · ${s.speed_km_s} km/s`],
       ["Illumination", s.sunlit ? "sunlit" : "eclipse"],
@@ -228,7 +228,7 @@ function renderInspector(s) {
       ["Jitter", s.jitter_arcsec !== null ? `${s.jitter_arcsec}″ RMS` : null],
       ["Laser links", `${s.links_up} up` + (s.links_blocked ? ` · ${s.links_blocked} blocked by atmosphere` : "")],
     ]),
-    el("div", { class: "btns" }, s.hold
+    el("div", { class: "btns" }, s.failed ? el("span", { class: "muted small" }, "Failed: awaiting replacement.") : s.hold
       ? el("button", { class: "primary", onclick: () => cmd({ cmd: "safe_hold", sat: s.index, on: false }) }, "Return to service")
       : el("button", { class: "danger", onclick: () => cmd({ cmd: "safe_hold", sat: s.index, on: true }) }, "Command safe hold")),
   );
@@ -341,6 +341,55 @@ function drawIpChart(c, d) {
   g.fillStyle = "#ffb44a"; g.fillText("Ground only", L + 110 * dpr, T + 12 * dpr);
 }
 
+// ---------------------------------------------------------------- resilience & ground comparison
+function renderResilience(s) {
+  const r = s.resilience, g = s.ground; if (!r) return;
+  const last = r.series.length ? r.series[r.series.length - 1] : null;
+  $("rs_tiles").replaceChildren(
+    tile("fleet alive", `${(100 * r.alive_frac).toFixed(1)} %`, `${r.failed} failed now · ${r.total_failed} failures, ${r.total_replaced} replaced so far`),
+    tile("science output, last hour", last ? `${Math.round(100 * last[2])} %` : "–", "integration per satellite-hour, relative to the healthy fleet"),
+    tile("observations, last hour", last ? `${Math.round(100 * last[3])} %` : "–", "completed requests, relative to the healthy fleet"),
+    tile("random failures", `${r.rate_pct_yr} %/yr`),
+    tile("replacement", r.replace_days > 0 ? `after ${r.replace_days} d` : "none"),
+  );
+  drawResilience($("rs_chart"), r);
+  if (g) {
+    const pc = x => `${(100 * x).toFixed(0)} %`;
+    const row = (k, a, b, note) => el("tr", { title: note || "" }, el("th", {}, k), el("td", {}, a), el("td", {}, b));
+    $("gc_table").replaceChildren(
+      row("Time on the sky (duty cycle)", pc(g.facet_duty), pc(g.ground_duty), "night × weather × uptime on the ground"),
+      row("Sky observable right now", pc(g.facet_sky_now), pc(g.ground_sky_now), "at least one telescope can point there"),
+      row("Queue targets observable within 24 h", pc(g.facet_within_24h), pc(g.ground_within_24h), `${g.targets} open requests`),
+      row("Queue targets observable right now", pc(g.facet_now), pc(g.ground_now), "ground: above 30° at a site that is dark and clear now (expected over weather)"),
+      row("FACET response (slew + settle + lock)", g.facet_median_response_s == null ? "–" : fmtDur(g.facet_median_response_s), "–", "median measured in the simulation"),
+      row("5σ depth, one telescope, 60 s", `V ${g.facet_depth_60s.toFixed(1)}`, `V ${g.ground_depth_60s.toFixed(1)}`, "same 20 cm aperture"),
+    );
+    $("gc_head").textContent = `FACET (${s.shell.n.toLocaleString()} telescopes) vs ${g.telescopes.toLocaleString()} identical telescopes at ${g.sites} ground sites`;
+    $("gc_equiv").textContent = `One FACET telescope delivers about as much as ${g.equivalent_ground_telescopes.toFixed(1)} identical ground telescopes at equal depth.`;
+    $("gc_notes").textContent = g.notes.join(" ");
+  }
+}
+function drawResilience(c, r) {
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth * dpr, h = c.clientHeight * dpr;
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const g = c.getContext("2d"); g.clearRect(0, 0, w, h);
+  const L = 36 * dpr, R = 8 * dpr, T = 8 * dpr, B = 18 * dpr, S = r.series;
+  g.strokeStyle = "rgba(120,140,180,0.25)"; g.fillStyle = "#8a94a8"; g.font = `${10 * dpr}px system-ui`; g.lineWidth = dpr;
+  const y = v => T + (1 - Math.min(Math.max(v, 0), 1.2) / 1.2) * (h - T - B);
+  for (const v of [0, 0.5, 1]) { g.beginPath(); g.moveTo(L, y(v)); g.lineTo(w - R, y(v)); g.stroke(); g.fillText(`${v * 100}%`, 2 * dpr, y(v) + 3 * dpr); }
+  if (S.length < 2) { g.fillText("Collecting hourly data…", L + 8 * dpr, T + 14 * dpr); return; }
+  const t0 = S[0][0], t1 = S[S.length - 1][0], x = t => L + (t - t0) / Math.max(t1 - t0, 1e-6) * (w - L - R);
+  for (const [k, col] of [[1, "#ffffff"], [2, "#4fa3ff"], [3, "#5fe0a0"]]) {
+    g.strokeStyle = col; g.lineWidth = (k === 1 ? 2 : 1.5) * dpr; g.beginPath();
+    S.forEach((p, i) => { const X = x(p[0]), Y = y(p[k]); if (i) g.lineTo(X, Y); else g.moveTo(X, Y); });
+    g.stroke();
+  }
+  g.fillStyle = "#fff"; g.fillText("fleet alive", L + 6 * dpr, h - 4 * dpr);
+  g.fillStyle = "#4fa3ff"; g.fillText("science output", L + 80 * dpr, h - 4 * dpr);
+  g.fillStyle = "#5fe0a0"; g.fillText("observations", L + 180 * dpr, h - 4 * dpr);
+  g.fillStyle = "#8a94a8"; g.fillText(`last ${fmtDur((t1 - t0) * 86400)}`, w - 90 * dpr, h - 4 * dpr);
+}
+
 // ---------------------------------------------------------------- space traffic
 function fmtPc(p) { return p >= 1e-12 ? p.toExponential(1) : "< 1e-12"; }
 function renderTraffic(s) {
@@ -448,17 +497,19 @@ function render(s) {
 
   // System state pill
   const hold = fleet ? fleet.sats.filter(x => x[2] === 5).length : 0;
+  const failed = s.resilience ? s.resilience.failed : 0;
   const pill = $("sysstate");
-  const caution = hold > 0 || s.shell.links_blocked > 0;
+  const caution = hold > 0 || failed > 0 || s.shell.links_blocked > 0;
   pill.textContent = caution ? "CAUTION" : "NOMINAL"; pill.className = `pill ${caution ? "amber" : "green"}`;
 
   // Fleet
-  const st = s.stats, n = s.shell.n, idle = Math.max(0, n - st.locked - st.slewing - st.settling - hold);
-  $("f_service").textContent = (n - hold).toLocaleString();
+  const st = s.stats, n = s.shell.n, idle = Math.max(0, n - st.locked - st.slewing - st.settling - hold - failed);
+  $("f_service").textContent = (n - hold - failed).toLocaleString();
   $("f_hold").textContent = hold.toLocaleString();
+  $("f_failed").textContent = failed.toLocaleString();
   $("f_locked").textContent = st.locked.toLocaleString();
   const parts = [["integrating", st.locked, "#5affa0"], ["slewing", st.slewing, "#ff9628"], ["settling", st.settling, "#ffe150"],
-                 ["idle", idle, "#3a4558"], ["safe hold", hold, "#ff4b4b"]];
+                 ["idle", idle, "#3a4558"], ["safe hold", hold, "#ff4b4b"], ["failed", failed, "#7a2b2b"]];
   $("phasebar").replaceChildren(...parts.filter(p => p[1] > 0).map(([k, v, c]) =>
     el("div", { style: `flex:${v};background:${c}`, title: `${k}: ${v}` })));
   $("phaselegend").replaceChildren(...parts.map(([k, v, c]) => el("span", {}, el("i", { style: `background:${c}` }), `${k} ${v}`)));
@@ -466,7 +517,7 @@ function render(s) {
     ["Shell", `${n.toLocaleString()} sats · ${s.shell.planes} planes · ${s.shell.alt_km.toFixed(0)} km · ${s.shell.inc_deg}°`],
     ["Orbital period", `${s.shell.period_min} min`],
     ["Sunlit / eclipse", `${st.lit} / ${st.eclipsed}`],
-    ["Optical mesh", `${(s.shell.links - s.shell.links_blocked).toLocaleString()} links up` + (s.shell.links_blocked ? ` · ${s.shell.links_blocked} through atmosphere` : "")],
+    ["Optical mesh", `${(s.shell.links - s.shell.links_blocked - (s.shell.links_down || 0)).toLocaleString()} links up` + (s.shell.links_blocked ? ` · ${s.shell.links_blocked} through atmosphere` : "") + (s.shell.links_down ? ` · ${s.shell.links_down} down (failed satellites)` : "")],
     ["Sky reachable now", `${st.sky_reachable} %`],
   ]);
   const t2 = s.telescope;
@@ -496,6 +547,7 @@ function render(s) {
   // Alerts
   const alerts = [];
   if (hold) alerts.push(["warn", `${hold} satellite${hold > 1 ? "s" : ""} in safe hold`]);
+  if (failed) alerts.push(["bad", `${failed} satellite${failed > 1 ? "s" : ""} failed (${(100 * failed / n).toFixed(1)} % of the fleet)`]);
   if (s.shell.links_blocked) alerts.push(["warn", `${s.shell.links_blocked} laser links pass through the atmosphere`]);
   if (s.target && s.target.blocked && ["stack", "mosaic"].includes(s.mode)) alerts.push(["warn", `Director target ${s.target.name}: ${s.target.blocked}`]);
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
@@ -523,6 +575,7 @@ function render(s) {
   renderScience(s);
   renderDefence(s);
   renderTraffic(s);
+  renderResilience(s);
   for (const c of (s.campaigns || []).filter(c => c.active)) {
     if (c.paused) alerts.push(["info", `STARE ${c.target_name} paused: ${String(c.blocked).toLowerCase()}`]);
     else if (c.eligible_s > 0 && c.locked_now === 0 && !c.blocked) alerts.push(["warn", `STARE #${c.id} on ${c.target_name}: no eyes locked`]);

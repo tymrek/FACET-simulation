@@ -399,6 +399,52 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## Resilience
+
+Desktop *Resilience* panel:
+
+* **Inject failures:** Fail 10 %, Fail 30 %, Lose a plane, Restore all.
+* **Random failures:** a rate in % per year (`--fail-rate`).
+* **Replacement:** a delay in days after which failed satellites are back in
+  service (`--replace-days`).
+* **Scripted failure:** `--fail-at HOURS:FRACTION`, for staging a pitch.
+
+Failed satellites take no work and their laser links go down. The ops
+console shows them as failed: they are counted, raise an alert, and the
+inspector offers no "return to service".
+
+An hourly record compares fleet alive % with science output (integration
+per satellite-hour) and completed observations, both relative to the healthy
+fleet. Losing 30 % of the fleet costs about 30 % of telescope-hours but only
+about 10–20 % of completed observations, because the scheduler sheds
+low-priority long jobs first. Replacements restore output, and the backlog
+clears above 100 %.
+
+## FACET vs a ground network
+
+Every ~20 s a background job compares FACET with the same number of
+identical 20 cm telescopes spread over 12 good observatory sites (Atacama,
+Canary Islands, Hawaii, Arizona, Baja California, South Africa, Namibia,
+Australia, Spain, Uzbekistan, Tibetan plateau):
+
+* **Observing conditions:** the Sun is below −12°, targets are above 30°
+  and at least 15° from the Moon. Each site has an assumed clear fraction
+  (55–85 %) and 90 % uptime, sampled over 40 weather realisations (Monte
+  Carlo).
+* **Depth:** 1.8″ seeing, V 21.3 mag/arcsec² sky and 0.25 mag extinction
+  (all assumed), against FACET's Fourier-optics PSF and zodiacal sky.
+* **Reported:** duty cycle, sky observable now, queue targets observable now
+  and within 24 h, depth, and the number of ground telescopes needed to match
+  one FACET telescope at equal depth. Throughput ratio × 10^(0.8 Δm) gives
+  about 9–10 with defaults. The ops console has the table; the public page
+  has a short "Why put telescopes in space?" card.
+
+FACET's delivered image FWHM (about 2.7″: pixel scale and pointing jitter
+dominate) is currently worse than good ground seeing, so most of the
+advantage comes from duty cycle and dark sky. That is the obvious target
+for the optics work. Ground benefits the model leaves out: large apertures
+are cheap on the ground, and it can be serviced and upgraded.
+
 ## Cost model
 
 **Open cost model window** in the simulator's controls (or `--costs`) opens a

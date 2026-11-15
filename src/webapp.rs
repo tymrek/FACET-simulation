@@ -981,6 +981,8 @@ impl App {
         };
         let status = serde_json::json!({
             "costs": costs_json,
+            "resilience": self.resilience_json(),
+            "ground": self.resil.ground,
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,
             "playing": self.playing,
@@ -1002,7 +1004,7 @@ impl App {
                 "raan_span_deg": sp.raan_span_deg,
                 "period_min": r2(sp.period_s() / 60.0),
                 "node_drift_deg_day": r2(self.shell.raan_drift_deg_per_day()),
-                "links": self.shell.links.len(), "links_blocked": self.obs.links_blocked,
+                "links": self.shell.links.len(), "links_blocked": self.obs.links_blocked, "links_down": self.resil.links_down,
             },
             "telescope": {
                 "aperture_cm": o.aperture_cm, "fov_deg": o.fov_deg, "exp_s": o.exp_s,
@@ -1082,7 +1084,9 @@ impl App {
             .enumerate()
             .map(|(i, &p)| {
                 let [lon, lat] = ll(p);
-                let code = if self.obs.hold.get(i).copied().unwrap_or(false) {
+                let code = if crate::resilience::failed_code(self, i) {
+                    6.0
+                } else if self.obs.hold.get(i).copied().unwrap_or(false) {
                     5.0
                 } else {
                     match self.obs.att.get(i).map(|a| a.phase()) {
@@ -1182,6 +1186,7 @@ impl App {
             "speed_km_s": r2(v),
             "sunlit": self.obs.lit.get(i).copied().unwrap_or(true),
             "hold": hold,
+            "failed": crate::resilience::failed_code(self, i),
             "phase": phase,
             "task": task,
             "boresight": { "ra": r2(deg(bra)), "dec": r2(deg(bdec)) },

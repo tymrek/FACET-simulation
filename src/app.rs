@@ -110,6 +110,8 @@ pub struct App {
     pub traffic: crate::traffic::Traffic,
     /// Programme cost model and its separate window.
     pub cost_model: crate::costs::Model,
+    /// Satellite failures, replacement, health record; space-vs-ground comparison.
+    pub resil: crate::resilience::Resilience,
     pub cost_window_open: bool,
     pub cost_msg: Option<String>,
     pub science: crate::programme::Science,
@@ -206,6 +208,7 @@ impl App {
             pending_defence: false,
             search_share: 0.10,
             cost_model: crate::costs::Model::baseline(),
+            resil: Default::default(),
             cost_window_open: false,
             cost_msg: None,
             traffic: crate::traffic::Traffic::new(Default::default(), jd0_for_traffic(), 550.0),
@@ -282,6 +285,16 @@ impl App {
                 "--click-target" => self.click_target = true,
                 "--no-programme" => self.gen.on = false,
                 "--costs" => self.cost_window_open = true,
+                "--fail-rate" => self.resil.rate_pct_yr = val().parse().unwrap_or(0.0),
+                "--replace-days" => self.resil.replace_days = val().parse().unwrap_or(0.0),
+                "--fail-at" => {
+                    // HOURS:FRACTION, e.g. 6:0.3 fails 30 % of the fleet 6 simulated hours in
+                    let v = val();
+                    let mut it = v.split(':');
+                    if let (Some(h), Some(f)) = (it.next().and_then(|x| x.parse().ok()), it.next().and_then(|x| x.parse::<f64>().ok())) {
+                        self.resil.scripted = Some((h, f.clamp(0.0, 1.0)));
+                    }
+                }
                 "--starlink" => self.traffic.cfg.starlink_n = val().parse().unwrap_or(9_950),
                 "--starlink-alt" => self.traffic.cfg.starlink_alt_km = val().parse().unwrap_or(480.0),
                 "--no-oneweb" => self.traffic.cfg.oneweb = false,
@@ -400,6 +413,9 @@ impl App {
         if std::env::var_os("FACET_BENCH").is_some() && self.last_cov.map_or(false, |t| now.duration_since(t).as_secs_f64() > 0.49) {
             eprintln!("sim tick {:.1} ms ({} sub-steps, {} threads)", self.frame_ms, subs, rayon::current_num_threads());
         }
+        self.resilience_record();
+        self.resilience_events_to_log();
+        self.ground_tick();
         self.publish_status(now);
         self.refresh_coverage(now);
     }
@@ -427,6 +443,7 @@ impl App {
             self.shell = Shell::new(self.shell_params.clone(), self.shell.epoch_jd);
         }
         self.shell.propagate(self.jd);
+        self.apply_failures(dt_sim);
         prof("shell.propagate");
         self.bodies = astro::bodies(self.jd);
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
@@ -445,6 +462,7 @@ impl App {
                 _ => None,
             },
         );
+        self.failed_links();
         prof("propagate+obs::update");
         // STARE campaigns first (director commitments), then the public queue
         // on its share of the shell.
@@ -749,6 +767,8 @@ impl App {
         }
         ui.separator();
         self.defence_panel(ui);
+        ui.separator();
+        self.resilience_panel(ui);
         ui.separator();
         self.traffic_panel(ui);
         ui.separator();
