@@ -399,6 +399,34 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## Performance and threading
+
+The simulation and the window run on separate threads:
+
+* **Simulation thread** (`facet-sim`): advances time at about 120 Hz,
+  independent of the window's frame rate. At high time rates each tick is
+  split into sub-steps of at most 60 s of simulated time, within a ~30 ms
+  compute budget, so scheduling, attitude and STARE handovers keep their
+  fidelity. It also publishes the web status.
+* **UI thread** (egui): locks the simulation briefly to draw and to apply
+  control changes.
+* **Data parallelism** (rayon, all cores): orbit propagation, visibility and
+  shadow tests, laser-link checks, queue and STARE candidate scans, attitude
+  dynamics, sky coverage, other-operator propagation, streak prediction,
+  conjunction screening and relay/ground-station sampling.
+* **Web server**: its own threads; result images render in background
+  threads.
+
+Conjunction screening has a per-tick budget. At extreme time rates it falls
+behind rather than stalling the simulation; the backlog is reported, and
+rates are normalised by the satellite-days actually screened.
+
+`FACET_BENCH=1` prints tick time, sub-steps and thread count;
+`FACET_PROFILE=1` prints a per-phase breakdown of each step. On a 2-core
+test machine with software rendering, 10,000 satellites at 1 h/s run in real
+time at about 110 ms per tick. The old single-threaded build managed about
+a third of that rate.
+
 ## Space traffic, data path and neighbourhood notices
 
 Other operators' satellites and debris share FACET's sky and altitude. The

@@ -242,6 +242,9 @@ pub struct Traffic {
     streak_cursor: usize,
     screen_cursor: usize,
     screen_credit: f64,
+    last_screened: Vec<f64>,
+    /// Backlog of satellites awaiting screening, as a fraction of the fleet.
+    pub screen_lag: f64,
     pub relay: RelayStats,
     pub dtg: DtgStats,
     last_dtg_jd: f64,
@@ -298,6 +301,8 @@ impl Traffic {
             streak_cursor: 0,
             screen_cursor: 0,
             screen_credit: 0.0,
+            last_screened: Vec::new(),
+            screen_lag: 0.0,
             relay: Default::default(),
             dtg: Default::default(),
             last_dtg_jd: 0.0,
@@ -382,15 +387,23 @@ impl Traffic {
 
     pub fn step(&mut self, f: &FacetState) {
         self.rebuild(f.jd, f.alt_km);
+        use rayon::prelude::*;
         self.pos.clear();
-        self.pos.extend(self.objs.iter().map(|o| o.orbit.pos(f.jd)));
+        self.pos.par_extend(self.objs.par_iter().map(|o| o.orbit.pos(f.jd)));
         if f.dt_s <= 0.0 {
             return;
         }
         self.elapsed_s += f.dt_s;
+        let prof = std::env::var_os("FACET_PROFILE").is_some();
+        let t0 = std::time::Instant::now();
         self.streak_sample(f);
+        let t1 = std::time::Instant::now();
         self.screen(f);
+        let t2 = std::time::Instant::now();
         self.age_notices(f.jd);
+        if prof {
+            eprintln!("    traffic: streaks {:.1} ms, screening {:.1} ms", (t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3);
+        }
     }
 
     fn facet_orbit(f: &FacetState, i: usize) -> Orbit {
@@ -401,6 +414,7 @@ impl Traffic {
     // ------------------------------------------------------------ streaks
 
     fn streak_sample(&mut self, f: &FacetState) {
+        use rayon::prelude::*;
         let n = f.pos.len();
         if n == 0 {
             return;
@@ -414,65 +428,72 @@ impl Traffic {
             let along = p.dot(sun);
             along > 0.0 || (p - sun * along).norm() > EARTH_RADIUS_KM
         };
-        // Future positions of the other operators' satellites (debris is too faint to matter).
-        let pos1: Vec<Option<V3>> = self.objs.iter().map(|o| if o.pop == Pop::Other { None } else { Some(o.orbit.pos(jd1)) }).collect();
-        let lit: Vec<bool> = self.pos.iter().map(|&p| sunlit(p)).collect();
-        let samples = 20.min(n);
-        let mut done = 0;
+        // Sources: other operators' satellites and other FACETs (debris is too
+        // faint to matter), sunlit, at the start and end of the sub-exposure.
+        let mut src: Vec<(V3, V3, Pop)> = self
+            .objs
+            .par_iter()
+            .zip(self.pos.par_iter())
+            .filter(|(o, p)| o.pop != Pop::Other && sunlit(**p))
+            .map(|(o, &p)| (p, o.orbit.pos(jd1), o.pop))
+            .collect();
+        src.par_extend((0..n).into_par_iter().filter(|&k| sunlit(f.pos[k])).map(|k| (f.pos[k], Self::facet_orbit(f, k).pos(jd1), Pop::Facet)));
+        // Sample integrating telescopes (round robin).
+        // Bound the work per step (~400k segment tests), at least 8 frames.
+        let want = (400_000 / src.len().max(1)).clamp(8, 64).min(n);
+        let mut picks = Vec::with_capacity(want);
         let mut tries = 0;
-        while done < samples && tries < n {
+        while picks.len() < want && tries < n {
             tries += 1;
             let i = self.streak_cursor % n;
             self.streak_cursor += 1;
-            let Some(b) = f.boresight[i] else { continue };
-            done += 1;
-            let fo = Self::facet_orbit(f, i);
-            let (p0, p1) = (f.pos[i], fo.pos(jd1));
-            let (e, nn) = crate::obs::tangent_basis(b);
-            let mut hits = [0u32; 4];
-            let mut lost: f64 = 0.0;
-            let gn = |d: V3| -> Option<(f64, f64)> {
-                let z = d.dot(b);
-                (z > 0.0).then(|| (d.dot(e) / z, d.dot(nn) / z))
-            };
-            let mut check = |q0: V3, q1: V3, pop: Pop| {
-                let (d0, d1) = (q0 - p0, q1 - p1);
-                let (Some(a), Some(c)) = (gn(d0), gn(d1)) else { return };
-                // distance from the boresight (origin) to the gnomonic segment a→c
-                let (vx, vy) = (c.0 - a.0, c.1 - a.1);
-                let l2 = vx * vx + vy * vy;
-                let t = if l2 > 0.0 { (-(a.0 * vx + a.1 * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
-                let (mx, my) = (a.0 + t * vx, a.1 + t * vy);
-                if mx * mx + my * my > r_fov * r_fov {
-                    return;
-                }
-                // line of sight must clear the Earth and atmosphere
-                let mid = (q0 + q1) * 0.5 - (p0 + p1) * 0.5;
-                let s = -((p0 + p1) * 0.5).dot(mid) / mid.dot(mid).max(1e-9);
-                let closest = ((p0 + p1) * 0.5 + mid * s.clamp(0.0, 1.0)).norm();
-                if closest < EARTH_RADIUS_KM + 100.0 {
-                    return;
-                }
-                let omega = d0.angle(d1) / tau;
-                let dur = if omega > 0.0 { fov / omega } else { tau };
-                lost += (dur + 2.0).min(tau);
-                hits[pop as usize] += 1;
-            };
-            for (j, o) in self.objs.iter().enumerate() {
-                if let Some(q1) = pos1[j] {
-                    if lit[j] {
-                        check(self.pos[j], q1, o.pop);
+            if let Some(b) = f.boresight[i] {
+                picks.push((i, b));
+            }
+        }
+        let results: Vec<([u32; 4], f64)> = picks
+            .par_iter()
+            .map(|&(i, b)| {
+                let fo = Self::facet_orbit(f, i);
+                let (p0, p1) = (f.pos[i], fo.pos(jd1));
+                let (e, nn) = crate::obs::tangent_basis(b);
+                let gn = |d: V3| -> Option<(f64, f64)> {
+                    let z = d.dot(b);
+                    (z > 0.0).then(|| (d.dot(e) / z, d.dot(nn) / z))
+                };
+                let mut hits = [0u32; 4];
+                let mut lost = 0.0f64;
+                for &(q0, q1, pop) in &src {
+                    if (q0 - p0).norm() < 1e-3 {
+                        continue; // itself
                     }
+                    let (d0, d1) = (q0 - p0, q1 - p1);
+                    let (Some(a), Some(c)) = (gn(d0), gn(d1)) else { continue };
+                    // distance from the boresight (origin) to the gnomonic segment a→c
+                    let (vx, vy) = (c.0 - a.0, c.1 - a.1);
+                    let l2 = vx * vx + vy * vy;
+                    let t = if l2 > 0.0 { (-(a.0 * vx + a.1 * vy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                    let (mx, my) = (a.0 + t * vx, a.1 + t * vy);
+                    if mx * mx + my * my > r_fov * r_fov {
+                        continue;
+                    }
+                    // line of sight must clear the Earth and atmosphere
+                    let pm = (p0 + p1) * 0.5;
+                    let mid = (q0 + q1) * 0.5 - pm;
+                    let s = (-pm.dot(mid) / mid.dot(mid).max(1e-9)).clamp(0.0, 1.0);
+                    if (pm + mid * s).norm() < EARTH_RADIUS_KM + 100.0 {
+                        continue;
+                    }
+                    let omega = d0.angle(d1) / tau;
+                    let dur = if omega > 0.0 { fov / omega } else { tau };
+                    lost += (dur + 2.0).min(tau);
+                    hits[pop as usize] += 1;
                 }
-            }
-            // other FACET satellites
-            for k in (0..n).step_by(1) {
-                if k != i && sunlit(f.pos[k]) {
-                    let q1 = Self::facet_orbit(f, k).pos(jd1);
-                    check(f.pos[k], q1, Pop::Facet);
-                }
-            }
-            let s = &mut self.streaks;
+                (hits, lost.min(tau))
+            })
+            .collect();
+        let s = &mut self.streaks;
+        for (hits, lost) in results {
             s.frames += 1.0;
             s.exposed_s += tau;
             if hits.iter().any(|&h| h > 0) {
@@ -481,7 +502,7 @@ impl Traffic {
             for k in 0..4 {
                 s.by_pop[k] += hits[k] as f64;
             }
-            s.lost_s += lost.min(tau);
+            s.lost_s += lost;
         }
     }
 
@@ -492,33 +513,65 @@ impl Traffic {
         if n == 0 {
             return;
         }
-        // Re-screen every satellite every 6 h over a 30 h window.
-        self.screen_credit += n as f64 * f.dt_s / 21_600.0;
-        let todo = (self.screen_credit.floor() as usize).min(200);
-        self.screen_credit -= todo as f64;
-        if todo == 0 {
-            return;
+        // Re-screen every satellite every 6 h over a 30 h window, within a
+        // compute budget per step. At extreme time rates screening falls
+        // behind; statistics are normalised by the satellite-days actually
+        // screened, so rates stay unbiased.
+        if self.last_screened.len() != n {
+            self.last_screened = vec![f64::NAN; n];
         }
+        self.screen_credit = (self.screen_credit + n as f64 * f.dt_s / 21_600.0).min(n as f64);
         let window_d = 30.0 / 24.0;
+        // Circular orbits never come closer than their altitude difference.
         let cands: Vec<usize> = (0..self.objs.len())
-            .filter(|&j| (self.objs[j].orbit.a - (EARTH_RADIUS_KM + f.alt_km)).abs() < 15.0)
+            .filter(|&j| (self.objs[j].orbit.a - (EARTH_RADIUS_KM + f.alt_km)).abs() < 5.0)
             .collect();
-        for _ in 0..todo {
-            let i = self.screen_cursor % n;
-            self.screen_cursor += 1;
-            self.conj.screened_sat_days += 0.25;
-            let fo = Self::facet_orbit(f, i);
-            for &j in &cands {
-                let ob = self.objs[j].orbit;
-                self.screen_pair(f, i, &fo, j, &ob, window_d);
+        let t0 = std::time::Instant::now();
+        let mut found: Vec<(usize, usize, f64, f64)> = Vec::new();
+        while self.screen_credit >= 1.0 && t0.elapsed().as_secs_f64() < 0.012 {
+            let todo = (self.screen_credit.floor() as usize).min(8 * rayon::current_num_threads());
+            self.screen_credit -= todo as f64;
+            let sats: Vec<usize> = (0..todo).map(|k| (self.screen_cursor + k) % n).collect();
+            self.screen_cursor += todo;
+            for &i in &sats {
+                let last = self.last_screened[i];
+                let new_days = if last.is_nan() { window_d } else { (f.jd - last).clamp(0.0, window_d) };
+                self.conj.screened_sat_days += new_days;
+                self.last_screened[i] = f.jd;
             }
+            let objs = &self.objs;
+            found.extend(self.screen_batch(f, &sats, &cands, objs, window_d));
+        }
+        self.screen_lag = self.screen_credit / n as f64;
+        for (i, j, tca, miss) in found {
+            let fo = Self::facet_orbit(f, i);
+            let ob = self.objs[j].orbit;
+            self.add_notice(f, i, &fo, j, &ob, tca, miss);
         }
     }
 
-    fn screen_pair(&mut self, f: &FacetState, i: usize, fo: &Orbit, j: usize, ob: &Orbit, window_d: f64) {
+    fn screen_batch(&self, f: &FacetState, sats: &[usize], cands: &[usize], objs: &[Obj], window_d: f64) -> Vec<(usize, usize, f64, f64)> {
+        use rayon::prelude::*;
+        sats.par_iter()
+            .flat_map_iter(|&i| {
+                let fo = Self::facet_orbit(f, i);
+                let mut v = Vec::new();
+                for &j in cands {
+                    for (tca, miss) in Self::screen_pair(f.jd, &fo, &objs[j].orbit, window_d) {
+                        v.push((i, j, tca, miss));
+                    }
+                }
+                v
+            })
+            .collect()
+    }
+
+    /// Close approaches (TCA, miss km) of two circular orbits within the window.
+    fn screen_pair(jd0: f64, fo: &Orbit, ob: &Orbit, window_d: f64) -> Vec<(f64, f64)> {
+        let mut out = Vec::new();
         let tf = fo.period_s() / 86_400.0;
-        let mut t = f.jd;
-        while t < f.jd + window_d {
+        let mut t = jd0;
+        while t < jd0 + window_d {
             let (pf, qf, hf) = fo.basis(t);
             let (pj, qj, hj) = ob.basis(t);
             let l = hf.cross(hj);
@@ -532,7 +585,7 @@ impl Traffic {
                 let uf_l = lv.dot(qf).atan2(lv.dot(pf));
                 let dtf = (uf_l - fo.u(t)).rem_euclid(TAU) / fo.u_dot;
                 let tc = t + dtf / 86_400.0;
-                if tc > f.jd + window_d {
+                if tc > jd0 + window_d {
                     continue;
                 }
                 let uj_l = lv.dot(qj).atan2(lv.dot(pj));
@@ -568,12 +621,13 @@ impl Traffic {
                 }
                 let tca = 0.5 * (lo + hi);
                 let miss = dist(tca);
-                if miss < 5.0 && tca > f.jd {
-                    self.add_notice(f, i, fo, j, ob, tca, miss);
+                if miss < 5.0 && tca > jd0 {
+                    out.push((tca, miss));
                 }
             }
             t += tf;
         }
+        out
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -732,28 +786,32 @@ impl Traffic {
             return;
         }
         let star: Vec<V3> = self.objs.iter().zip(&self.pos).filter(|(o, _)| o.pop == Pop::Starlink).map(|(_, &p)| p).collect();
-        let stride = (n / 150).max(1);
-        let (mut sampled, mut linked, mut rsum) = (0, 0, 0.0);
-        for i in (0..n).step_by(stride) {
-            sampled += 1;
-            let p = facet_pos[i];
-            let mut best = f64::MAX;
-            for &q in &star {
-                let d = (q - p).norm();
-                if d < best && d <= self.cfg.relay_range_km {
-                    // line of sight clears 100 km
-                    let v = q - p;
-                    let s = (-p.dot(v) / v.dot(v)).clamp(0.0, 1.0);
-                    if (p + v * s).norm() > EARTH_RADIUS_KM + 100.0 {
-                        best = d;
+        use rayon::prelude::*;
+        let stride = (n / 400).max(1);
+        let range = self.cfg.relay_range_km;
+        let bests: Vec<Option<f64>> = (0..n)
+            .into_par_iter()
+            .step_by(stride)
+            .map(|i| {
+                let p = facet_pos[i];
+                let mut best = f64::MAX;
+                for &q in &star {
+                    let d = (q - p).norm();
+                    if d < best && d <= range {
+                        // line of sight clears 100 km
+                        let v = q - p;
+                        let s = (-p.dot(v) / v.dot(v)).clamp(0.0, 1.0);
+                        if (p + v * s).norm() > EARTH_RADIUS_KM + 100.0 {
+                            best = d;
+                        }
                     }
                 }
-            }
-            if best < f64::MAX {
-                linked += 1;
-                rsum += best;
-            }
-        }
+                (best < f64::MAX).then_some(best)
+            })
+            .collect();
+        let sampled = bests.len();
+        let linked = bests.iter().flatten().count();
+        let rsum: f64 = bests.iter().flatten().sum();
         let mean = if linked > 0 { rsum / linked as f64 } else { 0.0 };
         // Mesh path to a gateway (ASSUMED ~2,500 km of laser hops at ~2 ms
         // per hop) plus ~15 ms of terrestrial backhaul.
@@ -767,40 +825,39 @@ impl Traffic {
             return;
         }
         self.last_dtg_jd = jd;
+        let t0 = std::time::Instant::now();
+        let _g = Defer(t0);
         let ns = self.cfg.stations.min(STATIONS.len());
         let a = EARTH_RADIUS_KM + alt_km;
         // Earth central angle for a 10° elevation mask
         let el = rad(10.0);
         let lam = (EARTH_RADIUS_KM / a * el.cos()).acos() - el;
         let cos_lam = lam.cos();
+        // Station unit vectors in the Earth-fixed frame, computed once; the
+        // satellite is rotated into that frame instead.
+        let st_ecef: Vec<V3> = STATIONS[..ns].iter().map(|&(la, lo)| crate::astro::ecef_to_eci(lo, la, 1.0, 0.0)).collect();
         let in_view = |p: V3, t: f64| -> bool {
-            let g = crate::astro::gmst(t);
-            STATIONS[..ns].iter().any(|&(la, lo)| {
-                let s = crate::astro::ecef_to_eci(lo, la, 1.0, g);
-                p.unit().dot(s) > cos_lam
-            })
+            let e = p.rot_z(-crate::astro::gmst(t)).unit();
+            st_ecef.iter().any(|s| e.dot(*s) > cos_lam)
         };
-        let stride = (raan.len() / 60).max(1);
-        let (mut cnt, mut vis) = (0, 0);
-        let mut waits = Vec::new();
-        for i in (0..raan.len()).step_by(stride) {
-            let o = Orbit::new(alt_km, inc, raan[i], u[i], jd);
-            cnt += 1;
-            if in_view(o.pos(jd), jd) {
-                vis += 1;
-                waits.push(0.0);
-                continue;
-            }
-            let mut w = None;
-            for k in 1..=720 {
-                let t = jd + k as f64 * 30.0 / 86_400.0;
-                if in_view(o.pos(t), t) {
-                    w = Some(k as f64 * 30.0);
-                    break;
-                }
-            }
-            waits.push(w.unwrap_or(21_600.0));
-        }
+        use rayon::prelude::*;
+        let stride = (raan.len() / 200).max(1);
+        let mut waits: Vec<f64> = (0..raan.len())
+            .into_par_iter()
+            .step_by(stride)
+            .map(|i| {
+                let o = Orbit::new(alt_km, inc, raan[i], u[i], jd);
+                (0..=720)
+                    .map(|k| k as f64 * 30.0)
+                    .find(|&s| {
+                        let t = jd + s / 86_400.0;
+                        in_view(o.pos(t), t)
+                    })
+                    .unwrap_or(21_600.0)
+            })
+            .collect();
+        let cnt = waits.len();
+        let vis = waits.iter().filter(|&&w| w == 0.0).count();
         waits.sort_by(|a, b| a.partial_cmp(b).unwrap());
         self.dtg = DtgStats { in_view_frac: vis as f64 / cnt.max(1) as f64, median_wait_s: waits.get(waits.len() / 2).copied().unwrap_or(0.0) };
     }
@@ -827,7 +884,8 @@ impl Traffic {
         let demand = raw_tb_day * c.product.factor();
         let cap = relay_cap + dtg_cap;
         let fleet_store = c.storage_tb * n_facet as f64;
-        let days = (self.elapsed_s / 86_400.0).max(1e-9);
+        // Fleet-days actually screened (rates per fleet-day = events / that × fleet size).
+        let days = (self.conj.screened_sat_days / n_facet.max(1) as f64).max(1e-9);
         // Highest risk first, then soonest.
         let rank = |l: &str| match l {
             "red" => 0,
@@ -872,6 +930,7 @@ impl Traffic {
                     "dv_ms": self.conj.dv_ms / days,
                 },
                 "dv_per_sat_year_ms": self.conj.dv_ms / days * 365.25 / n_facet.max(1) as f64,
+                "screen_backlog_pct": 100.0 * self.screen_lag,
                 "upcoming": upcoming,
                 "recent": self.recent.iter().take(15).collect::<Vec<_>>(),
             },
@@ -964,5 +1023,14 @@ mod tests {
         let closest = t.conj.closest_km.unwrap();
         assert!((closest - best).abs() < 0.01, "screened miss {closest} vs brute force {best} at {tbest}");
         assert!(best < 5.0);
+    }
+}
+
+struct Defer(std::time::Instant);
+impl Drop for Defer {
+    fn drop(&mut self) {
+        if std::env::var_os("FACET_PROFILE").is_some() {
+            eprintln!("    traffic: ground-station sampling {:.1} ms", self.0.elapsed().as_secs_f64() * 1e3);
+        }
     }
 }

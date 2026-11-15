@@ -83,6 +83,7 @@ pub struct App {
     pub cov_sky_allowed: f64,
 
     frame_ms: f32,
+    substeps: usize,
     pub export_msg: Option<String>,
 
     // Web access
@@ -182,6 +183,7 @@ impl App {
             cov_frac: 0.0,
             cov_mean: 0.0,
             cov_sky_allowed: 0.0,
+            substeps: 1,
             frame_ms: 0.0,
             export_msg: None,
             web: None,
@@ -359,17 +361,54 @@ impl App {
         }
     }
 
-    fn step(&mut self) {
+    /// One simulation tick (runs on the simulation thread): advance time by
+    /// the wall-clock interval × rate, in sub-steps of at most 60 s of
+    /// simulated time so high time rates keep their fidelity, within a
+    /// compute budget; then publish status and refresh coverage.
+    pub fn tick(&mut self) {
         let now = Instant::now();
         let dt = now.duration_since(self.last_tick).as_secs_f64().min(0.25);
-        self.frame_ms = self.frame_ms * 0.9 + (dt * 1000.0) as f32 * 0.1;
-        if std::env::var_os("FACET_BENCH").is_some() && self.last_cov.map_or(false, |t| now.duration_since(t).as_secs_f64() > 0.49) {
-            eprintln!("frame {:.1} ms", self.frame_ms);
-        }
         self.last_tick = now;
-        let dt_sim = if self.playing { dt * self.rate } else { 0.0 };
+        let total = if self.playing { dt * self.rate } else { 0.0 };
+        let n_sub = ((total / 60.0).ceil() as usize).clamp(1, 32);
+        let h = total / n_sub as f64;
+        let t0 = Instant::now();
+        let mut done = 0.0;
+        let mut subs = 0;
+        for k in 0..n_sub {
+            // Over budget: fold the remainder into this sub-step.
+            let last = k + 1 == n_sub || t0.elapsed().as_secs_f64() > 0.030;
+            let hk = if last { total - done } else { h };
+            self.step(hk);
+            done += hk;
+            subs += 1;
+            if last {
+                break;
+            }
+        }
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        self.frame_ms = self.frame_ms * 0.9 + ms as f32 * 0.1;
+        self.substeps = subs;
+        if std::env::var_os("FACET_BENCH").is_some() && self.last_cov.map_or(false, |t| now.duration_since(t).as_secs_f64() > 0.49) {
+            eprintln!("sim tick {:.1} ms ({} sub-steps, {} threads)", self.frame_ms, subs, rayon::current_num_threads());
+        }
+        self.publish_status(now);
+        self.refresh_coverage(now);
+    }
+
+    /// Advance the simulation by `dt_sim` seconds.
+    fn step(&mut self, dt_sim: f64) {
+        let bench = std::env::var_os("FACET_PROFILE").is_some();
+        let mut tp = Instant::now();
+        let mut prof = |what: &str| {
+            if bench {
+                eprintln!("  {:<22} {:7.2} ms", what, tp.elapsed().as_secs_f64() * 1000.0);
+                tp = Instant::now();
+            }
+        };
         self.jd += dt_sim / 86_400.0;
         self.apply_web_commands();
+        prof("apply_web_commands");
 
         if self.sun_sync {
             if let Some(i) = ShellParams::sun_sync_inc_deg(self.shell_params.alt_km) {
@@ -380,6 +419,7 @@ impl App {
             self.shell = Shell::new(self.shell_params.clone(), self.shell.epoch_jd);
         }
         self.shell.propagate(self.jd);
+        prof("shell.propagate");
         self.bodies = astro::bodies(self.jd);
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
         let target = self.target_dir();
@@ -397,20 +437,32 @@ impl App {
                 _ => None,
             },
         );
+        prof("propagate+obs::update");
         // STARE campaigns first (director commitments), then the public queue
         // on its share of the shell.
         self.programme_tick(dt_sim);
+        prof("programme_tick");
         self.stare_assign();
+        prof("stare_assign");
         self.queue_assign();
+        prof("queue_assign");
         let ag = crate::attitude::Agility::from_obs(&self.obs_params);
         obs::advance_attitudes(&mut self.obs, &ag, dt_sim, target);
+        prof("advance_attitudes");
         self.queue_credit();
+        prof("queue_credit");
         self.science_account(dt_sim);
+        prof("science_account");
         self.defence_step(dt_sim);
+        prof("defence_step");
         self.traffic_step(dt_sim);
+        prof("traffic_step");
         self.stare_credit(dt_sim);
-        self.publish_status(now);
+        prof("stare_credit");
+    }
 
+    fn refresh_coverage(&mut self, now: Instant) {
+        let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
         let due = self
             .last_cov
             .map_or(true, |t| now.duration_since(t).as_secs_f64() > 0.5);
@@ -710,7 +762,17 @@ impl App {
             ui.checkbox(&mut s.orbit_stars, "stars in orbit view");
             ui.checkbox(&mut self.orbit_cam.earth_fixed, "Earth-fixed camera");
         });
-        ui.label(RichText::new(format!("{:.1} ms/frame", self.frame_ms)).small().weak());
+        ui.label(
+            RichText::new(format!(
+                "sim {:.1} ms/tick · {} sub-step{} · {} threads",
+                self.frame_ms,
+                self.substeps,
+                if self.substeps == 1 { "" } else { "s" },
+                rayon::current_num_threads()
+            ))
+            .small()
+            .weak(),
+        );
         ui.add_space(6.0);
         ui.label(
             RichText::new(
@@ -812,9 +874,9 @@ impl App {
     }
 }
 
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.step();
+impl App {
+    /// Draw the window (UI thread). The simulation advances on its own thread.
+    pub fn ui(&mut self, ctx: &egui::Context) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.wants_keyboard_input() {
             self.target = None;
         }
@@ -847,8 +909,50 @@ impl eframe::App for App {
                     }
                 }
             });
+    }
+}
 
-        ctx.request_repaint();
+/// eframe front end: the simulation lives on its own thread behind a mutex;
+/// the window locks it briefly to draw and to apply control changes.
+pub struct Gui {
+    core: std::sync::Arc<std::sync::Mutex<App>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Gui {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Gui {
+        use std::sync::{atomic::AtomicBool, Arc, Mutex};
+        let core = Arc::new(Mutex::new(App::new(cc)));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (c2, s2) = (core.clone(), stop.clone());
+        let worker = std::thread::Builder::new()
+            .name("facet-sim".into())
+            .spawn(move || {
+                let period = std::time::Duration::from_micros(8_333); // 120 Hz
+                while !s2.load(std::sync::atomic::Ordering::Relaxed) {
+                    let t0 = Instant::now();
+                    c2.lock().unwrap().tick();
+                    let el = t0.elapsed();
+                    // Always leave the UI a window to take the lock.
+                    std::thread::sleep(period.saturating_sub(el).max(std::time::Duration::from_millis(1)));
+                }
+            })
+            .expect("spawn simulation thread");
+        Gui { core, stop, worker: Some(worker) }
+    }
+}
+
+impl eframe::App for Gui {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.core.lock().unwrap().ui(ctx);
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
+        }
     }
 }
 

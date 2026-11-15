@@ -198,7 +198,8 @@ impl Shell {
             self.raan_now.push(s.raan0 + d_raan);
             self.u_now.push(s.u0 + d_u);
         }
-        self.pos.extend(self.sats.iter().map(|s| {
+        use rayon::prelude::*;
+        self.pos.par_extend(self.sats.par_iter().map(|s| {
             let (so, co) = (s.raan0 + d_raan).sin_cos();
             let (su, cu) = (s.u0 + d_u).sin_cos();
             V3::new(

@@ -305,9 +305,10 @@ pub fn update(
     target: Option<V3>,
     target_body: Option<usize>,
 ) {
+    use rayon::prelude::*;
     let n = pos.len();
     st.rhat.clear();
-    st.rhat.extend(pos.iter().map(|p| p.unit()));
+    st.rhat.par_extend(pos.par_iter().map(|p| p.unit()));
     if st.att.len() != n {
         // Shell rebuilt: everyone starts idle, pointing at zenith.
         st.att = st.rhat.iter().map(|&z| crate::attitude::Att::new(z)).collect();
@@ -322,7 +323,7 @@ pub fn update(
     st.fine.resize(n, true);
     let guide = |d: V3| crate::imaging::guide_star_available(d, o.fov_deg, o.guide_mag);
     st.lit.clear();
-    st.lit.extend(pos.iter().map(|&p| !in_shadow(p, sun)));
+    st.lit.par_extend(pos.par_iter().map(|&p| !in_shadow(p, sun)));
     st.n_lit = st.lit.iter().filter(|&&l| l).count();
 
     let r = pos.first().map(|p| p.norm()).unwrap_or(EARTH_RADIUS_KM + 550.0);
@@ -334,7 +335,7 @@ pub fn update(
     // Laser links grazing the atmosphere are unusable.
     let r_min = EARTH_RADIUS_KM + o.atmo_km;
     st.link_blocked.clear();
-    st.link_blocked.extend(links.iter().map(|&(a, b)| {
+    st.link_blocked.par_extend(links.par_iter().map(|&(a, b)| {
         let (pa, pb) = (pos[a as usize], pos[b as usize]);
         let d = pb - pa;
         let t = (-pa.dot(d) / d.dot(d).max(1e-9)).clamp(0.0, 1.0);
@@ -533,9 +534,18 @@ pub fn assign_queue(
         })
         .collect();
     let mut used = 0usize;
+    let mut free = taken.iter().filter(|t| !**t).count();
+    // Telescopes this pool may use at all (not taken, held or on STARE).
+    let mut pool_idx: Vec<usize> = (0..n).filter(|&i| !taken[i] && !st.hold[i] && job_tag(st.job[i]) != TAG_STARE).collect();
+    let mut by_job: std::collections::HashMap<u64, Vec<usize>> = std::collections::HashMap::new();
+    for (i, &pj) in st.prev_job.iter().enumerate() {
+        if job_tag(pj) == TAG_QUEUE {
+            by_job.entry(pj).or_default().push(i);
+        }
+    }
     for it in items {
-        if budget == 0 {
-            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(pool) });
+        if budget == 0 || used >= budget || free == 0 {
+            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(if free == 0 { "no free telescopes" } else { pool }) });
             continue;
         }
         if let Some(why) = sky_blocked(o, it.dir, sun, moon) {
@@ -545,21 +555,58 @@ pub fn assign_queue(
         let me = job(TAG_QUEUE, it.id);
         let mut got = 0;
         let mut cands: Vec<(f64, usize)> = Vec::new();
-        for i in 0..n {
-            if taken[i] || st.hold[i] || job_tag(st.job[i]) == TAG_STARE || it.dir.dot(st.rhat[i]) <= st.cos_lim {
-                continue;
+        // Fast path: keep current members; if that fully staffs the request,
+        // no fleet-wide scan is needed.
+        if let Some(members) = by_job.get(&me) {
+            for &i in members {
+                if got < it.want && used < budget && !taken[i] && !st.hold[i] && job_tag(st.job[i]) != TAG_STARE && it.dir.dot(st.rhat[i]) > st.cos_lim {
+                    taken[i] = true;
+                    st.pointing[i] = Some(it.dir);
+                    st.job[i] = me;
+                    st.fine[i] = it.fine;
+                    got += 1;
+                    used += 1;
+                    free -= 1;
+                }
             }
-            if st.prev_job[i] == me && got < it.want && used < budget {
+        }
+        if got >= it.want || used >= budget {
+            out.push(QueueResult { id: it.id, assigned: got, blocked: None });
+            continue;
+        }
+        // Eligibility and slew cost over the free telescopes only.
+        if pool_idx.len() > 2 * free.max(1) {
+            pool_idx.retain(|&i| !taken[i]);
+        }
+        let scan: Vec<(usize, bool, f64)> = {
+            use rayon::prelude::*;
+            let (taken, st_ref) = (&taken, &*st);
+            let f = |&i: &usize| -> Option<(usize, bool, f64)> {
+                if taken[i] || it.dir.dot(st_ref.rhat[i]) <= st_ref.cos_lim {
+                    return None;
+                }
+                let mine = st_ref.prev_job[i] == me;
+                let pt = job_tag(st_ref.prev_job[i]);
+                let busy = pt != 0 && pt != TAG_SURVEY && !mine;
+                // 1 − cos: same ordering as the slew angle, without acos.
+                Some((i, mine, 1.0 - st_ref.att[i].dir.dot(it.dir) + if busy { 10.0 } else { 0.0 }))
+            };
+            if pool_idx.len() > 4096 {
+                pool_idx.par_iter().filter_map(f).collect()
+            } else {
+                pool_idx.iter().filter_map(f).collect()
+            }
+        };
+        for (i, mine, cost) in scan {
+            if mine && got < it.want && used < budget {
                 used += 1;
+                free -= 1;
                 taken[i] = true;
                 st.pointing[i] = Some(it.dir);
                 st.job[i] = me;
                 st.fine[i] = it.fine;
                 got += 1;
             } else {
-                let pt = job_tag(st.prev_job[i]);
-                let busy = pt != 0 && pt != TAG_SURVEY && st.prev_job[i] != me;
-                let cost = st.att[i].dir.angle(it.dir) + if busy { 10.0 } else { 0.0 };
                 cands.push((cost, i));
             }
         }
@@ -576,9 +623,9 @@ pub fn assign_queue(
                 st.fine[i] = it.fine;
                 got += 1;
                 used += 1;
+                free -= 1;
             }
         }
-        let free = taken.iter().filter(|t| !**t).count();
         let blocked = if got == 0 {
             Some(if used >= budget {
                 pool
@@ -670,23 +717,29 @@ pub fn assign_stare(
         let need = it.eyes.saturating_sub(healthy);
         let mut recruited = 0;
         if need > 0 {
-            let mut cands: Vec<(bool, f64, usize)> = Vec::new();
-            for i in 0..n {
-                if taken[i] || st.hold[i] {
-                    continue;
-                }
-                let pj = st.prev_job[i];
-                if job_tag(pj) == TAG_STARE && pj != me {
-                    continue; // another campaign's eye
-                }
-                let Some(tts) = shell.time_to_set(i, it.dir, st.cos_lim) else { continue };
-                let rt = ag.repoint_time(st.att[i].dir.angle(it.dir));
-                if tts <= rt + dwell {
-                    continue;
-                }
-                // Prefer telescopes that can lock in time; among them, the longest window.
-                cands.push((rt > lead - 10.0, -tts.min(1e7), i));
-            }
+            let mut cands: Vec<(bool, f64, usize)> = {
+                use rayon::prelude::*;
+                let (taken, st_ref) = (&taken, &*st);
+                (0..n)
+                    .into_par_iter()
+                    .filter_map(|i| {
+                        if taken[i] || st_ref.hold[i] {
+                            return None;
+                        }
+                        let pj = st_ref.prev_job[i];
+                        if job_tag(pj) == TAG_STARE && pj != me {
+                            return None; // another campaign's eye
+                        }
+                        let tts = shell.time_to_set(i, it.dir, st_ref.cos_lim)?;
+                        let rt = ag.repoint_time(st_ref.att[i].dir.angle(it.dir));
+                        if tts <= rt + dwell {
+                            return None;
+                        }
+                        // Prefer telescopes that can lock in time; among them, the longest window.
+                        Some((rt > lead - 10.0, -tts.min(1e7), i))
+                    })
+                    .collect()
+            };
             cands.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             for &(_, _, i) in cands.iter().take(need) {
                 take(st, &mut taken, i);
@@ -719,13 +772,28 @@ pub fn advance_attitudes(st: &mut ObsState, ag: &crate::attitude::Agility, dt: f
     st.obs_dt.resize(n, 0.0);
     st.new_slews.clear();
     let (mut sl, mut se, mut lk, mut lt) = (0, 0, 0, 0);
-    for i in 0..n {
-        let cmd = st.pointing[i].map(|d| (d, st.job[i], st.fine[i]));
-        let r = st.att[i].step(cmd, dt, ag);
-        st.obs_dt[i] = r.observed_s;
-        if let Some(a) = r.new_slew {
-            st.new_slews.push((i, st.job[i], a));
+    // Each satellite's attitude evolves independently: step them in parallel.
+    {
+        use rayon::prelude::*;
+        let (pointing, job, fine) = (&st.pointing, &st.job, &st.fine);
+        let res: Vec<(f64, Option<f64>)> = st
+            .att
+            .par_iter_mut()
+            .enumerate()
+            .map(|(i, a)| {
+                let cmd = pointing[i].map(|d| (d, job[i], fine[i]));
+                let r = a.step(cmd, dt, ag);
+                (r.observed_s, r.new_slew)
+            })
+            .collect();
+        for (i, (obs_s, ns)) in res.into_iter().enumerate() {
+            st.obs_dt[i] = obs_s;
+            if let Some(a) = ns {
+                st.new_slews.push((i, st.job[i], a));
+            }
         }
+    }
+    for i in 0..n {
         match st.att[i].phase() {
             Phase::Slewing => sl += 1,
             Phase::Settling | Phase::Acquiring => se += 1,
@@ -814,8 +882,9 @@ pub fn coverage(
     moon: V3,
     out: &mut Vec<u32>,
 ) {
+    use rayon::prelude::*;
     out.clear();
-    out.extend(grid.iter().map(|&g| {
+    out.par_extend(grid.par_iter().map(|&g| {
         if sky_blocked(o, g, sun, moon).is_some() {
             0
         } else {

@@ -31,6 +31,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "FACET simulator",
         options,
-        Box::new(|cc| Box::new(app::App::new(cc))),
+        Box::new(|cc| Box::new(app::Gui::new(cc))),
     )
 }
