@@ -157,6 +157,15 @@ class SkyMap {
       g.beginPath(); g.moveTo(x, y - s); g.lineTo(x + s, y); g.lineTo(x, y + s); g.lineTo(x - s, y); g.closePath(); g.stroke();
       this.label(x, y, `#${r.id}`, col, 10);
     }
+    // STARE campaigns
+    for (const c of st.campaigns || []) {
+      if (!c.active) continue;
+      const [x, y] = this.project(c.ra_deg, c.dec_deg);
+      g.strokeStyle = c.blocked ? "#ff7a5c" : "#4de8ff"; g.lineWidth = 1.5 * this.dpr;
+      g.beginPath(); g.arc(x, y, 12 * this.dpr, 0, 2 * Math.PI); g.stroke();
+      g.beginPath(); g.arc(x, y, 16 * this.dpr, 0, 2 * Math.PI); g.stroke();
+      this.label(x + 10 * this.dpr, y + 18 * this.dpr, `STARE #${c.id} · ${c.locked_now}/${c.eyes}`, g.strokeStyle, 10);
+    }
     // Director's target
     if (st.target && st.mode !== "queue" && st.mode !== "survey" && st.mode !== "neo") {
       const [x, y] = this.project(st.target.ra, st.target.dec);
@@ -233,7 +242,8 @@ function traceCanvas(tr, ag) {
 // Render an observation result (report + images) into `box`.
 // `q` is an optional query string (e.g. "?token=…") for the director port.
 class ResultViewer {
-  constructor(box, q = "") { this.box = box; this.q = q; this.id = null; this.timer = null; }
+  // base: "/api/result" for requests, "/api/campaign" for STARE live frames.
+  constructor(box, q = "", base = "/api/result") { this.box = box; this.q = q; this.base = base; this.id = null; this.timer = null; }
   async show(id) {
     this.id = id; clearInterval(this.timer);
     await this.load();
@@ -246,11 +256,11 @@ class ResultViewer {
     const id = this.id, q = this.q;
     let r;
     try {
-      const res = await fetch(`/api/result/${id}${q}`);
+      const res = await fetch(`${this.base}/${id}${q}`);
       r = await res.json();
       if (!res.ok) { this.box.hidden = false; this.box.replaceChildren(el("h2", {}, `Request #${id}`), el("p", { class: "muted" }, r.error)); return; }
     } catch { return; }
-    if (r.final) clearInterval(this.timer);
+    if (r.final && this.base === "/api/result") clearInterval(this.timer);
     const bust = `${q ? "&" : "?"}t=${Date.now()}`;
     const kv = (rows) => el("table", { class: "kv" }, ...rows.filter(([, v]) => v !== null && v !== undefined && v !== "")
       .map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))));
@@ -259,11 +269,11 @@ class ResultViewer {
     this.box.hidden = false;
     this.box.replaceChildren(
       el("div", { class: "rhead" },
-        el("h2", {}, `Request #${r.id}: ${r.target} ${r.final ? "· final" : "· live stack"}`),
+        el("h2", {}, this.base === "/api/campaign" ? `${r.target} · latest frame (${r.utc.slice(11)})` : `Request #${r.id}: ${r.target} ${r.final ? "· final" : "· live stack"}`),
         el("button", { onclick: () => this.close() }, "Close")),
       el("div", { class: "figs" },
-        fig(`/api/result/${id}/full.png${q}${bust}`, `Full field ${h.fov_deg}° · ${im.full.arcsec_per_px}″/px (binned ×${im.full.bin}) · ${im.orientation}`),
-        fig(`/api/result/${id}/crop.png${q}${bust}`, `Centre ${im.crop.width_arcmin}′ · ${im.crop.arcsec_per_px}″/px (${im.crop.resampled})`)),
+        fig(`${this.base}/${id}/full.png${q}${bust}`, `Full field ${h.fov_deg}° · ${im.full.arcsec_per_px}″/px (binned ×${im.full.bin}) · ${im.orientation}`),
+        fig(`${this.base}/${id}/crop.png${q}${bust}`, `Centre ${im.crop.width_arcmin}′ · ${im.crop.arcsec_per_px}″/px (${im.crop.resampled})`)),
       el("div", { class: "kvs" },
         el("div", {}, el("h3", {}, "Result"), kv([
           ["5σ point-source limit", `V ≈ ${m.lim_mag_5sigma}`],
@@ -284,7 +294,13 @@ class ResultViewer {
           ["Sky (zodiacal light)", `${s.zodiacal_mag_arcsec2} mag/arcsec² · elongation ${s.solar_elongation_deg}° · b ${s.galactic_latitude_deg}°`],
           ["Observed", r.utc],
         ])),
-        el("div", {}, el("h3", {}, "Pointing"), kv([
+        el("div", {}, el("h3", {}, "Pointing"), kv(this.base === "/api/campaign" ? [
+          ["Eyes in this frame", `${h.telescopes_requested ?? x.telescope_seconds / x.per_telescope_requested_s}`],
+          ["Handovers so far", `${r.pointing.repoints}`],
+          ["Agility", r.pointing.agility ? `α ${r.pointing.agility.alpha_dps2}°/s², ω ${r.pointing.agility.omega_dps}°/s` : null],
+          ["Effective jitter", `${r.pointing.effective_jitter_arcsec_rms}″ RMS`],
+          ["Fine-guided", `${Math.round(r.pointing.fine_guided_fraction * 100)} % of integration`],
+        ] : [
           ["Response (approval → first light)", r.pointing.response_s !== null ? fmtDur(r.pointing.response_s) : null],
           ["All requested telescopes locked", r.pointing.full_lock_s !== null ? `after ${fmtDur(r.pointing.full_lock_s)}` : "not reached (fewer could see the target at once)"],
           ["Repoints for this request", `${r.pointing.repoints} (mean slew ${r.pointing.mean_slew_deg}°)`],
@@ -292,8 +308,8 @@ class ResultViewer {
           ["Agility", r.pointing.agility ? `α ${r.pointing.agility.alpha_dps2}°/s², ω ${r.pointing.agility.omega_dps}°/s` : null],
           ["Effective jitter", `${r.pointing.effective_jitter_arcsec_rms}″ RMS`],
           ["Fine-guided", `${Math.round(r.pointing.fine_guided_fraction * 100)} % of integration`],
-        ]), r.pointing.trace ? traceCanvas(r.pointing.trace, r.pointing.agility) : "",
-          el("div", { class: "small muted" }, "Typical repoint: pointing error vs time")),
+        ]), r.pointing.trace && this.base !== "/api/campaign" ? traceCanvas(r.pointing.trace, r.pointing.agility) : "",
+          this.base !== "/api/campaign" ? el("div", { class: "small muted" }, "Typical repoint: pointing error vs time") : ""),
         el("div", {}, el("h3", {}, "Hardware (per telescope)"), kv([
           ["Telescopes requested", h.telescopes_requested],
           ["Aperture", `${h.aperture_cm} cm, ${Math.round(h.obstruction * 100)} % obstruction, f/${h.f_ratio} (${h.focal_mm} mm)`],
@@ -306,4 +322,10 @@ class ResultViewer {
       el("ul", { class: "note" }, ...r.notes.map(n => el("li", {}, n))),
     );
   }
+}
+
+function stareCoverage(c) {
+  const full = c.eligible_s > 0 ? (100 * c.full_s / c.eligible_s) : null;
+  const any = c.eligible_s > 0 ? (100 * c.any_s / c.eligible_s) : null;
+  return { full, any };
 }

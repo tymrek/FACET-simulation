@@ -122,6 +122,57 @@ impl ObsRequest {
     }
 }
 
+/// A STARE campaign (Sustained Tracking And Rotating Eyes): keep `eyes`
+/// telescopes locked on a target continuously, handing over as satellites
+/// lose line of sight.
+#[derive(Clone, Debug, Serialize)]
+pub struct Campaign {
+    pub id: u64,
+    pub target_name: String,
+    #[serde(skip)]
+    pub body: Option<usize>,
+    pub ra_deg: f64,
+    pub dec_deg: f64,
+    #[serde(skip)]
+    pub dir: V3,
+    pub eyes: u32,
+    /// Cadence of the published frames (each frame stacks eyes × frame_s).
+    pub frame_s: f64,
+    pub active: bool,
+    pub started_utc: String,
+    pub stopped_utc: Option<String>,
+    pub duration_h: Option<f64>,
+    #[serde(skip)]
+    pub start_jd: f64,
+    pub assigned_now: u32,
+    pub locked_now: u32,
+    pub blocked: Option<String>,
+    /// Time with the target trackable / inside keep-out zones, s.
+    pub eligible_s: f64,
+    pub excluded_s: f64,
+    /// Time with ≥ eyes locked / ≥ 1 locked, s.
+    pub full_s: f64,
+    pub any_s: f64,
+    pub gaps: u32,
+    pub max_gap_s: f64,
+    #[serde(skip)]
+    pub cur_gap_s: f64,
+    #[serde(skip)]
+    pub acquired: bool,
+    pub handovers: u32,
+    pub integ_s: f64,
+    #[serde(skip)]
+    pub jit2_s: f64,
+    #[serde(skip)]
+    pub fine_s: f64,
+    #[serde(skip)]
+    pub hw: Option<crate::imaging::Hardware>,
+    #[serde(skip)]
+    pub agility: Option<crate::attitude::Agility>,
+    #[serde(skip)]
+    pub last_jd: f64,
+}
+
 /// Commands from the director's console, applied by the simulator thread.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
@@ -154,6 +205,22 @@ pub enum Command {
     },
     PublicShare {
         share: f64,
+    },
+    /// Start a STARE campaign on a named target or RA/Dec.
+    StareStart {
+        target: Option<String>,
+        ra_deg: Option<f64>,
+        dec_deg: Option<f64>,
+        eyes: Option<u32>,
+        frame_s: Option<f64>,
+        duration_h: Option<f64>,
+    },
+    StareStop {
+        id: u64,
+    },
+    StareEyes {
+        id: u64,
+        eyes: u32,
     },
 }
 
@@ -189,6 +256,8 @@ pub struct Shared {
     pub inspect_req: Option<usize>,
     pub inspect_json: String,
     pub coast_json: String,
+    pub campaigns: Vec<Campaign>,
+    pub next_cid: u64,
 }
 
 impl Shared {
@@ -223,6 +292,153 @@ impl ResultCache {
                 self.map.remove(&old);
             }
         }
+    }
+}
+
+pub fn start_campaign(
+    sh: &mut Shared,
+    target: Option<&str>,
+    ra: Option<f64>,
+    dec: Option<f64>,
+    eyes: Option<u32>,
+    frame_s: Option<f64>,
+    duration_h: Option<f64>,
+) -> Result<(), &'static str> {
+    let (body, name, dir) = match (target, ra, dec) {
+        (Some(t), _, _) if !t.trim().is_empty() => match sh.resolve(t) {
+            Some(Resolved::Body(i, n)) => (Some(i), n, V3::Z),
+            Some(Resolved::Fixed(n, d)) => (None, n, d),
+            None => return Err("unknown target name"),
+        },
+        (_, Some(ra), Some(dec)) if ra.is_finite() && (-90.0..=90.0).contains(&dec) => {
+            let ra = ra.rem_euclid(360.0);
+            (None, format!("RA {ra:.3}° Dec {dec:+.3}°"), V3::from_radec(ra.to_radians(), dec.to_radians()))
+        }
+        _ => return Err("give a target name or ra_deg/dec_deg"),
+    };
+    if sh.campaigns.iter().filter(|c| c.active).count() >= 50 {
+        return Err("too many active campaigns (50)");
+    }
+    let id = sh.next_cid;
+    sh.next_cid += 1;
+    let (ra_r, dec_r) = dir.to_radec();
+    let eyes = eyes.unwrap_or(10).clamp(1, 5000);
+    let frame_s = frame_s.unwrap_or(60.0).clamp(1.0, 3600.0);
+    let duration_h = duration_h.filter(|h| h.is_finite() && *h > 0.0);
+    let c = Campaign {
+        id,
+        target_name: name.clone(),
+        body,
+        ra_deg: ra_r.to_degrees(),
+        dec_deg: dec_r.to_degrees(),
+        dir,
+        eyes,
+        frame_s,
+        active: true,
+        started_utc: sh.utc_now.clone(),
+        stopped_utc: None,
+        duration_h,
+        start_jd: sh.jd_now,
+        assigned_now: 0,
+        locked_now: 0,
+        blocked: None,
+        eligible_s: 0.0,
+        excluded_s: 0.0,
+        full_s: 0.0,
+        any_s: 0.0,
+        gaps: 0,
+        max_gap_s: 0.0,
+        cur_gap_s: 0.0,
+        acquired: false,
+        handovers: 0,
+        integ_s: 0.0,
+        jit2_s: 0.0,
+        fine_s: 0.0,
+        hw: None,
+        agility: None,
+        last_jd: 0.0,
+    };
+    sh.campaigns.push(c);
+    sh.log(
+        "good",
+        format!(
+            "STARE #{id} started on {name}: {eyes} eyes, {frame_s:.0} s frames{}",
+            duration_h.map(|h| format!(", {h} h")).unwrap_or_else(|| ", until stopped".into())
+        ),
+    );
+    Ok(())
+}
+
+/// Serve `/api/campaign/{id}[/full.png|/crop.png]`: the latest STARE frame.
+fn handle_campaign(shared: SharedRef, req: Request, path: String) {
+    let rest = path.trim_start_matches("/api/campaign/");
+    let (id_s, part) = rest.split_once('/').unwrap_or((rest, ""));
+    let Ok(id) = id_s.parse::<u64>() else {
+        return err(req, 400, "bad id");
+    };
+    let (key, spec) = {
+        let sh = shared.lock().unwrap();
+        let Some(c) = sh.campaigns.iter().find(|c| c.id == id) else {
+            drop(sh);
+            return err(req, 404, "no such campaign");
+        };
+        let (Some(hw), Some(ag), true) = (c.hw, c.agility, c.integ_s > 0.0) else {
+            drop(sh);
+            return err(req, 404, "no frames yet: the campaign has not locked on");
+        };
+        let jd = if c.active { sh.jd_now } else { c.last_jd };
+        let bucket = ((jd * 86_400.0 / c.frame_s).floor() as u64 & 0xFFFF_FFFF) as u32;
+        // One frame = every locked eye integrating for one cadence interval.
+        let eyes = c.locked_now.max(1).min(c.eyes.max(1));
+        let total = eyes as f64 * c.frame_s;
+        let mut hw = hw;
+        if c.integ_s > 0.0 && c.jit2_s > 0.0 {
+            hw.jitter_arcsec = (c.jit2_s / c.integ_s).sqrt();
+        }
+        (
+            (id | (1u64 << 62), bucket),
+            crate::imaging::Spec {
+                id,
+                target_name: format!("STARE #{id} · {}", c.target_name),
+                dir: c.dir,
+                body: c.body,
+                jd,
+                total_s: total,
+                required_s: total,
+                telescopes: eyes,
+                exposure_s: c.frame_s,
+                hw,
+                done: true,
+                fine_frac: if c.integ_s > 0.0 { c.fine_s / c.integ_s } else { 1.0 },
+                response_s: None,
+                full_lock_s: None,
+                slews: c.handovers,
+                mean_slew_deg: 0.0,
+                agility: Some(ag),
+            },
+        )
+    };
+    let cached = shared.lock().unwrap().results.get(key);
+    let out = match cached {
+        Some(o) => o,
+        None => {
+            let _g = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let again = shared.lock().unwrap().results.get(key);
+            match again {
+                Some(o) => o,
+                None => {
+                    let o = Arc::new(crate::imaging::render(&spec));
+                    shared.lock().unwrap().results.put(key, o.clone());
+                    o
+                }
+            }
+        }
+    };
+    match part {
+        "" => json(req, 200, out.report.clone()),
+        "full.png" => send_bytes(req, "image/png", out.full_png.clone()),
+        "crop.png" => send_bytes(req, "image/png", out.crop_png.clone()),
+        _ => err(req, 404, "not found"),
     }
 }
 
@@ -453,6 +669,19 @@ fn status_with(sh: &Shared, director: bool) -> String {
         serde_json::from_str(&sh.status_json).unwrap_or_else(|_| serde_json::json!({}));
     v["requests"] = requests_json(sh, director);
     v["auto_approve"] = serde_json::json!(sh.auto_approve);
+    v["campaigns"] = serde_json::Value::Array(
+        sh.campaigns
+            .iter()
+            .rev()
+            .filter(|c| c.active || director)
+            .take(60)
+            .map(|c| {
+                let mut j = serde_json::to_value(c).unwrap_or_default();
+                j["has_frame"] = serde_json::json!(c.integ_s > 0.0 && c.hw.is_some());
+                j
+            })
+            .collect(),
+    );
     if director {
         v["events"] = serde_json::Value::Array(sh.events.iter().rev().take(120).cloned().collect());
     }
@@ -641,6 +870,11 @@ fn control_loop(server: Server, shared: SharedRef) {
                 let p = p.to_string();
                 std::thread::spawn(move || handle_result(sh, req, p));
             }
+            (Method::Get, p) if p.starts_with("/api/campaign/") => {
+                let sh = shared.clone();
+                let p = p.to_string();
+                std::thread::spawn(move || handle_campaign(sh, req, p));
+            }
             (Method::Get, "/api/fleet") => {
                 let s = shared.lock().unwrap().fleet_json.clone();
                 send(req, 200, "application/json", s)
@@ -700,6 +934,33 @@ fn control_loop(server: Server, shared: SharedRef) {
                         Ok(())
                     }
                     Command::Target { name: Some(n), .. } if sh.resolve(n).is_none() => Err("unknown target name"),
+                    Command::StareStart { target, ra_deg, dec_deg, eyes, frame_s, duration_h } => {
+                        start_campaign(&mut sh, target.as_deref(), *ra_deg, *dec_deg, *eyes, *frame_s, *duration_h)
+                    }
+                    Command::StareStop { id } => match sh.campaigns.iter_mut().find(|c| c.id == *id && c.active) {
+                        Some(c) => {
+                            c.active = false;
+                            c.assigned_now = 0;
+                            c.locked_now = 0;
+                            let msg = format!("STARE #{} on {} stopped by director", c.id, c.target_name);
+                            let utc = sh.utc_now.clone();
+                            if let Some(c) = sh.campaigns.iter_mut().find(|c| c.id == *id) {
+                                c.stopped_utc = Some(utc);
+                            }
+                            sh.log("info", msg);
+                            Ok(())
+                        }
+                        None => Err("no such active campaign"),
+                    },
+                    Command::StareEyes { id, eyes } => match sh.campaigns.iter_mut().find(|c| c.id == *id && c.active) {
+                        Some(c) => {
+                            c.eyes = (*eyes).clamp(1, 5000);
+                            let msg = format!("STARE #{} on {} → {} eyes", c.id, c.target_name, c.eyes);
+                            sh.log("info", msg);
+                            Ok(())
+                        }
+                        None => Err("no such active campaign"),
+                    },
                     _ => {
                         let msg = match &cmd {
                             Command::Mode { mode } => format!("Programme mode → {mode}"),
@@ -750,6 +1011,11 @@ fn public_loop(server: Server, shared: SharedRef) {
                 let sh = shared.clone();
                 let p = p.to_string();
                 std::thread::spawn(move || handle_result(sh, req, p));
+            }
+            (Method::Get, p) if p.starts_with("/api/campaign/") => {
+                let sh = shared.clone();
+                let p = p.to_string();
+                std::thread::spawn(move || handle_campaign(sh, req, p));
             }
             (Method::Post, "/api/request") => handle_submit(&shared, req),
             _ => err(req, 404, "not found"),

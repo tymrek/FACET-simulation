@@ -66,6 +66,8 @@ impl App {
             fleet_json: "{}".into(),
             inspect_req: None,
             inspect_json: "{}".into(),
+            campaigns: Vec::new(),
+            next_cid: 1,
             coast_json: {
                 let lines: Vec<Vec<[f32; 2]>> = self
                     .coast
@@ -134,8 +136,148 @@ impl App {
                     }
                 }
                 // Handled in the server thread.
-                Command::Request { .. } | Command::AutoApprove { .. } => {}
+                Command::Request { .. }
+                | Command::AutoApprove { .. }
+                | Command::StareStart { .. }
+                | Command::StareStop { .. }
+                | Command::StareEyes { .. } => {}
             }
+        }
+    }
+
+    /// STARE campaigns: keep their eyes on target with predictive handover.
+    pub fn stare_assign(&mut self) {
+        let Some(web) = self.web.clone() else { return };
+        let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
+        let ag = crate::attitude::Agility::from_obs(&self.obs_params);
+        let o = &self.obs_params;
+        let mut sh = web.lock().unwrap();
+        let jd = self.jd;
+        let mut ended = Vec::new();
+        for c in sh.campaigns.iter_mut().filter(|c| c.active) {
+            if let Some(h) = c.duration_h {
+                if (jd - c.start_jd) * 24.0 >= h {
+                    c.active = false;
+                    c.assigned_now = 0;
+                    c.locked_now = 0;
+                    ended.push(format!("STARE #{} on {} completed its {} h campaign", c.id, c.target_name, h));
+                    continue;
+                }
+            }
+            if let Some(b) = c.body {
+                c.dir = self.bodies[b].dir;
+                let (ra, dec) = c.dir.to_radec();
+                c.ra_deg = deg(ra);
+                c.dec_deg = deg(dec);
+            }
+        }
+        let utc = sh.utc_now.clone();
+        for m in ended {
+            sh.log("good", m);
+        }
+        for c in sh.campaigns.iter_mut().filter(|c| !c.active && c.stopped_utc.is_none()) {
+            c.stopped_utc = Some(utc.clone());
+        }
+        let idx: Vec<usize> = (0..sh.campaigns.len()).filter(|&i| sh.campaigns[i].active).collect();
+        let items: Vec<obs::StareItem> = idx
+            .iter()
+            .map(|&i| {
+                let c = &sh.campaigns[i];
+                obs::StareItem {
+                    id: c.id,
+                    dir: c.dir,
+                    eyes: c.eyes as usize,
+                    fine: c.body.is_some() || crate::imaging::guide_star_available(c.dir, o.fov_deg, o.guide_mag),
+                }
+            })
+            .collect();
+        let res = obs::assign_stare(&mut self.obs, o, &self.shell, &items, sun, moon, &ag);
+        for (r, &i) in res.iter().zip(&idx) {
+            let c = &mut sh.campaigns[i];
+            c.assigned_now = r.assigned as u32;
+            c.blocked = r.blocked.map(String::from);
+            if r.assigned > 0 && c.hw.is_none() {
+                c.hw = Some(crate::imaging::Hardware::from_obs(o));
+                c.agility = Some(ag);
+            }
+        }
+    }
+
+    /// After the attitude step: coverage statistics, integration and events.
+    pub fn stare_credit(&mut self, dt: f64) {
+        let Some(web) = self.web.clone() else { return };
+        if dt <= 0.0 {
+            return;
+        }
+        let ag = crate::attitude::Agility::from_obs(&self.obs_params);
+        let mut sh = web.lock().unwrap();
+        let mut events: Vec<(&str, String)> = Vec::new();
+        let jd = self.jd;
+        for c in sh.campaigns.iter_mut().filter(|c| c.active) {
+            let me = obs::job(obs::TAG_STARE, c.id);
+            let mut locked = 0u32;
+            for (i, a) in self.obs.att.iter().enumerate() {
+                if self.obs.job[i] != me {
+                    continue;
+                }
+                if a.phase() == crate::attitude::Phase::Locked {
+                    locked += 1;
+                }
+                let d = self.obs.obs_dt[i];
+                if d > 0.0 {
+                    let j = a.jitter(&ag);
+                    c.integ_s += d;
+                    c.jit2_s += d * j * j;
+                    if a.fine {
+                        c.fine_s += d;
+                    }
+                }
+            }
+            let recruits = self.obs.new_slews.iter().filter(|(_, j, _)| *j == me).count() as u32;
+            if c.acquired {
+                c.handovers += recruits;
+            }
+            c.locked_now = locked;
+            c.last_jd = jd;
+            let excluded = matches!(c.blocked.as_deref(), Some("Sun exclusion") | Some("Moon exclusion"));
+            if excluded {
+                if c.acquired {
+                    events.push(("warn", format!("STARE #{} on {}: target entered {} — paused", c.id, c.target_name, c.blocked.as_deref().unwrap_or("").to_lowercase())));
+                }
+                c.excluded_s += dt;
+                c.acquired = false;
+                c.cur_gap_s = 0.0;
+                continue;
+            }
+            if !c.acquired {
+                if locked > 0 {
+                    c.acquired = true;
+                    events.push(("good", format!("STARE #{} on {}: {} eye{} locked — sustained tracking", c.id, c.target_name, locked, if locked == 1 { "" } else { "s" })));
+                } else {
+                    continue;
+                }
+            }
+            c.eligible_s += dt;
+            if locked >= c.eyes {
+                c.full_s += dt;
+            }
+            if locked > 0 {
+                if c.cur_gap_s > 0.0 {
+                    events.push(("good", format!("STARE #{} on {}: coverage restored after {:.0} s", c.id, c.target_name, c.cur_gap_s)));
+                }
+                c.any_s += dt;
+                c.cur_gap_s = 0.0;
+            } else {
+                if c.cur_gap_s == 0.0 {
+                    c.gaps += 1;
+                    events.push(("warn", format!("STARE #{} on {}: COVERAGE GAP — no eyes locked", c.id, c.target_name)));
+                }
+                c.cur_gap_s += dt;
+                c.max_gap_s = c.max_gap_s.max(c.cur_gap_s);
+            }
+        }
+        for (l, m) in events {
+            sh.log(l, m);
         }
     }
 
@@ -573,6 +715,52 @@ impl App {
                     }
                     if ui.small_button("✖").on_hover_text("reject").clicked() {
                         r.state = ReqState::Rejected;
+                    }
+                }
+            });
+        }
+        // STARE campaigns (desktop shortcut; normally run from the ops console)
+        ui.add_space(4.0);
+        ui.label(RichText::new("STARE campaigns (Sustained Tracking And Rotating Eyes)").small().strong());
+        let active: Vec<usize> = (0..sh.campaigns.len()).filter(|&i| sh.campaigns[i].active).collect();
+        for &i in &active {
+            let c = &mut sh.campaigns[i];
+            ui.horizontal(|ui| {
+                let cov = if c.eligible_s > 0.0 { format!("{:.2} %", 100.0 * c.full_s / c.eligible_s) } else { "acquiring".into() };
+                ui.label(
+                    RichText::new(format!(
+                        "#{} {} · {}/{} locked · {} · gaps {} · handovers {}",
+                        c.id, c.target_name, c.locked_now, c.eyes, c.blocked.clone().unwrap_or(cov), c.gaps, c.handovers
+                    ))
+                    .small(),
+                );
+                if ui.small_button("stop").clicked() {
+                    c.active = false;
+                    c.assigned_now = 0;
+                    c.locked_now = 0;
+                }
+            });
+        }
+        let tgt = match &self.target {
+            Some(crate::app::Target::Body(i)) => Some(BODY_NAMES[*i].to_string()),
+            Some(crate::app::Target::Fixed { name, .. }) => Some(name.clone()),
+            None => None,
+        };
+        if let Some(t) = tgt {
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut self.stare_eyes).clamp_range(1..=5000).suffix(" eyes"));
+                if ui.small_button(format!("STARE at {t}")).clicked() {
+                    let dir = self.target_dir();
+                    let res = match (&self.target, dir) {
+                        (Some(crate::app::Target::Body(_)), _) => crate::server::start_campaign(&mut sh, Some(&t), None, None, Some(self.stare_eyes), None, None),
+                        (_, Some(d)) => {
+                            let (ra, dec) = d.to_radec();
+                            crate::server::start_campaign(&mut sh, None, Some(deg(ra)), Some(deg(dec)), Some(self.stare_eyes), None, None)
+                        }
+                        _ => Err("no target"),
+                    };
+                    if let Err(e) = res {
+                        sh.errors.push(format!("STARE: {e}"));
                     }
                 }
             });

@@ -93,6 +93,9 @@ pub struct App {
     pub public_share: f64,
     pub last_fleet: Option<Instant>,
     pub logged_fleet_n: usize,
+    pub stare_eyes: u32,
+    /// Campaign targets given on the command line, started once web is up.
+    pub pending_stares: Vec<String>,
 }
 
 pub const PRESET_NS: [usize; 8] = [2, 10, 50, 100, 500, 1000, 5000, 10_000];
@@ -174,9 +177,20 @@ impl App {
             public_share: 0.25,
             last_fleet: None,
             logged_fleet_n: 0,
+            stare_eyes: 10,
+            pending_stares: Vec::new(),
         };
         app.apply_args(std::env::args().skip(1).collect());
         app.start_web();
+        if let Some(web) = app.web.clone() {
+            let mut sh = web.lock().unwrap();
+            sh.jd_now = app.jd;
+            for t in std::mem::take(&mut app.pending_stares) {
+                if let Err(e) = crate::server::start_campaign(&mut sh, Some(&t), None, None, Some(app.stare_eyes), None, None) {
+                    eprintln!("facet-sim: --stare {t}: {e}");
+                }
+            }
+        }
         app
     }
 
@@ -235,6 +249,8 @@ impl App {
                     self.web_public_addr = None;
                 }
                 "--token" => self.web_token = Some(val()),
+                "--stare" => self.pending_stares.push(val()),
+                "--stare-eyes" => self.stare_eyes = val().parse().unwrap_or(10),
                 "--public-share" => self.public_share = val().parse::<f64>().unwrap_or(0.25).clamp(0.0, 1.0),
                 _ => eprintln!("facet-sim: ignoring unknown argument {a}"),
             }
@@ -317,11 +333,14 @@ impl App {
             target,
             matches!(self.target, Some(Target::Body(_))),
         );
-        // The public queue runs in every mode, on its share of the shell.
+        // STARE campaigns first (director commitments), then the public queue
+        // on its share of the shell.
+        self.stare_assign();
         self.queue_assign();
         let ag = crate::attitude::Agility::from_obs(&self.obs_params);
         obs::advance_attitudes(&mut self.obs, &ag, dt_sim, target);
         self.queue_credit();
+        self.stare_credit(dt_sim);
         self.publish_status(now);
 
         let due = self

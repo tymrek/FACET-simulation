@@ -186,6 +186,8 @@ pub const TAG_STACK: u64 = 2;
 pub const TAG_MOSAIC: u64 = 3;
 pub const TAG_NEO: u64 = 4;
 pub const TAG_QUEUE: u64 = 5;
+/// STARE campaign (Sustained Tracking And Rotating Eyes).
+pub const TAG_STARE: u64 = 6;
 pub fn job(tag: u64, v: u64) -> u64 {
     (tag << 56) | (v & ((1 << 56) - 1))
 }
@@ -262,7 +264,10 @@ fn in_shadow(r: V3, sun: V3) -> bool {
 pub fn sky_blocked(o: &ObsParams, dir: V3, sun: V3, moon: V3) -> Option<&'static str> {
     if dir.angle(sun) < rad(o.sun_excl_deg) {
         Some("Sun exclusion")
-    } else if dir.angle(moon) < rad(o.moon_excl_deg) {
+    } else if dir.angle(moon) < rad(o.moon_excl_deg) && dir.angle(moon) > rad(1.0) {
+        // The Moon keep-out protects against scattered moonlight; it does not
+        // apply when the Moon itself is the target (within ~1°, allowing for
+        // parallax from LEO).
         Some("Moon exclusion")
     } else {
         None
@@ -476,7 +481,7 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
         let mut got = 0;
         let mut cands: Vec<(f64, usize)> = Vec::new();
         for i in 0..n {
-            if taken[i] || st.hold[i] || it.dir.dot(st.rhat[i]) <= st.cos_lim {
+            if taken[i] || st.hold[i] || job_tag(st.job[i]) == TAG_STARE || it.dir.dot(st.rhat[i]) <= st.cos_lim {
                 continue;
             }
             if st.prev_job[i] == me && got < it.want && used < budget {
@@ -523,6 +528,121 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
     }
     st.n_active = st.pointing.iter().filter(|p| p.is_some()).count();
     out
+}
+
+pub struct StareItem {
+    pub id: u64,
+    pub dir: V3,
+    pub eyes: usize,
+    pub fine: bool,
+}
+
+pub struct StareResult {
+    #[allow(dead_code)]
+    pub id: u64,
+    /// Telescopes tasked (healthy + outgoing).
+    pub assigned: usize,
+    /// New recruits this step.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub recruited: usize,
+    pub blocked: Option<&'static str>,
+}
+
+/// STARE scheduler (Sustained Tracking And Rotating Eyes).
+///
+/// Every telescope's line of sight to a target ends at a predictable time —
+/// when its orbit carries the target into the Earth keep-out cone. Members
+/// whose remaining window is shorter than `lead` (a worst-case repoint plus
+/// margin) are "outgoing": they keep integrating until they lose the target,
+/// but a replacement is recruited NOW so it is slewed, settled and locked
+/// before they drop. Recruits are the free telescopes with the LONGEST
+/// remaining window among those that can repoint in time, which minimises
+/// the handover rate. STARE eyes pre-empt programme work and are never
+/// taken by the public queue.
+pub fn assign_stare(
+    st: &mut ObsState,
+    o: &ObsParams,
+    shell: &crate::constellation::Shell,
+    items: &[StareItem],
+    sun: V3,
+    moon: V3,
+    ag: &crate::attitude::Agility,
+) -> Vec<StareResult> {
+    let n = st.rhat.len().min(shell.len());
+    let lead = ag.repoint_time(60f64.to_radians()) + 20.0;
+    let dwell = 120.0;
+    let mut taken = vec![false; n];
+    let mut out = Vec::with_capacity(items.len());
+    for it in items {
+        if let Some(why) = sky_blocked(o, it.dir, sun, moon) {
+            out.push(StareResult { id: it.id, assigned: 0, recruited: 0, blocked: Some(why) });
+            continue;
+        }
+        let me = job(TAG_STARE, it.id);
+        let mut healthy = 0;
+        let mut assigned = 0;
+        let take = |st: &mut ObsState, taken: &mut Vec<bool>, i: usize| {
+            taken[i] = true;
+            st.pointing[i] = Some(it.dir);
+            st.job[i] = me;
+            st.fine[i] = it.fine;
+        };
+        // 1. Keep current members while they can still see the target.
+        for i in 0..n {
+            if st.prev_job[i] != me || taken[i] || st.hold[i] {
+                continue;
+            }
+            if let Some(tts) = shell.time_to_set(i, it.dir, st.cos_lim) {
+                take(st, &mut taken, i);
+                assigned += 1;
+                if tts > lead {
+                    healthy += 1;
+                }
+            }
+        }
+        // 2. Recruit replacements so `eyes` healthy members exist.
+        let need = it.eyes.saturating_sub(healthy);
+        let mut recruited = 0;
+        if need > 0 {
+            let mut cands: Vec<(bool, f64, usize)> = Vec::new();
+            for i in 0..n {
+                if taken[i] || st.hold[i] {
+                    continue;
+                }
+                let pj = st.prev_job[i];
+                if job_tag(pj) == TAG_STARE && pj != me {
+                    continue; // another campaign's eye
+                }
+                let Some(tts) = shell.time_to_set(i, it.dir, st.cos_lim) else { continue };
+                let rt = ag.repoint_time(st.att[i].dir.angle(it.dir));
+                if tts <= rt + dwell {
+                    continue;
+                }
+                // Prefer telescopes that can lock in time; among them, the longest window.
+                cands.push((rt > lead - 10.0, -tts.min(1e7), i));
+            }
+            cands.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            for &(_, _, i) in cands.iter().take(need) {
+                take(st, &mut taken, i);
+                assigned += 1;
+                recruited += 1;
+            }
+        }
+        let blocked = (assigned == 0).then_some("no telescope can see the target");
+        out.push(StareResult { id: it.id, assigned, recruited, blocked });
+    }
+    st.n_active = st.pointing.iter().filter(|p| p.is_some()).count();
+    out
+}
+
+/// Telescopes locked and integrating on a given job.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn locked_on(st: &ObsState, j: u64) -> usize {
+    st.att
+        .iter()
+        .zip(&st.job)
+        .filter(|(a, &jj)| jj == j && a.phase() == crate::attitude::Phase::Locked)
+        .count()
 }
 
 /// Advance every satellite's attitude by `dt` seconds toward its command.
@@ -668,5 +788,120 @@ mod tests {
         let mut st = ObsState::default();
         update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[(0, 1)], V3::new(0.0, 1.0, 0.0), V3::Z, None, false);
         assert_eq!(st.links_blocked, 1);
+    }
+}
+
+#[cfg(test)]
+mod stare_tests {
+    use super::*;
+    use crate::astro::{self, BODY_NAMES};
+    use crate::attitude::Agility;
+    use crate::constellation::{Shell, ShellParams};
+
+    struct Cov {
+        eligible_s: f64,
+        excluded_s: f64,
+        full_s: f64,
+        any_s: f64,
+        max_gap_s: f64,
+        cur_gap: f64,
+        recruits: usize,
+        acquired: bool,
+    }
+
+    /// Fly the shell for `hours` with one STARE campaign of `eyes` on each
+    /// planet (and the Moon); background telescopes run the zenith survey.
+    fn fly(n_sats: usize, eyes: usize, hours: f64, dt: f64) -> Vec<(usize, Cov)> {
+        let jd0 = 2_461_359.5; // 2026-11-15 00:00 UTC
+        let o = ObsParams::default();
+        let ag = Agility::from_obs(&o);
+        let mut shell = Shell::new(ShellParams { n: n_sats, ..Default::default() }, jd0);
+        let mut st = ObsState::default();
+        let targets: Vec<usize> = (1..9).collect();
+        let mut cov: Vec<(usize, Cov)> = targets
+            .iter()
+            .map(|&i| (i, Cov { eligible_s: 0.0, excluded_s: 0.0, full_s: 0.0, any_s: 0.0, max_gap_s: 0.0, cur_gap: 0.0, recruits: 0, acquired: false }))
+            .collect();
+        let steps = (hours * 3600.0 / dt) as usize;
+        for k in 0..steps {
+            let jd = jd0 + k as f64 * dt / 86_400.0;
+            shell.propagate(jd);
+            let b = astro::bodies(jd);
+            let (sun, moon) = (b[0].dir, b[1].dir);
+            update(&mut st, &o, Mode::Survey, &shell.pos, &[], sun, moon, None, false);
+            let items: Vec<StareItem> = targets
+                .iter()
+                .map(|&i| StareItem { id: i as u64, dir: b[i].dir, eyes, fine: true })
+                .collect();
+            let res = assign_stare(&mut st, &o, &shell, &items, sun, moon, &ag);
+            advance_attitudes(&mut st, &ag, dt, None);
+            for ((_, c), r) in cov.iter_mut().zip(&res) {
+                c.recruits += r.recruited;
+                if r.blocked == Some("Sun exclusion") || r.blocked == Some("Moon exclusion") {
+                    c.excluded_s += dt;
+                    c.acquired = false;
+                    c.cur_gap = 0.0;
+                    continue;
+                }
+                let locked = locked_on(&st, job(TAG_STARE, r.id));
+                if !c.acquired {
+                    if locked > 0 {
+                        c.acquired = true;
+                    } else {
+                        continue; // initial acquisition, not a gap
+                    }
+                }
+                c.eligible_s += dt;
+                if locked >= eyes {
+                    c.full_s += dt;
+                }
+                if locked > 0 {
+                    c.any_s += dt;
+                    c.cur_gap = 0.0;
+                } else {
+                    c.cur_gap += dt;
+                    c.max_gap_s = c.max_gap_s.max(c.cur_gap);
+                }
+            }
+        }
+        cov
+    }
+
+    #[test]
+    fn thousand_sats_hold_ten_eyes_on_jupiter_and_saturn() {
+        let cov = fly(1000, 10, 3.0, 2.0);
+        for (i, c) in cov.iter().filter(|(i, _)| *i == 5 || *i == 6) {
+            assert!(c.excluded_s == 0.0, "{} unexpectedly excluded", BODY_NAMES[*i]);
+            let full = c.full_s / c.eligible_s;
+            assert!(full > 0.995, "{}: full-strength coverage {:.4}", BODY_NAMES[*i], full);
+            assert_eq!(c.max_gap_s, 0.0, "{}: gap {}", BODY_NAMES[*i], c.max_gap_s);
+        }
+    }
+
+    /// cargo test --release stare_24h -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn stare_24h_report() {
+        for (n, eyes) in [(1000usize, 10usize), (1000, 50), (100, 10)] {
+            let t = std::time::Instant::now();
+            let cov = fly(n, eyes, 24.0, 2.0);
+            println!("\n== {n} satellites, {eyes} eyes per target, 24 h from 2026-11-15 ({:.0} s CPU)", t.elapsed().as_secs_f64());
+            println!("{:8} {:>9} {:>11} {:>11} {:>9} {:>9}", "target", "excluded", "full-k %", "≥1 eye %", "max gap", "handovers/h");
+            for (i, c) in &cov {
+                if c.eligible_s == 0.0 {
+                    println!("{:8} {:>8.1}h   (inside Sun/Moon exclusion all day)", BODY_NAMES[*i], c.excluded_s / 3600.0);
+                    continue;
+                }
+                println!(
+                    "{:8} {:>8.1}h {:>10.3}% {:>10.3}% {:>8.0}s {:>9.1}",
+                    BODY_NAMES[*i],
+                    c.excluded_s / 3600.0,
+                    100.0 * c.full_s / c.eligible_s,
+                    100.0 * c.any_s / c.eligible_s,
+                    c.max_gap_s,
+                    c.recruits as f64 / ((c.eligible_s + c.excluded_s) / 3600.0)
+                );
+            }
+        }
     }
 }

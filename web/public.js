@@ -4,7 +4,8 @@ const mineKey = "facet-my-requests";
 const mine = () => { try { return JSON.parse(localStorage.getItem(mineKey) || "[]"); } catch { return []; } };
 let last = null;
 const viewer = new ResultViewer($("result"));
-const viewBtn = (r) => r.has_result ? el("button", { class: "view", onclick: () => viewer.show(r.id) }, r.state === "done" ? "Result" : "Live stack") : "";
+const streamViewer = new ResultViewer($("result"), "", "/api/campaign");
+const viewBtn = (r) => r.has_result ? el("button", { class: "view", onclick: () => { streamViewer.close(); viewer.show(r.id); } }, r.state === "done" ? "Result" : "Live stack") : "";
 
 const map = new SkyMap($("sky"), (ra, dec) => {
   $("target").value = ""; $("ra").value = ra.toFixed(3); $("dec").value = dec.toFixed(3); estimate();
@@ -53,6 +54,15 @@ function render(s) {
     m.append(el("tr", {}, el("td", {}, `#${r.id} ${r.target_name}`), stateCell(r), progressCell(r), el("td", {}, viewBtn(r))));
   }
   if (!m.children.length) m.append(el("tr", {}, el("td", { class: "muted small" }, "None yet from this browser.")));
+  const streams = (s.campaigns || []).filter(c => c.active);
+  $("streams").replaceChildren(...(streams.length ? streams.map(c => {
+    const { any } = stareCoverage(c);
+    return el("div", { class: "stare" },
+      el("div", { class: "insphead" }, el("span", { class: `lamp ${c.blocked ? "amber" : c.locked_now ? "green" : "grey"}` }),
+        el("b", {}, c.target_name), el("span", { class: "muted small" }, ` · ${c.locked_now} telescopes watching · new frame every ${fmtDur(c.frame_s)}`)),
+      el("div", { class: "small muted" }, c.blocked ? c.blocked : any !== null ? `on target ${any.toFixed(2)} % of the time since ${c.started_utc.slice(0, 16)} UTC` : "acquiring…"),
+      el("div", { class: "btns" }, c.has_frame ? el("button", { class: "view", onclick: () => { viewer.close(); streamViewer.show(c.id); } }, "Watch") : ""));
+  }) : [el("div", { class: "muted small" }, "No live streams right now.")]));
   estimate();
 }
 
@@ -80,3 +90,5 @@ $("form").addEventListener("submit", async (ev) => {
 });
 // Shareable link: /?result=<id>
 { const rid = new URLSearchParams(location.search).get("result"); if (rid) viewer.show(+rid); }
+// Shareable live-stream link: /?stream=<campaign id>
+{ const sid = new URLSearchParams(location.search).get("stream"); if (sid) streamViewer.show(+sid); }

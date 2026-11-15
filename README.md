@@ -134,6 +134,7 @@ API (JSON): `GET /api/status`, `GET /api/stars` on both ports;
 {"cmd":"mode","mode":"queue"}
 {"cmd":"target","name":"Jupiter"}
 {"cmd":"safe_hold","sat":41,"on":true}
+{"cmd":"stare_start","target":"Jupiter","eyes":10}
 {"cmd":"request","id":7,"action":"approve","priority":5,"telescopes":200}
 {"cmd":"auto_approve","on":true}
 {"cmd":"public_share","share":0.25}
@@ -239,6 +240,58 @@ whatever the time step.
 - In the views, orange = slewing, yellow = settling / acquiring, green =
   locked. Sky footprints sit at the *actual* boresight.
 
+## STARE campaigns — Sustained Tracking And Rotating Eyes
+
+A STARE campaign keeps *k* telescopes ("eyes") locked on one target
+continuously, for a set number of hours or until stopped. It's the basis for
+live planet streams and for continuous watch on a near-Earth object.
+
+**How handover works:**
+- Every telescope's line of sight to the target ends at a predictable moment:
+  when its orbit carries the target into the Earth keep-out cone. The
+  scheduler computes this window exactly from each satellite's orbital-plane
+  geometry (`Shell::time_to_set`, tested against propagation).
+- A member with less than a lead time left (a 60° repoint plus 20 s) becomes
+  *outgoing*. It keeps integrating until it loses the target, but a
+  replacement is recruited at once, so the new eye is slewed, settled and
+  guide-locked before the old one drops out.
+- Recruits are the free telescopes with the **longest** remaining window among
+  those that can lock in time, which keeps handovers to a minimum.
+- STARE eyes take priority over programme work. The public queue never takes them.
+
+**24-hour verification** (`cargo test --release stare_24h -- --ignored --nocapture`):
+one campaign on each planet and the Moon, starting 2026-11-15, 2 s steps, with
+full slew, settle and lock dynamics.
+
+| shell | eyes / target | full strength (≥ k locked) | ≥ 1 eye locked | longest gap | handovers / h |
+|---|---|---|---|---|---|
+| 1000 sats | 10 | 99.995–99.998 % | 100 % | 0 s | 13 |
+| 1000 sats | 50 | 99.98–99.99 % | 100 % | 0 s | 67 |
+| 100 sats | 10 | 99.96–99.99 % | 100 % | 0 s | 14 |
+
+Targets inside the Sun exclusion (Mercury and Venus on that date) wait.
+Tracking resumes on its own when they emerge. Because about 58 % of the shell
+can see any direction at once, even a 100-satellite stage could stream five
+planets around the clock. A 1,000-satellite cloud has capacity to spare.
+
+**Live frames.** Each campaign publishes a frame every *cadence* (default
+60 s): the locked eyes stacked over one interval, rendered with the same
+imaging model as request results. The public page lists active campaigns
+under **Live streams**, with *Watch* buttons and shareable links
+(`http://host:8781/?stream=<id>`).
+
+Ways to start one:
+- the ops console's **STARE campaigns** panel: target name, or Shift-click the
+  sky; eyes, frame cadence and duration;
+- the desktop *Web access* panel;
+- the command line: `--stare Jupiter --stare Saturn --stare-eyes 10`;
+- the API: `{"cmd":"stare_start","target":"Jupiter","eyes":10,"frame_s":60,"duration_h":24}`,
+  `{"cmd":"stare_eyes","id":1,"eyes":20}`, `{"cmd":"stare_stop","id":1}`.
+
+Each campaign reports full-strength and any-eye coverage, gaps, longest gap,
+handovers, and integrated time. Events (lock, gap, recovery, Sun-exclusion
+pause, end) go to the ops event log.
+
 ## Use it with Stellarium
 
 1. Click **Export TLEs** to write `facet_<N>_sats.tle`.
@@ -256,6 +309,8 @@ facet-sim --n 10000 --mode stack --target Jupiter --look --coverage
 facet-sim --view unified --n 300 --target Jupiter --camfov 60 --look
 facet-sim --n 50 --sso --mode survey --view orbit --zoom 20000
 ```
+
+STARE flags: `--stare <target>` (repeatable), `--stare-eyes N`.
 
 Web flags: `--control-addr --public-addr --no-control --no-public --no-web --token`.
 
@@ -298,7 +353,7 @@ Every performance number is an **unchecked soft estimate**:
 | `web/` | director and public pages, all-sky map |
 | `assets/` | stars (HYG v4.0, CC BY-SA 4.0), coastlines (Natural Earth, public domain) |
 
-`cargo test` runs 28 checks (`cargo test -- --ignored` also writes a gallery of sample results to /tmp): ephemeris vs ERFA, orbital period, SSO inclination,
+`cargo test` runs 30 checks (`cargo test -- --ignored` also writes a gallery of sample results to /tmp): ephemeris vs ERFA, orbital period, SSO inclination,
 nodal regression, Earth-cone geometry, stacking maths and TLE format.
 
 ## Next steps

@@ -95,8 +95,16 @@ class GroundMap {
 }
 
 const ground = new GroundMap($("ground"), (i) => inspect(i));
-const sky = new SkyMap($("sky"), (ra, dec) => cmd({ cmd: "target", ra_deg: ra, dec_deg: dec }));
+let shiftDown = false;
+window.addEventListener("keydown", e => { if (e.key === "Shift") shiftDown = true; });
+window.addEventListener("keyup", e => { if (e.key === "Shift") shiftDown = false; });
+const sky = new SkyMap($("sky"), (ra, dec) => {
+  if (shiftDown) { $("st_target").value = ""; $("st_target").dataset.ra = ra; $("st_target").dataset.dec = dec;
+                   $("st_target").placeholder = `RA ${ra.toFixed(2)}° Dec ${dec.toFixed(2)}° (from sky)`; }
+  else cmd({ cmd: "target", ra_deg: ra, dec_deg: dec });
+});
 const viewer = new ResultViewer($("result"), Q);
+const stareViewer = new ResultViewer($("result"), Q, "/api/campaign");
 
 fetch("/api/stars", { headers: H }).then(r => r.ok ? r.json() : Promise.reject()).then(s => sky.setStars(s))
   .catch(() => flash("Not authorised. Open the console with the ?token=… URL the simulator printed.", true));
@@ -110,6 +118,42 @@ $("target").addEventListener("keydown", (e) => { if (e.key === "Enter") cmd({ cm
 $("auto").addEventListener("change", () => cmd({ cmd: "auto_approve", on: $("auto").checked }));
 $("share").addEventListener("input", () => $("shareval").textContent = `${$("share").value} %`);
 $("share").addEventListener("change", () => cmd({ cmd: "public_share", share: +$("share").value / 100 }));
+
+// ---------------------------------------------------------------- STARE
+$("st_start").addEventListener("click", () => {
+  const b = { cmd: "stare_start", eyes: +$("st_eyes").value, frame_s: +$("st_frame").value };
+  if ($("st_dur").value) b.duration_h = +$("st_dur").value;
+  const t = $("st_target").value.trim();
+  if (t) b.target = t;
+  else if ($("st_target").dataset.ra) { b.ra_deg = +$("st_target").dataset.ra; b.dec_deg = +$("st_target").dataset.dec; }
+  else { flash("Give a STARE target (name, or Shift-click the sky).", true); return; }
+  cmd(b);
+});
+function renderStares(s) {
+  const box = $("stares");
+  if (box.contains(document.activeElement)) return;
+  const act = (s.campaigns || []).filter(c => c.active);
+  const ended = (s.campaigns || []).filter(c => !c.active).slice(0, 3);
+  box.replaceChildren(...[...act, ...ended].map(c => {
+    const { full, any } = stareCoverage(c);
+    const lamp = !c.active ? "grey" : c.blocked ? "amber" : c.locked_now >= c.eyes ? "green" : c.locked_now > 0 ? "amber" : "red";
+    const eyes = el("input", { type: "number", value: c.eyes, min: 1, max: 5000, class: "tiny" });
+    const hours = (c.eligible_s + c.excluded_s) / 3600;
+    return el("div", { class: "stare" },
+      el("div", { class: "insphead" }, el("span", { class: `lamp ${lamp}` }), el("b", {}, `#${c.id} ${c.target_name}`),
+        el("span", { class: "muted small" }, c.active ? ` · ${c.locked_now}/${c.eyes} locked` : " · ended")),
+      el("div", { class: "small" },
+        c.blocked ? el("span", { class: "warn" }, c.blocked + " · ") : "",
+        full !== null ? `full strength ${full.toFixed(2)} % · ≥1 eye ${any.toFixed(2)} % · ` : "acquiring… · ",
+        `gaps ${c.gaps}${c.max_gap_s > 0 ? ` (max ${fmtDur(c.max_gap_s)})` : ""} · handovers ${c.handovers}` +
+        (hours > 0.05 ? ` (${(c.handovers / hours).toFixed(1)}/h)` : "") + ` · ${fmtDur(c.integ_s)} integrated`),
+      el("div", { class: "btns" },
+        c.has_frame ? el("button", { class: "view", onclick: () => { viewer.close(); stareViewer.show(c.id); } }, "Live frame") : "",
+        c.active ? eyes : "", c.active ? el("button", { onclick: () => cmd({ cmd: "stare_eyes", id: c.id, eyes: +eyes.value }) }, "Set eyes") : "",
+        c.active ? el("button", { class: "danger", onclick: () => cmd({ cmd: "stare_stop", id: c.id }) }, "Stop") : ""));
+  }));
+  if (!box.children.length) box.append(el("div", { class: "muted small" }, "No campaigns."));
+}
 
 // ---------------------------------------------------------------- inspector
 function parseSat(q) { const m = String(q).match(/(\d+)/); return m ? +m[1] - 1 : null; }
@@ -166,7 +210,7 @@ function reqRow(r) {
   else if (["approved", "observing"].includes(r.state)) btns.append(el("button", { onclick: () => act("update") }, "Update"),
                                          el("button", { class: "danger", onclick: () => act("cancel") }, "Cancel"));
   else btns.append(el("button", { onclick: () => act("requeue") }, "Re-queue"));
-  if (r.has_result) btns.append(el("button", { class: "view", onclick: () => viewer.show(r.id) }, r.state === "done" ? "Result" : "Live"));
+  if (r.has_result) btns.append(el("button", { class: "view", onclick: () => { stareViewer.close(); viewer.show(r.id); } }, r.state === "done" ? "Result" : "Live"));
   const who = el("td", {}, r.submitter); who.title = `${r.ip} · submitted ${r.submitted_utc}${r.note ? "\n" + r.note : ""}`;
   return el("tr", { onmouseenter: () => { sky.highlight = r.id; sky.draw(); } },
     el("td", {}, r.id), who, el("td", {}, r.target_name, r.note ? el("div", { class: "small muted" }, r.note) : ""),
@@ -254,6 +298,12 @@ function render(s) {
     for (const r of s.requests.slice(0, 150)) q.append(reqRow(r));
     if (!q.children.length) q.append(el("tr", {}, el("td", { class: "muted small", colspan: 9 }, "No requests.")));
   }
+
+  renderStares(s);
+  for (const c of (s.campaigns || []).filter(c => c.active && c.acquired !== false)) {
+    if (c.eligible_s > 0 && c.locked_now === 0 && !c.blocked) alerts.push(["warn", `STARE #${c.id} on ${c.target_name}: no eyes locked`]);
+  }
+  $("alerts").replaceChildren(...(alerts.length ? alerts.map(([l, m]) => el("li", { class: l }, m)) : [el("li", { class: "muted" }, "none")]));
 
   // Event log
   $("log").replaceChildren(...(s.events || []).map(e =>

@@ -5,7 +5,7 @@
 
 use crate::astro::{EARTH_RADIUS_KM, J2, MU_EARTH};
 use crate::math::{rad, V3};
-use std::f64::consts::TAU;
+use std::f64::consts::{PI, TAU};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShellParams {
@@ -88,6 +88,9 @@ pub struct Shell {
     a: f64,
     /// Current ECI positions, km.
     pub pos: Vec<V3>,
+    /// Current RAAN and argument of latitude per satellite (rad).
+    pub raan_now: Vec<f64>,
+    pub u_now: Vec<f64>,
 }
 
 impl Shell {
@@ -176,6 +179,8 @@ impl Shell {
             sin_i: inc.sin(),
             a,
             pos: Vec::new(),
+            raan_now: Vec::new(),
+            u_now: Vec::new(),
         };
         shell.propagate(epoch_jd);
         shell
@@ -187,6 +192,12 @@ impl Shell {
         let d_raan = self.raan_dot * dt;
         let d_u = (self.u_dot * dt).rem_euclid(TAU);
         self.pos.clear();
+        self.raan_now.clear();
+        self.u_now.clear();
+        for s in &self.sats {
+            self.raan_now.push(s.raan0 + d_raan);
+            self.u_now.push(s.u0 + d_u);
+        }
         self.pos.extend(self.sats.iter().map(|s| {
             let (so, co) = (s.raan0 + d_raan).sin_cos();
             let (su, cu) = (s.u0 + d_u).sin_cos();
@@ -214,6 +225,43 @@ impl Shell {
         // Two-body mean motion: SGP4 applies its own secular J2 rates on top.
         let n0 = (MU_EARTH / self.a.powi(3)).sqrt();
         (self.params.inc_deg, n0 * 86_400.0 / TAU, els)
+    }
+
+    /// Orbital-plane basis for satellite i at the current time: radial unit
+    /// vector is cos u · P + sin u · Q, with u = `u_now[i]`.
+    pub fn plane_basis(&self, i: usize) -> (V3, V3) {
+        let (so, co) = self.raan_now[i].sin_cos();
+        (
+            V3::new(co, so, 0.0),
+            V3::new(-so * self.cos_i, co * self.cos_i, self.sin_i),
+        )
+    }
+
+    /// Seconds until direction `t` leaves satellite i's field of regard (the
+    /// sky outside the Earth keep-out cone: dot(t, r̂) > cos_lim). None if it
+    /// is not visible now; +∞ if it never sets. Ignores the slow node drift.
+    pub fn time_to_set(&self, i: usize, t: V3, cos_lim: f64) -> Option<f64> {
+        let (p, q) = self.plane_basis(i);
+        let (a, b) = (t.dot(p), t.dot(q));
+        let r = a.hypot(b);
+        if r < 1e-12 {
+            return (0.0 > cos_lim).then_some(f64::INFINITY);
+        }
+        let c = cos_lim / r;
+        if c <= -1.0 {
+            return Some(f64::INFINITY);
+        }
+        if c >= 1.0 {
+            return None;
+        }
+        let phi = b.atan2(a);
+        let th = (self.u_now[i] - phi + PI).rem_euclid(TAU) - PI;
+        let thb = c.acos();
+        if th.abs() < thb {
+            Some((thb - th) / self.u_dot)
+        } else {
+            None
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -251,6 +299,29 @@ mod tests {
             assert_eq!(s.pos.len(), n);
             for x in &s.pos {
                 assert!((x.norm() - p.semi_major_km()).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn time_to_set_matches_propagation() {
+        // Predict when a target sets for a few satellites, then propagate and check.
+        let jd0 = 2_461_000.0;
+        let mut s = Shell::new(ShellParams { n: 60, ..Default::default() }, jd0);
+        let t = V3::from_radec(1.0, 0.4);
+        let cos_lim = -(69.2f64.to_radians() + 10f64.to_radians()).cos();
+        for i in 0..60 {
+            if let Some(tts) = s.time_to_set(i, t, cos_lim) {
+                if !tts.is_finite() || tts > 3000.0 {
+                    continue;
+                }
+                let before = jd0 + (tts - 5.0) / 86_400.0;
+                let after = jd0 + (tts + 5.0) / 86_400.0;
+                s.propagate(before);
+                assert!(t.dot(s.pos[i].unit()) > cos_lim, "sat {i} should still see it");
+                s.propagate(after);
+                assert!(t.dot(s.pos[i].unit()) <= cos_lim + 1e-4, "sat {i} should have lost it");
+                s.propagate(jd0);
             }
         }
     }
