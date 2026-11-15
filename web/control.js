@@ -85,6 +85,21 @@ class GroundMap {
       g.fillStyle = PHASE_COL[code];
       for (const [lo, la, c] of fleet.sats) if (c === code) { const [x, y] = this.xy(lo, la); g.fillRect(x - r, y - r, 2 * r, 2 * r); }
     }
+    // Planetary defence: risk corridor and (after impact) the impact point
+    const pd = last && last.defence;
+    if (pd) {
+      g.fillStyle = "rgba(255,70,70,0.55)";
+      for (const [lo, la] of pd.corridor || []) { const [x, y] = this.xy(lo, la); g.beginPath(); g.arc(x, y, 2.2 * this.dpr, 0, 7); g.fill(); }
+      if (pd.true_impact) {
+        const [x, y] = this.xy(pd.true_impact[0], pd.true_impact[1]);
+        g.strokeStyle = "#fff"; g.lineWidth = 2 * this.dpr; const r = 7 * this.dpr;
+        g.beginPath(); g.moveTo(x - r, y - r); g.lineTo(x + r, y + r); g.moveTo(x + r, y - r); g.lineTo(x - r, y + r); g.stroke();
+        g.fillStyle = "#fff"; g.font = `${11 * this.dpr}px system-ui`; g.fillText("impact", x + 9 * this.dpr, y - 6 * this.dpr);
+      } else if ((pd.corridor || []).length) {
+        const [lo, la] = pd.corridor[0]; const [x, y] = this.xy(lo, la);
+        g.fillStyle = "#ff7a7a"; g.font = `${11 * this.dpr}px system-ui`; g.fillText("risk corridor", x + 8 * this.dpr, y - 8 * this.dpr);
+      }
+    }
     if (selected !== null && fleet.sats[selected]) {
       const [x, y] = this.xy(fleet.sats[selected][0], fleet.sats[selected][1]);
       g.strokeStyle = "#ffffff"; g.lineWidth = 1.5 * this.dpr;
@@ -111,7 +126,7 @@ fetch("/api/stars", { headers: H }).then(r => r.ok ? r.json() : Promise.reject()
 fetch("/api/coast", { headers: H }).then(r => r.ok ? r.json() : []).then(c => { coast = c; ground.draw(); }).catch(() => {});
 
 // ---------------------------------------------------------------- programme
-const MODES = [["survey", "Survey"], ["stack", "Stack"], ["mosaic", "Mosaic"], ["neo", "NEO sweep"], ["queue", "Public queue"]];
+const MODES = [["survey", "Survey"], ["stack", "Stack"], ["mosaic", "Mosaic"], ["neo", "NEO sweep"], ["queue", "Science ops"]];
 for (const [k, label] of MODES) $("modebtns").append(el("button", { "data-mode": k, onclick: () => cmd({ cmd: "mode", mode: k }) }, label));
 $("settarget").addEventListener("click", () => cmd({ cmd: "target", name: $("target").value }));
 $("target").addEventListener("keydown", (e) => { if (e.key === "Enter") cmd({ cmd: "target", name: $("target").value }); });
@@ -233,6 +248,94 @@ function reqRow(r) {
     el("td", { class: "num" }, prio), stateCell(r), progressCell(r), btns);
 }
 
+// ---------------------------------------------------------------- planetary defence
+function fmtSigned(x, d = 2) { return x === null || x === undefined ? "–" : (x >= 0 ? "+" : "") + x.toFixed(d); }
+function fmtIp(p) {
+  if (p === null || p === undefined) return "–";
+  if (p >= 0.9999) return "> 99.99 %";
+  if (p >= 0.001) return `${(p * 100).toFixed(p >= 0.1 ? 1 : 2)} %`;
+  if (p <= 0) return "0";
+  return `1 in ${Math.round(1 / p).toLocaleString()}`;
+}
+function renderDefence(s) {
+  const d = s.defence, sec = $("pd_sec");
+  sec.hidden = !d; if (!d) return;
+  const [a, b] = d.systems;
+  $("pd_state").textContent = d.state === "impacted" ? "IMPACT" : d.state === "tracking" ? "TRACKING" : "UNDISCOVERED";
+  $("pd_state").className = "pdbadge " + d.state;
+  $("pd_name").textContent = d.position_known || d.state === "impacted" ? d.designation : "Undiscovered object (exercise truth hidden from operators)";
+  $("pd_count").textContent = d.state === "impacted" ? `impact ${d.impact_utc.slice(5, 16)} UTC` : `impact in ${fmtDur(d.t_to_impact_s)}`;
+  $("pd_sub").textContent = `${d.scenario} · ${d.diameter_m.toFixed(0)} m, H = ${d.h_mag.toFixed(1)}, ${d.energy_mt.toFixed(1)} Mt · v∞ ${d.v_inf_kms} km/s · radiant ${d.radiant_elong_deg.toFixed(0)}° from the Sun · simulated exercise`;
+  const row = (k, f) => el("tr", {}, el("th", {}, k), el("td", {}, f(a)), el("td", {}, f(b)));
+  $("pd_cmp").replaceChildren(
+    row("Discovered", v => v.warning_s == null ? "not yet" : `${fmtDur(v.warning_s)} before impact`),
+    row("Astrometric observations", v => v.n_obs ? v.n_obs.toLocaleString() : "–"),
+    row("Observed arc", v => v.arc_h ? fmtDur(v.arc_h * 3600) : "–"),
+    row("Impact probability", v => fmtIp(v.ip)),
+    row("Palermo scale", v => fmtSigned(v.palermo)),
+    row("b-plane 1σ", v => v.sigma_b_km == null ? "–" : `${v.sigma_b_km < 10 ? v.sigma_b_km.toFixed(1) : Math.round(v.sigma_b_km).toLocaleString()} km`),
+    row("Nominal miss distance", v => v.nominal_miss_km == null ? "–" : `${Math.round(v.nominal_miss_km).toLocaleString()} km`),
+    row("IP ≥ 1 %", v => v.ip_1pct_s == null ? "–" : `${fmtDur(v.ip_1pct_s)} before`),
+    row("IP ≥ 99 % (certain)", v => v.certain_s == null ? "–" : `${fmtDur(v.certain_s)} before`),
+  );
+  const n = d.now, known = d.position_known;
+  const kv = (k, v) => el("tr", {}, el("th", {}, k), el("td", {}, v));
+  $("pd_now").replaceChildren(
+    kv("V magnitude", `${n.v_mag.toFixed(1)}`),
+    kv("Distance", `${Math.round(n.dist_km).toLocaleString()} km (${(n.dist_km / 384400).toFixed(1)} LD)`),
+    kv("Solar elongation", `${n.elong_deg.toFixed(0)}°` + (n.blocked ? ` · ${n.blocked}` : "")),
+    kv("Phase angle", `${n.phase_deg.toFixed(0)}°`),
+    kv("Sky motion", `${n.rate_arcsec_s.toFixed(2)}″/s`),
+    kv("FACET search limit (trailed)", `V ${n.facet_search_lim.toFixed(1)}` + (n.detectable_facet ? " · detectable" : "")),
+    kv("FACET follow-up limit", `V ${n.facet_follow_lim.toFixed(1)}`),
+    kv("Ground", n.observable_ground ? "observable at night" : (n.elong_deg < d.ground_model.min_elong_deg ? "in the daytime sky" : "too faint")),
+    kv("Searching telescopes", `${n.search_eyes}` + (n.sky_revisit_h ? ` · open sky every ${n.sky_revisit_h.toFixed(1)} h` : "")),
+    known ? "" : kv("", el("span", { class: "muted small" }, "Operators do not know this object yet; these are exercise truth values.")),
+  );
+  drawIpChart($("pd_chart"), d);
+}
+function drawIpChart(c, d) {
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth * dpr, h = c.clientHeight * dpr;
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const g = c.getContext("2d"); g.clearRect(0, 0, w, h);
+  const L = 44 * dpr, R = 10 * dpr, T = 10 * dpr, B = 22 * dpr;
+  // Zoom the time axis to the decision window: from just before the first
+  // discovery until both systems are certain (or now, while tracking).
+  const total = Math.max(1, d.history.length ? d.history[0][0] : 1), tnow = d.t_to_impact_s / 3600;
+  const warn = d.systems.map(v => v.warning_s).filter(v => v != null).map(v => v / 3600);
+  const cert = d.systems.map(v => v.certain_s);
+  let thi = warn.length ? Math.min(total, Math.max(...warn) * 1.08) : total;
+  let tlo = Math.max(0, tnow);
+  if (warn.length && cert.every((c, i) => c != null || d.systems[i].warning_s == null)) {
+    const cs = cert.filter(c => c != null).map(c => c / 3600);
+    if (cs.length) tlo = Math.max(tlo, Math.min(...cs) - (thi - Math.min(...cs)) * 0.35);
+  }
+  if (thi - tlo < 0.05) tlo = Math.max(0, thi - 0.05);
+  const x = t => L + (thi - t) / (thi - tlo) * (w - L - R);
+  const y = p => T + (1 - (Math.log10(Math.max(p, 1e-6)) + 6) / 6) * (h - T - B);
+  g.strokeStyle = "rgba(120,140,180,0.25)"; g.fillStyle = "#8a94a8"; g.font = `${10 * dpr}px system-ui`; g.lineWidth = dpr;
+  for (let e = -6; e <= 0; e++) { const yy = y(10 ** e); g.beginPath(); g.moveTo(L, yy); g.lineTo(w - R, yy); g.stroke(); g.fillText(e === 0 ? "1" : `1e${e}`, 4 * dpr, yy + 3 * dpr); }
+  for (let i = 0; i <= 4; i++) {
+    const t = thi - (thi - tlo) * i / 4, X = x(t);
+    g.beginPath(); g.moveTo(X, T); g.lineTo(X, h - B); g.stroke();
+    g.fillText(`T−${fmtDur(t * 3600)}`, Math.min(X - 14 * dpr, w - 60 * dpr), h - 6 * dpr);
+  }
+  g.save(); g.beginPath(); g.rect(L, 0, w - L - R, h); g.clip();
+  if (tnow > tlo && d.state !== "impacted") { g.strokeStyle = "rgba(255,120,120,0.6)"; const X = x(tnow); g.beginPath(); g.moveTo(X, T); g.lineTo(X, h - B); g.stroke(); }
+  for (const [k, sys] of [[1, d.systems[0]], [2, d.systems[1]]]) {
+    if (sys.warning_s != null) { const X = x(sys.warning_s / 3600); g.fillStyle = k === 1 ? "#4fa3ff" : "#ffb44a"; g.beginPath(); g.arc(X, h - B - 4 * dpr, 4 * dpr, 0, 7); g.fill(); }
+  }
+  for (const [k, col] of [[2, "#ffb44a"], [1, "#4fa3ff"]]) {
+    g.strokeStyle = col; g.lineWidth = 2 * dpr; g.beginPath(); let on = false;
+    for (const p of d.history) { if (p[k] < 0) { on = false; continue; } const X = x(p[0]), Y = y(p[k]); if (on) g.lineTo(X, Y); else g.moveTo(X, Y); on = true; }
+    g.stroke();
+  }
+  g.restore();
+  g.font = `${10 * dpr}px system-ui`;
+  g.fillStyle = "#4fa3ff"; g.fillText("FACET + ground", L + 6 * dpr, T + 12 * dpr);
+  g.fillStyle = "#ffb44a"; g.fillText("Ground only", L + 110 * dpr, T + 12 * dpr);
+}
+
 // ---------------------------------------------------------------- science return
 const USE = [["programme", "Science programme", "#4fa3ff"], ["public", "Public requests", "#5fe0a0"], ["stare", "STARE", "#c58bff"],
              ["director", "Director target", "#ffd166"], ["survey", "Zenith survey", "#7c8aa5"], ["neo_sweep", "NEO sweep", "#ff9f6e"]];
@@ -286,6 +389,7 @@ function render(s) {
   $("doy").textContent = `${d} · DOY ${String(doy).padStart(3, "0")}`;
   $("modelabel").textContent = s.mode_label;
   sky.setStatus(s);
+  if (s.defence) ground.draw();
 
   // System state pill
   const hold = fleet ? fleet.sats.filter(x => x[2] === 5).length : 0;
@@ -325,14 +429,14 @@ function render(s) {
   $("auto").checked = s.auto_approve;
   if (document.activeElement !== $("share")) {
     $("share").value = Math.round(s.public_share * 100); $("share").disabled = s.mode === "queue";
-    $("shareval").textContent = s.mode === "queue" ? "100 % (public queue mode)" : `${Math.round(s.public_share * 100)} %`;
+    $("shareval").textContent = `${Math.round(s.public_share * 100)} %` + (s.programme ? ` · NEO search reserve ${Math.round(s.programme.search_share * 100)} %` : "");
   }
   const tl = $("targetline");
   if (s.target && ["stack", "mosaic"].includes(s.mode)) {
     tl.replaceChildren(el("b", {}, s.target.name), " · ",
       s.target.blocked ? el("span", { class: "warn" }, s.target.blocked)
         : `${s.target.locked} locked of ${s.target.visible} with line of sight` + (s.mode === "stack" && s.target.locked ? ` · depth V ≈ ${s.stats.stack_lim_mag}` : ""));
-  } else tl.textContent = s.mode === "queue" ? "All telescopes serve the public request queue." : s.mode === "survey" ? "Zenith-stare survey." : s.mode === "neo" ? "Near-Sun asteroid sweep." : "";
+  } else tl.textContent = s.mode === "queue" ? "Science operations: public share first, then the science programme; the NEO search reserve and spare telescopes survey." : s.mode === "survey" ? "Zenith-stare survey." : s.mode === "neo" ? "Near-Sun asteroid sweep." : "";
 
   // Alerts
   const alerts = [];
@@ -362,6 +466,7 @@ function render(s) {
 
   renderStares(s);
   renderScience(s);
+  renderDefence(s);
   for (const c of (s.campaigns || []).filter(c => c.active)) {
     if (c.paused) alerts.push(["info", `STARE ${c.target_name} paused: ${String(c.blocked).toLowerCase()}`]);
     else if (c.eligible_s > 0 && c.locked_now === 0 && !c.blocked) alerts.push(["warn", `STARE #${c.id} on ${c.target_name}: no eyes locked`]);

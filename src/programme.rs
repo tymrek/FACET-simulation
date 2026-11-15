@@ -233,7 +233,7 @@ impl Generator {
             self.primed = true;
         }
         self.credit = (self.credit + rate * dt).min(rate * 3600.0 + 1e6);
-        while out.len() < 60 && out.len() < room {
+        while out.len() < 1500 && out.len() < room {
             let d = match self.pending.take() {
                 Some(d) => d,
                 None => self.draft(sun, sun_excl_deg, moon, moon_excl_deg, planets),

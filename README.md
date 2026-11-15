@@ -399,6 +399,54 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## Planetary defence exercise
+
+A synthetic Earth impactor, played out twice side by side: **FACET + ground**
+and **ground only**. Start it from the desktop *Planetary defence exercise*
+panel (preset or custom: diameter, days to impact, v∞, radiant elongation from
+the Sun, follow-up eyes) or with `--defence 1|2|3`. The sim sets the time rate
+so the exercise takes about 2½ minutes. The ops console shows a *Planetary
+defence* panel (comparison table, impact-probability chart, the object's
+current state), the risk corridor on the ground map and the object on the
+sky; the public page shows a plain-language card.
+
+| Preset | Size | Out | Approach | Typical result |
+|---|---|---|---|---|
+| 1 Sunward Tunguska-class | 50 m, 9 Mt | 10 d | radiant 55° from the Sun | FACET finds it ~1 day out and is certain within the hour; ground never sees it |
+| 2 Chelyabinsk-class from the Sun | 20 m, 0.7 Mt | 4 d | radiant 50° | FACET: hours of warning; ground: none |
+| 3 Night-side city-killer | 140 m, 120 Mt | 60 d | radiant 150° | ground finds it first (deeper); FACET makes impact certain ~6 days sooner |
+
+**Method.**
+* *Orbit*: heliocentric two-body, universal-variable Kepler propagation. The
+  true orbit is built backwards from the impact (object inside Earth's
+  gravitationally focused capture disc at the impact epoch). Earth's gravity
+  on the approach is not integrated; observers are geocentric.
+* *Brightness*: H from diameter and albedo, H–G phase function (G = 0.15).
+  Objects coming out of the daytime sky are seen at large phase angles,
+  which is why they are faint and dangerous.
+* *FACET search*: the telescopes actually surveying (the **NEO search
+  reserve**, default 10 % of the fleet held back from the science
+  programme, plus any spare eyes) cover the open sky at
+  N × FOV² / (exposure + overhead). A detection needs the object brighter than
+  the trailed single-exposure limit outside the keep-out zones; neighbouring
+  telescopes confirm it one step later over the laser links. Then a STARE
+  campaign (default 30 eyes) rate-tracks it, giving one stacked astrometric
+  epoch per minute (σ ≈ 0.6·FWHM/SNR, 0.05″ floor).
+* *Ground survey and follow-up*: a generic composite with **assumed**
+  parameters: discovery to V 21.0, follow-up to V 22.0, solar elongation
+  ≥ 60°, three sessions a day, 60 % clear, 50 % chance a night's survey covers
+  the object, 0.3″ astrometry.
+* *Orbit determination*: linearised weighted least squares with numerical
+  partials through the propagator and a weak prior.
+* *Impact probability*: covariance mapped to the b-plane, integrated over
+  the capture disc. Linear methods are optimistic on very short arcs.
+  Palermo scale from energy (stony density assumed), probability and time
+  to impact. The risk corridor is sampled from the b-plane uncertainty.
+
+Desktop: *% of fleet held for NEO search* sets the reserve
+(`--search-share 10`). This is the trade-off a real FACET would face:
+programme science against search, and it scales with fleet size.
+
 ## Science programme and science return
 
 The sim starts in **Science operations** mode with a simulated science

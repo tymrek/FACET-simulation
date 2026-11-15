@@ -25,6 +25,24 @@ function estimate() {
     `(dark sky, soft estimate; the result page computes it exactly). Field of view ${t.fov_deg}° per telescope.`;
 }
 
+function renderDefence(s) {
+  const d = s.defence, c = $("pd_card"); c.hidden = !d; if (!d) return;
+  const [a, b] = d.systems, known = d.position_known || d.state === "impacted";
+  $("pd_name").textContent = known ? d.designation : "Nothing detected yet";
+  $("pd_count").textContent = d.state === "impacted" ? "impact has occurred" : known ? `predicted impact in ${fmtDur(d.t_to_impact_s)}` : "";
+  const ip = (p) => p == null ? "–" : p >= 0.9999 ? "certain" : p >= 0.001 ? `${(p * 100).toFixed(1)} %` : "< 0.1 %";
+  $("pd_text").textContent = `A practice scenario: a ${d.diameter_m.toFixed(0)} m asteroid on a collision course, approaching ` +
+    (d.radiant_elong_deg < 60 ? "out of the daytime sky, where telescopes on the ground cannot look. " : "through the night sky. ") +
+    "FACET searches for it, and once found, dozens of telescopes track it to pin down where it will strike. " +
+    "Below: what FACET adds, compared with ground-based telescopes alone.";
+  const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
+  $("pd_tiles").replaceChildren(
+    t("warning time with FACET", a.warning_s == null ? "–" : fmtDur(a.warning_s)),
+    t("warning time, ground only", b.warning_s == null ? (d.state === "impacted" ? "none" : "–") : fmtDur(b.warning_s)),
+    t("impact probability (FACET + ground)", ip(a.ip)),
+    t("impact probability (ground only)", ip(b.ip)));
+}
+
 function renderScience(s) {
   const sc = s.science; if (!sc) return;
   const d = sc.per_day, n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -59,6 +77,7 @@ function render(s) {
     stat("Mode", s.mode_label),
   );
   renderScience(s);
+  renderDefence(s);
   const q = $("queue"); q.replaceChildren();
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
   const recent = s.requests.filter(r => r.state === "done").slice(0, 10);

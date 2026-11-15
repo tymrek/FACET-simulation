@@ -331,7 +331,7 @@ impl App {
             ),
             (
                 all.iter().copied().filter(|&i| sh.requests[i].programme.is_some()).take(400).collect(),
-                if matches!(self.mode, Mode::Survey | Mode::NeoSweep) { 0 } else { n },
+                if matches!(self.mode, Mode::Survey | Mode::NeoSweep) { 0 } else { usize::MAX },
                 false,
                 if matches!(self.mode, Mode::Survey | Mode::NeoSweep) {
                     "paused: fleet dedicated to the director's sweep"
@@ -341,6 +341,16 @@ impl App {
             ),
         ];
         for (order, budget, steal, pool) in pools {
+        // Programme budget: what is left after public work, minus the
+        // planetary-defence search reserve, which keeps surveying.
+        let budget = if budget == usize::MAX {
+            let used = self.obs.job.iter().filter(|&&j| obs::job_tag(j) == obs::TAG_QUEUE).count();
+            let reserve = (self.search_share * n as f64).round() as usize;
+            n.saturating_sub(used + reserve)
+        } else {
+            budget
+        };
+        let pool = if budget == 0 && pool.starts_with("waiting: every") { "waiting: fleet fully booked (search reserve held back)" } else { pool };
         let o = &self.obs_params;
         let items: Vec<QueueItem> = order
             .iter()
@@ -423,7 +433,7 @@ impl App {
                     *self.science.inv(v).0 += got;
                 }
             }
-            let loud = r.programme.is_none() || r.priority >= 9;
+            let loud = r.programme.is_none();
             if got > 0.0 {
                 if r.first_light_jd.is_none() {
                     // Integration began `longest` seconds before the end of the step.
@@ -551,7 +561,7 @@ impl App {
             sh.next_id += 1;
             let (ra, dec) = d.dir.to_radec();
             let inv = self.gen.investigators[d.inv].name.clone();
-            if d.priority >= 9 {
+            if d.priority >= 9 && self.rate <= 60.0 {
                 sh.log("warn", format!("ToO request #{id} from {inv}: {} — {} × {:.0} s, priority {}", d.target_name, d.telescopes, d.exposure_s, d.priority));
             }
             self.science.cases[d.case].submitted += 1;
@@ -642,6 +652,139 @@ impl App {
             s.frames += got / sub;
             s.bytes += got / sub * frame_bytes;
         }
+    }
+
+    /// Planetary-defence exercise: advance it, task follow-up eyes, log events.
+    pub fn defence_step(&mut self, dt: f64) {
+        let Some(sc) = self.defence.as_mut() else { return };
+        let search = self.obs.job.iter().filter(|&&j| matches!(obs::job_tag(j), obs::TAG_SURVEY | obs::TAG_NEO)).count();
+        let mut locked = 0;
+        if let (Some(id), Some(w)) = (sc.campaign, &self.web) {
+            if let Some(c) = w.lock().unwrap().campaigns.iter().find(|c| c.id == id && c.active) {
+                locked = c.locked_now;
+            }
+        }
+        let hw = crate::imaging::Hardware::from_obs(&self.obs_params);
+        let inp = crate::defence::StepIn {
+            jd: self.jd,
+            dt_s: dt,
+            sun: self.bodies[0].dir,
+            moon: self.bodies[1].dir,
+            o: &self.obs_params,
+            hw: &hw,
+            search_eyes: search,
+            locked_eyes: locked,
+        };
+        sc.step(&inp);
+        let Some(web) = self.web.clone() else {
+            sc.events.clear();
+            return;
+        };
+        let mut sh = web.lock().unwrap();
+        if sc.discovered() && sc.campaign.is_none() && !sc.impacted {
+            let (ra, dec) = (sc.now.ra_deg, sc.now.dec_deg);
+            if crate::server::start_campaign(&mut sh, None, Some(ra), Some(dec), Some(sc.cfg.eyes), Some(60.0), None).is_ok() {
+                let id = sh.next_cid - 1;
+                if let Some(c) = sh.campaigns.iter_mut().find(|c| c.id == id) {
+                    c.target_name = sc.designation.clone();
+                }
+                sc.campaign = Some(id);
+            }
+        }
+        if let Some(id) = sc.campaign {
+            if let Some(c) = sh.campaigns.iter_mut().find(|c| c.id == id) {
+                if sc.impacted {
+                    if c.active {
+                        c.active = false;
+                        c.stopped_utc = Some(sh_utc(self.jd));
+                        c.assigned_now = 0;
+                        c.locked_now = 0;
+                    }
+                } else {
+                    c.dir = V3::from_radec(sc.now.ra_deg.to_radians(), sc.now.dec_deg.to_radians());
+                    c.ra_deg = sc.now.ra_deg;
+                    c.dec_deg = sc.now.dec_deg;
+                }
+            }
+        }
+        for (lvl, m) in sc.events.drain(..) {
+            sh.log(lvl, m);
+        }
+    }
+
+    pub fn defence_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Planetary defence exercise").strong());
+        let mut sr = self.search_share * 100.0;
+        ui.add(egui::Slider::new(&mut sr, 0.0..=50.0).text("% of fleet held for NEO search"))
+            .on_hover_text("Telescopes the science programme may not use; they keep surveying and can discover new objects.");
+        self.search_share = sr / 100.0;
+        let presets = crate::defence::presets();
+        if let Some(sc) = &self.defence {
+            let t = (sc.impact_jd - self.jd) * 86_400.0;
+            ui.label(RichText::new(format!("{} · {} · {:.1} Mt", sc.designation, sc.cfg.name, sc.energy_mt)).small());
+            ui.label(RichText::new(if sc.impacted { "Impact has occurred.".to_string() } else { format!("Impact in {} · V = {:.1} · {:.0} km away", crate::defence::fmt_dur(t), sc.now.v_mag, sc.now.dist_km) }).small());
+            for s in sc.systems() {
+                ui.label(RichText::new(format!(
+                    "{}: {} · IP {}",
+                    s.name,
+                    s.warning_s.map(|w| format!("found {} before impact", crate::defence::fmt_dur(w))).unwrap_or_else(|| "not found".into()),
+                    s.ip.map(|p| format!("{:.3} %", p * 100.0)).unwrap_or_else(|| "-".into())
+                )).small());
+            }
+            if ui.button("End exercise").clicked() {
+                if let (Some(id), Some(w)) = (sc.campaign, &self.web) {
+                    let mut sh = w.lock().unwrap();
+                    if let Some(c) = sh.campaigns.iter_mut().find(|c| c.id == id) {
+                        c.active = false;
+                    }
+                    sh.log("info", "Planetary defence exercise ended".to_string());
+                }
+                self.defence = None;
+            }
+            return;
+        }
+        egui::ComboBox::from_id_source("pd_preset")
+            .selected_text(presets[self.pd_preset.min(presets.len() - 1)].name.clone())
+            .width(300.0)
+            .show_ui(ui, |ui| {
+                for (i, p) in presets.iter().enumerate() {
+                    if ui.selectable_label(self.pd_preset == i, p.name.clone()).clicked() {
+                        self.pd_preset = i;
+                        self.pd_cfg = p.clone();
+                    }
+                }
+            });
+        let c = &mut self.pd_cfg;
+        ui.add(egui::Slider::new(&mut c.diameter_m, 5.0..=1000.0).logarithmic(true).text("diameter (m)"));
+        ui.add(egui::Slider::new(&mut c.days, 0.5..=120.0).logarithmic(true).text("days to impact"));
+        ui.add(egui::Slider::new(&mut c.v_inf_kms, 3.0..=40.0).text("v-infinity (km/s)"));
+        ui.add(egui::Slider::new(&mut c.radiant_elong_deg, 20.0..=180.0).text("radiant elongation from Sun (deg)"))
+            .on_hover_text("Below ~60° it comes out of the daytime sky, where ground surveys cannot look.");
+        ui.add(egui::Slider::new(&mut c.eyes, 1..=500).logarithmic(true).text("follow-up eyes"));
+        if ui.button("Start exercise").clicked() {
+            let mut cfg = c.clone();
+            cfg.name = if presets.iter().any(|p| p.name == cfg.name && p.diameter_m == cfg.diameter_m && p.days == cfg.days) { cfg.name } else { "Custom scenario".into() };
+            self.start_defence(cfg);
+        }
+    }
+
+    pub fn start_defence(&mut self, cfg: crate::defence::Config) {
+        let sc = crate::defence::Scenario::new(cfg, self.jd);
+        // About two and a half minutes of wall time for the whole exercise.
+        self.rate = (sc.cfg.days * 86_400.0 / 150.0).clamp(1.0, 86_400.0).round();
+        self.playing = true;
+        if let Some(w) = &self.web {
+            let mut sh = w.lock().unwrap();
+            sh.log(
+                "warn",
+                format!(
+                    "PLANETARY DEFENCE EXERCISE started: undiscovered {:.0} m object on an impact course (simulated). Impact {}.",
+                    sc.cfg.diameter_m,
+                    crate::astro::format_utc(sc.impact_jd)
+                ),
+            );
+        }
+        self.defence = Some(sc);
     }
 
     pub fn science_panel(&mut self, ui: &mut egui::Ui) {
@@ -740,7 +883,9 @@ impl App {
             "rate": self.rate,
             "mode": self.mode.key(),
             "public_share": self.public_share,
+            "defence": self.defence.as_ref().map(|d| d.json(self.jd)),
             "programme": {
+                "search_share": self.search_share,
                 "on": self.gen.on, "load": self.gen.load, "investigators": self.gen.investigators.len(),
                 "active": self.gen.on && !matches!(self.mode, Mode::Survey | Mode::NeoSweep),
             },
@@ -1082,4 +1227,8 @@ impl App {
             self.mode = Mode::Queue;
         }
     }
+}
+
+fn sh_utc(jd: f64) -> String {
+    crate::astro::format_utc(jd)
 }

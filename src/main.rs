@@ -6,6 +6,7 @@ mod astro;
 mod attitude;
 mod catalog;
 mod constellation;
+mod defence;
 mod draw;
 mod imaging;
 mod math;

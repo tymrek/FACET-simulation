@@ -98,6 +98,13 @@ pub struct App {
     pub stare_eyes: u32,
     /// Synthetic investigators submitting work, and the science-return ledger.
     pub gen: crate::programme::Generator,
+    /// Planetary-defence exercise, its editable configuration, and the share
+    /// of the fleet held back from the programme to keep searching.
+    pub defence: Option<crate::defence::Scenario>,
+    pub pd_cfg: crate::defence::Config,
+    pub pd_preset: usize,
+    pub pending_defence: bool,
+    pub search_share: f64,
     pub science: crate::programme::Science,
     /// Campaign targets given on the command line, started once web is up.
     pub pending_stares: Vec<String>,
@@ -185,6 +192,11 @@ impl App {
             logged_fleet_n: 0,
             stare_eyes: 10,
             gen: crate::programme::Generator::new(120, 0x5EED_FACE_7),
+            defence: None,
+            pd_cfg: crate::defence::presets()[0].clone(),
+            pd_preset: 0,
+            pending_defence: false,
+            search_share: 0.10,
             science: crate::programme::Science::default(),
             pending_stares: Vec::new(),
         };
@@ -199,6 +211,11 @@ impl App {
                     eprintln!("facet-sim: --stare {t}: {e}");
                 }
             }
+        }
+        if app.pending_defence {
+            app.pending_defence = false;
+            let cfg = app.pd_cfg.clone();
+            app.start_defence(cfg);
         }
         app
     }
@@ -252,6 +269,14 @@ impl App {
                 "--target-eyes" => self.obs_params.target_eyes = val().parse().unwrap_or(25),
                 "--click-target" => self.click_target = true,
                 "--no-programme" => self.gen.on = false,
+                "--search-share" => self.search_share = (val().parse::<f64>().unwrap_or(10.0) / 100.0).clamp(0.0, 1.0),
+                "--defence" | "--defense" => {
+                    let p = crate::defence::presets();
+                    let i = val().parse::<usize>().unwrap_or(1).clamp(1, p.len()) - 1;
+                    self.pd_preset = i;
+                    self.pd_cfg = p[i].clone();
+                    self.pending_defence = true;
+                }
                 "--load" => self.gen.load = val().parse::<f64>().unwrap_or(1.5).clamp(0.0, 10.0),
                 "--teams" => {
                     let n = val().parse().unwrap_or(120);
@@ -363,6 +388,7 @@ impl App {
         obs::advance_attitudes(&mut self.obs, &ag, dt_sim, target);
         self.queue_credit();
         self.science_account(dt_sim);
+        self.defence_step(dt_sim);
         self.stare_credit(dt_sim);
         self.publish_status(now);
 
@@ -635,6 +661,8 @@ impl App {
         self.stats(ui);
         ui.separator();
 
+        self.defence_panel(ui);
+        ui.separator();
         self.science_panel(ui);
         ui.separator();
         self.web_panel(ui);

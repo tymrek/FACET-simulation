@@ -15,6 +15,27 @@
 </header>
 
 <main class="opsgrid">
+  <section class="span" id="pd_sec" hidden>
+    <div class="panel pd">
+      <div class="pdhead">
+        <span class="pdbadge" id="pd_state">EXERCISE</span>
+        <span class="pdname" id="pd_name"></span>
+        <span class="pdcount" id="pd_count"></span>
+      </div>
+      <div class="small muted" id="pd_sub"></div>
+      <div class="pdgrid">
+        <div>
+          <table class="kv pdcmp"><thead><tr><th></th><th>FACET + ground</th><th>Ground only</th></tr></thead><tbody id="pd_cmp"></tbody></table>
+        </div>
+        <div>
+          <canvas id="pd_chart" class="pdchart"></canvas>
+          <div class="small muted">Impact probability (log) over the decision window. Dots: discovery. Linear b-plane method.</div>
+        </div>
+        <div><table class="kv"><tbody id="pd_now"></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
   <!-- Fleet -->
   <section class="col">
     <div class="panel">

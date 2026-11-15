@@ -161,6 +161,14 @@ class SkyMap {
       g.globalAlpha = 1;
       if (loud) this.label(x, y, `#${r.id}`, col, 10);
     }
+    // Planetary-defence object (once operators know about it)
+    const pd = st.defence;
+    if (pd && pd.position_known && pd.state !== "impacted") {
+      const [x, y] = this.project(pd.now.ra_deg, pd.now.dec_deg);
+      g.strokeStyle = "#ff4d4d"; g.lineWidth = 2 * this.dpr; const r = 9 * this.dpr;
+      g.beginPath(); g.moveTo(x, y - r); g.lineTo(x + r, y + r * 0.8); g.lineTo(x - r, y + r * 0.8); g.closePath(); g.stroke();
+      this.label(x + 12 * this.dpr, y - 10 * this.dpr, `${pd.designation.split(" (")[0]} · IP ${pd.systems[0].ip == null ? "?" : (pd.systems[0].ip * 100).toFixed(pd.systems[0].ip > 0.1 ? 0 : 2) + "%"}`, "#ff4d4d", 11);
+    }
     // STARE campaigns
     for (const c of st.campaigns || []) {
       if (!c.active) continue;
