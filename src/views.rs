@@ -278,6 +278,22 @@ impl App {
                 }
             }
         }
+        if self.traffic.cfg.show {
+            use crate::traffic::Pop;
+            for (o, &p) in self.traffic.objs.iter().zip(&self.traffic.pos) {
+                if occluded(p) {
+                    continue;
+                }
+                if let Some(q) = proj(p) {
+                    let (r, col) = match o.pop {
+                        Pop::Starlink => (0.9, rgba(150, 200, 255, 0.28)),
+                        Pop::OneWeb => (1.3, rgba(200, 140, 255, 0.6)),
+                        _ => (1.0, rgba(170, 170, 170, 0.45)),
+                    };
+                    b.point(q, r, col);
+                }
+            }
+        }
         let sr = (3.4 - 0.5 * (n as f32).log10()).max(1.1);
         for i in 0..n {
             if let Some(p) = vis[i] {

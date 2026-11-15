@@ -105,6 +105,8 @@ pub struct App {
     pub pd_preset: usize,
     pub pending_defence: bool,
     pub search_share: f64,
+    /// Other operators' satellites and debris: data relay, streaks, conjunctions.
+    pub traffic: crate::traffic::Traffic,
     pub science: crate::programme::Science,
     /// Campaign targets given on the command line, started once web is up.
     pub pending_stares: Vec<String>,
@@ -197,6 +199,7 @@ impl App {
             pd_preset: 0,
             pending_defence: false,
             search_share: 0.10,
+            traffic: crate::traffic::Traffic::new(Default::default(), jd0_for_traffic(), 550.0),
             science: crate::programme::Science::default(),
             pending_stares: Vec::new(),
         };
@@ -269,6 +272,21 @@ impl App {
                 "--target-eyes" => self.obs_params.target_eyes = val().parse().unwrap_or(25),
                 "--click-target" => self.click_target = true,
                 "--no-programme" => self.gen.on = false,
+                "--starlink" => self.traffic.cfg.starlink_n = val().parse().unwrap_or(9_950),
+                "--starlink-alt" => self.traffic.cfg.starlink_alt_km = val().parse().unwrap_or(480.0),
+                "--no-oneweb" => self.traffic.cfg.oneweb = false,
+                "--other-objects" => self.traffic.cfg.other_n = val().parse().unwrap_or(1_500),
+                "--no-relay" => self.traffic.cfg.relay = false,
+                "--no-streak-avoidance" => self.traffic.cfg.streak_avoidance = false,
+                "--product" => {
+                    use crate::traffic::Product;
+                    self.traffic.cfg.product = match val().as_str() {
+                        "raw" => Product::Raw,
+                        "coadded" | "coadd" => Product::Coadded,
+                        "catalogue" | "catalog" => Product::Catalogue,
+                        _ => Product::Compressed,
+                    };
+                }
                 "--search-share" => self.search_share = (val().parse::<f64>().unwrap_or(10.0) / 100.0).clamp(0.0, 1.0),
                 "--defence" | "--defense" => {
                     let p = crate::defence::presets();
@@ -389,6 +407,7 @@ impl App {
         self.queue_credit();
         self.science_account(dt_sim);
         self.defence_step(dt_sim);
+        self.traffic_step(dt_sim);
         self.stare_credit(dt_sim);
         self.publish_status(now);
 
@@ -663,6 +682,8 @@ impl App {
 
         self.defence_panel(ui);
         ui.separator();
+        self.traffic_panel(ui);
+        ui.separator();
         self.science_panel(ui);
         ui.separator();
         self.web_panel(ui);
@@ -841,4 +862,8 @@ pub fn fmt_duration(s: f64) -> String {
     } else {
         format!("{:.1} days", s / 86_400.0)
     }
+}
+
+fn jd0_for_traffic() -> f64 {
+    crate::astro::jd_now()
 }

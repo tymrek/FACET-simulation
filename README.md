@@ -399,6 +399,91 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## Space traffic, data path and neighbourhood notices
+
+Other operators' satellites and debris share FACET's sky and altitude. The
+desktop *Space traffic & data path* panel and the ops console's matching
+panel cover three operational questions. The populations are modelled as
+circular orbits with J2:
+
+* **Starlink**: about 9,950 satellites at **480 km**, matching SpaceX's 2026
+  move of its 550 km shell down to 480 km. Shells are at 53°, 43°, 70° and
+  97.6°; the split between them is assumed.
+* **OneWeb**: 648 satellites in 12 planes at 87.9° and about 1,200 km.
+* **Other objects**: an **assumed** population of 1,500 pieces of debris,
+  other operators' satellites and small satellites within ±50 km of FACET's
+  altitude. About 30 % are active and share ephemerides.
+
+Flags: `--starlink N`, `--starlink-alt KM`, `--no-oneweb`,
+`--other-objects N`.
+
+### Data path
+
+Raw data scales with the fleet: about 150 TB/day at 1,000 satellites and
+about 1.5 PB/day at 10,000. The panel compares four on-board products:
+
+| Product | Volume | Note |
+|---|---|---|
+| Raw 16-bit frames | 1 | |
+| Lossless compressed | 1/2.5 | Rice; ratio assumed |
+| Co-added + compressed | 1/10 | 4 sub-frames co-added; ratio assumed |
+| Source catalogue + cutouts | 1 % | assumed |
+
+It compares them against two ways down:
+
+* **Starlink optical relay** (`--no-relay` to disable): an **assumed**
+  service, since buying relay access is not an established commercial
+  offering. Defaults are 10 Gb/s per FACET terminal and 1,500 km range;
+  line of sight must clear 100 km altitude.
+* **Direct-to-ground stations** (generic, assumed): 20 polar-heavy sites ×
+  2 antennas × 1.2 Gb/s × 70 %.
+
+It reports utilisation, capacity margin, how long on-board storage takes to
+fill when demand exceeds capacity, alert latency via the relay (about
+30 ms), and the median wait for a ground pass. At 10,000 satellites, raw
+frames are 4× what the generic ground network can take and compressed
+frames 1.6×. Co-adding or catalogue products fit the ground network; the
+relay carries anything. Flag: `--product raw|compressed|coadded|catalogue`.
+
+### Streak avoidance
+
+Each step a sample of integrating telescopes is checked for sunlit
+satellites (Starlink, OneWeb, other FACETs) crossing the field during the
+sub-exposure. Paths come from known ephemerides and are tested in the
+gnomonic plane, with line of sight clearing the atmosphere.
+
+* With avoidance **on**, the exposure is gated for the crossing plus 2 s.
+  The lost time is charged to the science ledger.
+* With it **off** (`--no-streak-avoidance`), the panel reports the share of
+  frames that would carry a streak.
+
+OneWeb, above FACET, crosses upward-looking fields. Starlink, below FACET,
+only appears when a telescope points low toward the limb.
+
+### Neighbourhood notices
+
+Every FACET satellite is re-screened every 6 h over a 30 h window against
+objects within 15 km of its altitude:
+
+* Candidate passes are found at the mutual line of nodes, then refined to
+  time of closest approach (TCA) and miss distance by golden-section search
+  on the true separation. The unit test checks this against brute force to
+  10 m.
+* Probability of collision (Pc) uses the 2-D encounter-plane formula with
+  radial / in-track / cross-track covariances that grow with time to TCA.
+  The covariances are assumed: GNSS-quality for FACET,
+  operator-ephemeris quality for active objects, catalogue quality for
+  debris. Hard-body radius is 5 m.
+* Notices are issued for a miss under 1 km or Pc ≥ 1e-6. At Pc ≥ 1e-4 (a
+  common operator threshold) FACET plans an along-track avoidance
+  manoeuvre sized for a 5σ in-track separation; Δv is logged. Manoeuvres
+  are logged, not flown: the slot is assumed to be restored.
+* A circular Starlink shell at 480 km never comes within 70 km of FACET at
+  550 km. Starlink notices would come only from satellites in transit.
+
+The panel reports close approaches, notices, high-risk events and
+manoeuvres per day, Δv per satellite per year, and the closest approach.
+
 ## Planetary defence exercise
 
 A synthetic Earth impactor, played out twice side by side: **FACET + ground**

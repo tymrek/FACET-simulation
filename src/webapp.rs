@@ -619,6 +619,13 @@ impl App {
         let omega = o.fov_deg * o.fov_deg;
         let sub = o.exp_s.min(o.sub_max_s).max(1.0);
         let frame_bytes = o.sensor_px * (o.sensor_px * 2.0 / 3.0) * 2.0; // 3:2 sensor, 16-bit
+        // Streak avoidance gates exposures around predicted crossings: that
+        // time is not integrated.
+        let gate = if self.traffic.cfg.streak_avoidance && self.traffic.streaks.exposed_s > 0.0 {
+            1.0 - self.traffic.streaks.lost_s / self.traffic.streaks.exposed_s
+        } else {
+            1.0
+        };
         let s = &mut self.science;
         s.elapsed_s += dt;
         let n = self.obs.att.len();
@@ -633,7 +640,7 @@ impl App {
                 s.idle_s += dt;
                 continue;
             }
-            let got = self.obs.obs_dt[i].clamp(0.0, dt);
+            let got = self.obs.obs_dt[i].clamp(0.0, dt) * gate;
             s.integrating_s += got;
             s.overhead_s += dt - got;
             if got <= 0.0 {
@@ -787,6 +794,82 @@ impl App {
         self.defence = Some(sc);
     }
 
+    /// Space traffic: propagate the other populations, sample streaks,
+    /// screen conjunctions, and pass notices to the event log.
+    pub fn traffic_step(&mut self, dt: f64) {
+        let o = &self.obs_params;
+        let n = self.shell.len();
+        let bs: Vec<Option<V3>> = (0..n)
+            .map(|i| {
+                let a = &self.obs.att[i];
+                (a.job != 0 && !self.obs.hold.get(i).copied().unwrap_or(false) && matches!(a.phase(), crate::attitude::Phase::Locked)).then_some(a.dir)
+            })
+            .collect();
+        let f = crate::traffic::FacetState {
+            jd: self.jd,
+            dt_s: dt,
+            sun: self.bodies[0].dir,
+            alt_km: self.shell.params.alt_km,
+            inc: self.shell.params.inc_deg.to_radians(),
+            raan: &self.shell.raan_now,
+            u: &self.shell.u_now,
+            pos: &self.shell.pos,
+            boresight: &bs,
+            fov_deg: o.fov_deg,
+            sub_s: o.exp_s.min(o.sub_max_s),
+        };
+        self.traffic.step(&f);
+        self.traffic.dtg_sample(self.jd, self.shell.params.alt_km, f.inc, &self.shell.raan_now, &self.shell.u_now);
+        if let Some(w) = &self.web {
+            let mut sh = w.lock().unwrap();
+            for (l, m) in self.traffic.events.drain(..) {
+                sh.log(l, m);
+            }
+        } else {
+            self.traffic.events.clear();
+        }
+    }
+
+    pub fn traffic_panel(&mut self, ui: &mut egui::Ui) {
+        use crate::traffic::Product;
+        ui.label(RichText::new("Space traffic & data path").strong());
+        let c = &mut self.traffic.cfg;
+        ui.checkbox(&mut c.show, "Show other satellites and debris");
+        ui.add(egui::Slider::new(&mut c.starlink_n, 0..=40_000).logarithmic(true).text("Starlink satellites"));
+        ui.add(egui::Slider::new(&mut c.starlink_alt_km, 300.0..=600.0).text("Starlink altitude (km)"));
+        ui.checkbox(&mut c.oneweb, "OneWeb (648 at 1,200 km)");
+        ui.add(egui::Slider::new(&mut c.other_n, 0..=10_000).logarithmic(true).text("other objects near FACET"))
+            .on_hover_text("Debris, other operators and small satellites within ± the band of FACET's altitude (assumed population).");
+        ui.checkbox(&mut c.streak_avoidance, "Streak avoidance (gate exposures around predicted crossings)");
+        ui.checkbox(&mut c.relay, "Starlink optical relay");
+        ui.add(egui::Slider::new(&mut c.relay_gbps, 0.1..=100.0).logarithmic(true).text("relay terminal Gb/s"));
+        ui.add(egui::Slider::new(&mut c.stations, 1..=24).text("ground stations"));
+        ui.add(egui::Slider::new(&mut c.station_gbps, 0.1..=10.0).logarithmic(true).text("station link Gb/s"));
+        egui::ComboBox::from_label("downlinked product").selected_text(c.product.label()).width(260.0).show_ui(ui, |ui| {
+            for p in Product::ALL {
+                ui.selectable_value(&mut c.product, p, p.label());
+            }
+        });
+        let raw = self.science.bytes / 1e12 / (self.science.elapsed_s / 86_400.0).max(1e-9);
+        let j = self.traffic.json(raw, self.shell.len());
+        let d = &j["data"];
+        let f = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0);
+        ui.label(RichText::new(format!(
+            "Demand {:.1} TB/day ({}) · relay {:.0} TB/day · ground {:.0} TB/day",
+            f(&d["demand_tb_day"]), self.traffic.cfg.product.label(), f(&d["relay_cap_tb_day"]), f(&d["dtg_cap_tb_day"])
+        )).small());
+        let s = &j["streaks"];
+        ui.label(RichText::new(format!(
+            "Streaked frames without avoidance {:.2} % · avoidance costs {:.3} % of integration",
+            f(&s["streaked_pct"]), f(&s["avoidance_cost_pct"])
+        )).small());
+        let cj = &j["conjunctions"]["per_day"];
+        ui.label(RichText::new(format!(
+            "Notices {:.1}/day · high-risk {:.2}/day · manoeuvres {:.2}/day",
+            f(&cj["notices"]), f(&cj["high_risk"]), f(&cj["manoeuvres"])
+        )).small());
+    }
+
     pub fn science_panel(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Science programme (simulated investigators)").strong());
         ui.checkbox(&mut self.gen.on, "Investigators submit requests");
@@ -876,6 +959,10 @@ impl App {
             }
             s
         };
+        let traffic_json = {
+            let raw = self.science.bytes / 1e12 / (self.science.elapsed_s / 86_400.0).max(1e-9);
+            self.traffic.json(raw, n)
+        };
         let status = serde_json::json!({
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,
@@ -884,6 +971,7 @@ impl App {
             "mode": self.mode.key(),
             "public_share": self.public_share,
             "defence": self.defence.as_ref().map(|d| d.json(self.jd)),
+            "traffic": traffic_json,
             "programme": {
                 "search_share": self.search_share,
                 "on": self.gen.on, "load": self.gen.load, "investigators": self.gen.investigators.len(),
@@ -929,6 +1017,9 @@ impl App {
             "footprint_stride": stride,
         });
         let fleet_due = self.last_fleet.map_or(true, |t| now.duration_since(t).as_secs_f64() >= 1.0);
+        if fleet_due {
+            self.traffic.relay_sample(&self.shell.pos);
+        }
         let fleet = if fleet_due {
             self.last_fleet = Some(now);
             Some(self.fleet_json())
@@ -994,7 +1085,12 @@ impl App {
             })
             .collect();
         let sub = ll(self.bodies[0].dir * 1.0e8);
-        serde_json::json!({ "utc": astro::format_utc(self.jd), "subsolar": sub, "sats": sats }).to_string()
+        let traffic: Vec<[f32; 3]> = if self.traffic.cfg.show {
+            self.traffic.map_points(self.jd).into_iter().map(|(a, b, c)| [(a * 10.0).round() / 10.0, (b * 10.0).round() / 10.0, c as f32]).collect()
+        } else {
+            Vec::new()
+        };
+        serde_json::json!({ "utc": astro::format_utc(self.jd), "subsolar": sub, "sats": sats, "traffic": traffic }).to_string()
     }
 
     /// Detail record for one satellite (the console's inspector).

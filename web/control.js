@@ -79,6 +79,11 @@ class GroundMap {
     // subsolar point
     const [sx, sy] = this.xy(sl, sb);
     g.fillStyle = "#ffd25a"; g.beginPath(); g.arc(sx, sy, 5 * this.dpr, 0, 7); g.fill();
+    // other operators and debris (thinned)
+    if (fleet.traffic && fleet.traffic.length) {
+      const TC = ["rgba(140,200,255,0.30)", "rgba(200,140,255,0.75)", "rgba(170,170,170,0.55)"];
+      for (const [lo, la, p] of fleet.traffic) { const [x, y] = this.xy(lo, la); g.fillStyle = TC[p] || TC[2]; g.fillRect(x - this.dpr, y - this.dpr, 2 * this.dpr, 2 * this.dpr); }
+    }
     // satellites
     const r = (fleet.sats.length > 3000 ? 1.2 : fleet.sats.length > 500 ? 1.7 : 2.4) * this.dpr;
     for (const code of [0, 1, 3, 2, 4, 5]) {
@@ -336,6 +341,56 @@ function drawIpChart(c, d) {
   g.fillStyle = "#ffb44a"; g.fillText("Ground only", L + 110 * dpr, T + 12 * dpr);
 }
 
+// ---------------------------------------------------------------- space traffic
+function fmtPc(p) { return p >= 1e-12 ? p.toExponential(1) : "< 1e-12"; }
+function renderTraffic(s) {
+  const t = s.traffic; if (!t) return;
+  const d = t.data, st = t.streaks, c = t.conjunctions, pd = c.per_day;
+  $("tr_counts").textContent = `Starlink ${t.counts.starlink.toLocaleString()} at ${t.config.starlink_alt_km} km · OneWeb ${t.counts.oneweb} at 1,200 km · ${t.counts.other.toLocaleString()} other objects within ±${t.config.other_band_km} km of FACET (assumed)`;
+  const pct = x => `${(x * 100).toFixed(x < 0.01 ? 2 : 0)} %`;
+  $("tr_data").replaceChildren(
+    tile("raw data / day", `${d.raw_tb_day.toFixed(1)} TB`, "16-bit full frames from the science ledger"),
+    tile("downlinked / day", `${d.demand_tb_day.toFixed(1)} TB`, d.product_label),
+    tile("relay capacity", t.config.relay ? `${fmtNum(d.relay_cap_tb_day)} TB/day` : "off", `Starlink optical relay (assumed service): ${t.config.relay_gbps} Gb/s per FACET terminal, ${pct(d.relay_linked_frac)} of satellites linked, mean range ${Math.round(d.relay_mean_range_km)} km`),
+    tile("ground-station capacity", `${fmtNum(d.dtg_cap_tb_day)} TB/day`, `${t.config.stations} stations × ${t.config.antennas_per_station} antennas × ${t.config.station_gbps} Gb/s × 70 % (assumed)`),
+    tile("alert latency via relay", d.relay_latency_ms == null ? "–" : `${Math.round(d.relay_latency_ms)} ms`, "FACET → Starlink → gateway → operations (model)"),
+    tile("wait for a ground pass", fmtDur(d.dtg_median_wait_s), `median; a satellite is in view of a station ${pct(d.dtg_in_view_frac)} of the time`),
+    tile("capacity margin", `${d.margin.toFixed(d.margin < 10 ? 1 : 0)}×`, "(relay + ground) / downlinked volume"),
+    tile("on-board storage fills", d.storage_fill_days == null ? "never" : fmtDur(d.storage_fill_days * 86400), `${t.config.storage_tb} TB per satellite (assumed)`),
+  );
+  $("tr_products").replaceChildren(...d.products.map(p => el("tr", { class: p.selected ? "sel" : "" },
+    el("td", {}, p.label), el("td", { class: "num" }, p.tb_day.toFixed(1)),
+    el("td", { class: "num" + (p.relay_util > 1 ? " warn" : "") }, p.relay_util == null ? "–" : pct(p.relay_util)),
+    el("td", { class: "num" + (p.dtg_util > 1 ? " warn" : "") }, pct(p.dtg_util)))));
+  const pk = st.per_1000_frames;
+  $("tr_streaks").replaceChildren(
+    tile("frames that would be streaked", `${st.streaked_pct.toFixed(2)} %`, `sampled ${fmtNum(st.frames)} exposures`),
+    tile("avoidance", st.avoidance ? "ON" : "OFF", "Exposures are gated around predicted crossings"),
+    tile("integration lost to gating", `${st.avoidance_cost_pct.toFixed(2)} %`),
+    tile("Starlink / 1000 frames", pk.starlink.toFixed(1), "below FACET: only when pointing low, toward the limb"),
+    tile("OneWeb / 1000 frames", pk.oneweb.toFixed(1), "above FACET: crosses upward-looking fields"),
+    tile("FACET / 1000 frames", pk.facet.toFixed(1), "FACET's own neighbours"),
+  );
+  $("tr_streak_note").textContent = st.avoidance
+    ? "Crossings are predicted from published ephemerides; the shutter closes or the sub-frame is dropped for the few seconds a satellite is in the field."
+    : "Avoidance is off: streaked frames are delivered and must be masked downstream.";
+  $("tr_conj").replaceChildren(
+    tile("close approaches < 5 km / day", fmtNum(pd.approaches_5km, 1)),
+    tile("notices / day", fmtNum(pd.notices, 1), "miss < 1 km or Pc ≥ 1e-6"),
+    tile("high risk / day", fmtNum(pd.high_risk, 2), "Pc ≥ 1e-5"),
+    tile("manoeuvres / day", fmtNum(pd.manoeuvres, 2), `Pc ≥ ${t.config.pc_manoeuvre.toExponential(0)}`),
+    tile("Δv per satellite per year", `${c.dv_per_sat_year_ms.toFixed(2)} m/s`),
+    tile("closest approach", c.stats.closest_km == null ? "–" : `${Math.round(c.stats.closest_km * 1000)} m`),
+  );
+  const nowJd = s.jd;
+  $("tr_notices").replaceChildren(...c.upcoming.map(n => el("tr", { class: `lvl-${n.level}` },
+    el("td", {}, `T−${fmtDur((n.tca_jd - nowJd) * 86400)}`),
+    el("td", {}, `FACET-${String(n.facet + 1).padStart(5, "0")}`), el("td", {}, n.object),
+    el("td", { class: "num" }, `${Math.round(n.miss_km * 1000)} m`), el("td", { class: "num" }, fmtPc(n.pc)),
+    el("td", { class: "small" }, n.action + (n.dv_ms ? ` (Δv ${(n.dv_ms * 1000).toFixed(0)} mm/s)` : "")))));
+  if (!c.upcoming.length) $("tr_notices").append(el("tr", {}, el("td", { class: "muted small", colspan: 6 }, "No notices in the screening window.")));
+}
+
 // ---------------------------------------------------------------- science return
 const USE = [["programme", "Science programme", "#4fa3ff"], ["public", "Public requests", "#5fe0a0"], ["stare", "STARE", "#c58bff"],
              ["director", "Director target", "#ffd166"], ["survey", "Zenith survey", "#7c8aa5"], ["neo_sweep", "NEO sweep", "#ff9f6e"]];
@@ -467,6 +522,7 @@ function render(s) {
   renderStares(s);
   renderScience(s);
   renderDefence(s);
+  renderTraffic(s);
   for (const c of (s.campaigns || []).filter(c => c.active)) {
     if (c.paused) alerts.push(["info", `STARE ${c.target_name} paused: ${String(c.blocked).toLowerCase()}`]);
     else if (c.eligible_s > 0 && c.locked_now === 0 && !c.blocked) alerts.push(["warn", `STARE #${c.id} on ${c.target_name}: no eyes locked`]);

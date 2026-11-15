@@ -16,6 +16,7 @@ mod programme;
 mod server;
 mod webapp;
 mod tle;
+mod traffic;
 mod views;
 
 fn main() -> eframe::Result<()> {

@@ -71,7 +71,7 @@
         <span><i style="background:#e9e2d0"></i>idle · sunlit</span>
         <span><i style="background:#5f73b4"></i>idle · eclipse</span>
         <span><i style="background:#ff4b4b"></i>safe hold</span>
-        <span class="muted">click a satellite to inspect</span>
+        <span class="muted">faint dots: Starlink · violet: OneWeb · grey: other objects · click a satellite to inspect</span>
       </div>
     </div>
     <div class="panel">
@@ -131,6 +131,29 @@
         <div class="scroll"><table class="queue"><thead><tr><th>Science case</th><th class="num">Deadline</th><th class="num">Submitted</th><th class="num">Open</th><th class="num">Done</th><th class="num">Expired</th><th class="num">On time</th><th class="num">Median response</th><th class="num">Median depth</th><th class="num">Tel.-hours</th></tr></thead>
         <tbody id="sci_cases"></tbody></table></div>
         <div><h3 class="small muted" style="margin:4px 0">Most-served investigator teams</h3><table class="queue"><tbody id="sci_top"></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="span">
+    <div class="panel">
+      <h2>Space traffic &amp; data path <span class="small muted" id="tr_counts"></span></h2>
+      <div class="trgrid">
+        <div>
+          <h3 class="small muted">Data path</h3>
+          <div class="tiles" id="tr_data"></div>
+          <table class="queue"><thead><tr><th>Downlinked product</th><th class="num">TB/day</th><th class="num">Relay load</th><th class="num">Ground load</th></tr></thead><tbody id="tr_products"></tbody></table>
+        </div>
+        <div>
+          <h3 class="small muted">Satellite streaks</h3>
+          <div class="tiles" id="tr_streaks"></div>
+          <div class="small muted" id="tr_streak_note"></div>
+        </div>
+        <div>
+          <h3 class="small muted">Neighbourhood notices (conjunctions)</h3>
+          <div class="tiles" id="tr_conj"></div>
+          <div class="scroll" style="max-height:220px"><table class="queue"><thead><tr><th>TCA</th><th>FACET</th><th>Object</th><th class="num">Miss</th><th class="num">Pc</th><th>Action</th></tr></thead><tbody id="tr_notices"></tbody></table></div>
+        </div>
       </div>
     </div>
   </section>
