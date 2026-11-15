@@ -3,6 +3,8 @@ const $ = (id) => document.getElementById(id);
 const mineKey = "facet-my-requests";
 const mine = () => { try { return JSON.parse(localStorage.getItem(mineKey) || "[]"); } catch { return []; } };
 let last = null;
+const viewer = new ResultViewer($("result"));
+const viewBtn = (r) => r.has_result ? el("button", { class: "view", onclick: () => viewer.show(r.id) }, r.state === "done" ? "Result" : "Live stack") : "";
 
 const map = new SkyMap($("sky"), (ra, dec) => {
   $("target").value = ""; $("ra").value = ra.toFixed(3); $("dec").value = dec.toFixed(3); estimate();
@@ -14,11 +16,12 @@ function stat(k, v) { return el("div", { class: "stat" }, el("div", { class: "k"
 function estimate() {
   if (!last) return;
   const t = last.telescope, n = Math.max(1, +$("tel").value || 1), e = Math.max(1, +$("exp").value || 1);
-  const lim = t.base_lim_mag + 1.25 * Math.log10(n) + 1.25 * Math.log10(e / t.base_exp_s);
+  // Background-limited scaling from the server's physical 1-telescope, 60 s limit.
+  const lim = t.lim_1tel_60s + 1.25 * Math.log10(n * e / 60);
   $("estimate").textContent =
     `Stacking ${n} × ${t.aperture_cm} cm telescopes for ${fmtDur(e)} each ≈ the light grasp of a ` +
     `${(t.aperture_cm * Math.sqrt(n) / 100).toFixed(2)} m aperture; estimated 5σ depth V ≈ ${lim.toFixed(1)} ` +
-    `(soft estimate). Field of view ${t.fov_deg}° per telescope.`;
+    `(dark sky, soft estimate; the result page computes it exactly). Field of view ${t.fov_deg}° per telescope.`;
 }
 
 function render(s) {
@@ -40,12 +43,12 @@ function render(s) {
     q.append(el("tr", { onmouseenter: () => { map.highlight = r.id; map.draw(); } },
       el("td", {}, r.id), el("td", {}, r.submitter), el("td", {}, r.target_name),
       el("td", { class: "num" }, r.telescopes), el("td", { class: "num" }, fmtDur(r.exposure_s)),
-      stateCell(r), progressCell(r)));
+      stateCell(r), progressCell(r), el("td", {}, viewBtn(r))));
   }
-  if (!q.children.length) q.append(el("tr", {}, el("td", { class: "muted small", colspan: 7 }, "The queue is empty. Be the first!")));
+  if (!q.children.length) q.append(el("tr", {}, el("td", { class: "muted small", colspan: 8 }, "The queue is empty. Be the first!")));
   const ids = mine(), m = $("mine"); m.replaceChildren();
   for (const r of s.requests.filter(r => ids.includes(r.id))) {
-    m.append(el("tr", {}, el("td", {}, `#${r.id} ${r.target_name}`), stateCell(r), progressCell(r)));
+    m.append(el("tr", {}, el("td", {}, `#${r.id} ${r.target_name}`), stateCell(r), progressCell(r), el("td", {}, viewBtn(r))));
   }
   if (!m.children.length) m.append(el("tr", {}, el("td", { class: "muted small" }, "None yet from this browser.")));
   estimate();
@@ -73,3 +76,5 @@ $("form").addEventListener("submit", async (ev) => {
     poll();
   } catch { msg.className = "msg small warn"; msg.textContent = "Could not reach the simulator."; }
 });
+// Shareable link: /?result=<id>
+{ const rid = new URLSearchParams(location.search).get("result"); if (rid) viewer.show(+rid); }

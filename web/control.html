@@ -24,6 +24,7 @@
         <span>Click the map to set the director's target.</span>
       </div>
     </div>
+    <div class="card result" id="result" hidden></div>
     <div class="card">
       <h2>Status</h2>
       <div class="stats" id="stats"></div>
@@ -74,6 +75,9 @@
         <div><label>Moon exclusion °</label><input id="moon_excl_deg" type="number" min="0" max="45"></div>
         <div><label>Limb margin °</label><input id="limb_margin_deg" type="number" min="0" max="40"></div>
         <div><label>NEO elongation °</label><input id="neo_elong_deg" type="number" min="5" max="120"></div>
+        <div><label>Jitter ″ RMS</label><input id="jitter_arcsec" type="number" min="0.1" max="5" step="0.1"></div>
+        <div><label>Read noise e⁻</label><input id="read_noise_e" type="number" min="0.5" max="10" step="0.1"></div>
+        <div><label>Max sub-frame s</label><input id="sub_max_s" type="number" min="10" max="1200"></div>
       </div>
       <div class="btns"><button class="primary" id="applytel">Apply</button></div>
     </div>

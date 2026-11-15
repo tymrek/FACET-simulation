@@ -41,7 +41,8 @@ $("applyshell").addEventListener("click", () => {
   if (!$("sso").checked) b.inc_deg = +$("inc").value;
   cmd(b);
 });
-const telKeys = ["aperture_cm", "fov_deg", "sun_excl_deg", "moon_excl_deg", "limb_margin_deg", "neo_elong_deg"];
+const telKeys = ["aperture_cm", "fov_deg", "sun_excl_deg", "moon_excl_deg", "limb_margin_deg", "neo_elong_deg", "jitter_arcsec", "read_noise_e", "sub_max_s"];
+const viewer = new ResultViewer($("result"), `?token=${encodeURIComponent(token)}`);
 $("applytel").addEventListener("click", () => {
   const b = { cmd: "telescope" }; for (const k of telKeys) b[k] = +$(k).value; cmd(b);
 });
@@ -58,6 +59,7 @@ function reqRow(r) {
   else if (["approved", "observing"].includes(r.state)) btns.append(el("button", { onclick: () => act("update") }, "Update"), " ",
                                          el("button", { class: "danger", onclick: () => act("cancel") }, "Cancel"));
   else btns.append(el("button", { onclick: () => act("requeue") }, "Re-queue"));
+  if (r.has_result) btns.append(" ", el("button", { class: "view", onclick: () => viewer.show(r.id) }, r.state === "done" ? "Result" : "Live"));
   const who = el("td", {}, r.submitter); who.title = `${r.ip} · submitted ${r.submitted_utc}${r.note ? "\n" + r.note : ""}`;
   return el("tr", { onmouseenter: () => { map.highlight = r.id; map.draw(); } },
     el("td", {}, r.id), who, el("td", {}, r.target_name, r.note ? el("div", { class: "small muted" }, r.note) : ""),
@@ -112,3 +114,4 @@ async function poll() {
   } catch { $("clock").textContent = "simulator offline"; }
 }
 setInterval(poll, 1000); poll();
+{ const rid = new URLSearchParams(location.search).get("result"); if (rid) viewer.show(+rid); }

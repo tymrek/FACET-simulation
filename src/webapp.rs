@@ -57,6 +57,7 @@ impl App {
             control_url: None,
             public_url: None,
             errors: Vec::new(),
+            results: Default::default(),
         };
         let shared = Arc::new(Mutex::new(shared));
         server::start(
@@ -147,7 +148,9 @@ impl App {
                     aperture_cm,
                     fov_deg,
                     exp_s,
-                    base_lim_mag,
+                    jitter_arcsec,
+                    read_noise_e,
+                    sub_max_s,
                     overhead_s,
                     sun_excl_deg,
                     moon_excl_deg,
@@ -164,7 +167,9 @@ impl App {
                     set(&mut o.aperture_cm, aperture_cm, 5.0, 100.0);
                     set(&mut o.fov_deg, fov_deg, 0.1, 5.0);
                     set(&mut o.exp_s, exp_s, 1.0, 3600.0);
-                    set(&mut o.base_lim_mag, base_lim_mag, 16.0, 24.0);
+                    set(&mut o.jitter_arcsec, jitter_arcsec, 0.1, 5.0);
+                    set(&mut o.read_noise_e, read_noise_e, 0.5, 10.0);
+                    set(&mut o.sub_max_s, sub_max_s, 10.0, 1200.0);
                     set(&mut o.overhead_s, overhead_s, 0.0, 120.0);
                     set(&mut o.sun_excl_deg, sun_excl_deg, 5.0, 120.0);
                     set(&mut o.moon_excl_deg, moon_excl_deg, 0.0, 45.0);
@@ -209,6 +214,10 @@ impl App {
             r.assigned_now = res.assigned as u32;
             r.blocked = res.blocked.map(String::from);
             if res.assigned > 0 {
+                if r.hw.is_none() {
+                    r.hw = Some(crate::imaging::Hardware::from_obs(&self.obs_params));
+                }
+                r.obs_jd = self.jd;
                 r.state = ReqState::Observing;
                 r.progress_s += res.assigned as f64 * dt_sim;
                 if r.progress_s >= r.required_s() {
@@ -279,7 +288,9 @@ impl App {
             },
             "telescope": {
                 "aperture_cm": o.aperture_cm, "fov_deg": o.fov_deg, "exp_s": o.exp_s,
-                "base_lim_mag": o.base_lim_mag, "base_exp_s": o.base_exp_s, "overhead_s": o.overhead_s,
+                "overhead_s": o.overhead_s,
+                "jitter_arcsec": o.jitter_arcsec, "read_noise_e": o.read_noise_e, "sub_max_s": o.sub_max_s,
+                "lim_1tel_60s": r2(crate::imaging::point_lim_mag(&crate::imaging::Hardware::from_obs(o), 60.0, 60.0f64.min(o.sub_max_s), 22.0)),
                 "sun_excl_deg": o.sun_excl_deg, "moon_excl_deg": o.moon_excl_deg,
                 "limb_margin_deg": o.limb_margin_deg, "neo_elong_deg": o.neo_elong_deg, "neo_band_deg": o.neo_band_deg,
             },

@@ -59,15 +59,25 @@ pub struct ObsParams {
     pub limb_margin_deg: f64,
     /// Height of the atmosphere treated as opaque/bright limb, km.
     pub atmo_km: f64,
-    /// ASSUMED single-telescope 5σ point-source limit at the reference exposure.
-    pub base_lim_mag: f64,
-    pub base_exp_s: f64,
     pub exp_s: f64,
     pub neo_elong_deg: f64,
     pub neo_band_deg: f64,
     pub wavelength_nm: f64,
     /// ASSUMED slew + settle + readout overhead per pointing, s.
     pub overhead_s: f64,
+    // --- Detector / optics assumptions (see imaging.rs)
+    pub obstruction: f64,
+    pub sensor_px: f64,
+    pub pixel_um: f64,
+    pub qe: f64,
+    pub throughput: f64,
+    pub read_noise_e: f64,
+    pub dark_e_s: f64,
+    pub full_well_e: f64,
+    /// Pointing jitter, arcsec RMS per axis over a sub-frame.
+    pub jitter_arcsec: f64,
+    /// Longest sub-frame (cosmic rays, drift), s.
+    pub sub_max_s: f64,
 }
 
 impl Default for ObsParams {
@@ -79,13 +89,21 @@ impl Default for ObsParams {
             moon_excl_deg: 15.0,
             limb_margin_deg: 10.0,
             atmo_km: 100.0,
-            base_lim_mag: 20.0,
-            base_exp_s: 60.0,
             exp_s: 60.0,
             neo_elong_deg: 55.0,
             neo_band_deg: 20.0,
             wavelength_nm: 550.0,
             overhead_s: 15.0,
+            obstruction: 0.33,
+            sensor_px: 9576.0,
+            pixel_um: 3.76,
+            qe: 0.8,
+            throughput: 0.75,
+            read_noise_e: 1.5,
+            dark_e_s: 0.003,
+            full_well_e: 51_000.0,
+            jitter_arcsec: 1.0,
+            sub_max_s: 300.0,
         }
     }
 }
@@ -129,7 +147,11 @@ pub fn metrics(o: &ObsParams, n: usize, max_baseline_km: f64, mosaic_tiles: usiz
     Metrics {
         area_m2: n as f64 * std::f64::consts::PI * (d / 2.0).powi(2),
         d_eq_m: d * nf.sqrt(),
-        lim_mag: o.base_lim_mag + 1.25 * nf.log10() + 1.25 * (o.exp_s / o.base_exp_s).log10(),
+        // Physical model, typical dark sky (zodiacal V 22.0 mag/arcsec²).
+        lim_mag: {
+            let hw = crate::imaging::Hardware::from_obs(o);
+            crate::imaging::point_lim_mag(&hw, nf * o.exp_s, o.exp_s.min(o.sub_max_s), 22.0)
+        },
         diffraction_arcsec: 1.22 * lam / d * 206_264.806,
         interf_uas: if n >= 2 && max_baseline_km > 0.0 {
             Some(lam / (max_baseline_km * 1000.0) * 206_264.806e6)
@@ -411,7 +433,8 @@ mod tests {
         let o = ObsParams::default();
         let m1 = metrics(&o, 1, 0.0, 0);
         let m100 = metrics(&o, 100, 0.0, 0);
-        assert!((m100.lim_mag - m1.lim_mag - 2.5).abs() < 1e-9);
+        // ~2.5 mag for 100× the light when background-limited
+        assert!((m100.lim_mag - m1.lim_mag - 2.5).abs() < 0.4, "{}", m100.lim_mag - m1.lim_mag);
         assert!((m100.d_eq_m - 2.0).abs() < 1e-9); // 10 × 20 cm
         assert!((m1.diffraction_arcsec - 0.692).abs() < 0.01);
     }

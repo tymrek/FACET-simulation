@@ -192,3 +192,72 @@ function stateCell(r) {
   else if (r.state === "observing") td.append(el("div", { class: "small muted" }, `${r.assigned_now} telescopes`));
   return td;
 }
+
+// ---------------------------------------------------------------- results
+// Render an observation result (report + images) into `box`.
+// `q` is an optional query string (e.g. "?token=…") for the director port.
+class ResultViewer {
+  constructor(box, q = "") { this.box = box; this.q = q; this.id = null; this.timer = null; }
+  async show(id) {
+    this.id = id; clearInterval(this.timer);
+    await this.load();
+    this.timer = setInterval(() => this.load(), 10000);
+    this.box.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+  close() { clearInterval(this.timer); this.id = null; this.box.replaceChildren(); this.box.hidden = true; }
+  async load() {
+    if (this.id == null) return;
+    const id = this.id, q = this.q;
+    let r;
+    try {
+      const res = await fetch(`/api/result/${id}${q}`);
+      r = await res.json();
+      if (!res.ok) { this.box.hidden = false; this.box.replaceChildren(el("h2", {}, `Request #${id}`), el("p", { class: "muted" }, r.error)); return; }
+    } catch { return; }
+    if (r.final) clearInterval(this.timer);
+    const bust = `${q ? "&" : "?"}t=${Date.now()}`;
+    const kv = (rows) => el("table", { class: "kv" }, ...rows.filter(([, v]) => v !== null && v !== undefined && v !== "")
+      .map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))));
+    const h = r.hardware, x = r.exposure, s = r.sky, m = r.results, im = r.images;
+    const fig = (src, cap) => el("figure", {}, el("img", { src, alt: cap, loading: "lazy" }), el("figcaption", { class: "small muted" }, cap));
+    this.box.hidden = false;
+    this.box.replaceChildren(
+      el("div", { class: "rhead" },
+        el("h2", {}, `Request #${r.id}: ${r.target} ${r.final ? "· final" : "· live stack"}`),
+        el("button", { onclick: () => this.close() }, "Close")),
+      el("div", { class: "figs" },
+        fig(`/api/result/${id}/full.png${q}${bust}`, `Full field ${h.fov_deg}° · ${im.full.arcsec_per_px}″/px (binned ×${im.full.bin}) · ${im.orientation}`),
+        fig(`/api/result/${id}/crop.png${q}${bust}`, `Centre ${im.crop.width_arcmin}′ · ${im.crop.arcsec_per_px}″/px (${im.crop.resampled})`)),
+      el("div", { class: "kvs" },
+        el("div", {}, el("h3", {}, "Result"), kv([
+          ["5σ point-source limit", `V ≈ ${m.lim_mag_5sigma}`],
+          ["1σ surface brightness (1″²)", `${m.sb_lim_1sigma_mag_arcsec2} mag/arcsec²`],
+          ["Delivered FWHM", `${m.fwhm_arcsec}″ (diffraction ${m.diffraction_fwhm_arcsec}″) · ${m.fwhm_px} px, ${m.sampling}`],
+          ["Sources ≥ 5σ in field", `${m.sources_above_5sigma.toLocaleString()} (${m.galaxies_above_5sigma.toLocaleString()} galaxies)`],
+          ["Target magnitude", m.target_mag !== null ? `V ${m.target_mag}` : null],
+          ["Peak SNR on target", m.target_peak_snr !== null ? m.target_peak_snr.toLocaleString() : null],
+          ["Angular diameter", m.angular_diameter_arcsec !== null ? `${m.angular_diameter_arcsec}″` : null],
+          ["Phase angle", m.phase_angle_deg !== null ? `${m.phase_angle_deg}°` : null],
+          ["Saturn ring tilt (to Earth)", m.saturn_ring_tilt_deg !== null ? `${m.saturn_ring_tilt_deg}°` : null],
+        ])),
+        el("div", {}, el("h3", {}, "Exposure"), kv([
+          ["Integration", `${x.telescope_seconds.toLocaleString()} of ${x.telescope_seconds_required.toLocaleString()} telescope-seconds`],
+          ["= one telescope for", `${x.single_scope_equivalent_h} h`],
+          ["Light grasp if simultaneous", `${x.equivalent_aperture_cm_if_simultaneous} cm aperture`],
+          ["Sub-frames", `${x.frames.toLocaleString()} × ${x.sub_frame_s < 1 ? (x.sub_frame_s * 1000).toFixed(1) + " ms" : x.sub_frame_s + " s"}`],
+          ["Sky (zodiacal light)", `${s.zodiacal_mag_arcsec2} mag/arcsec² · elongation ${s.solar_elongation_deg}° · b ${s.galactic_latitude_deg}°`],
+          ["Observed", r.utc],
+        ])),
+        el("div", {}, el("h3", {}, "Hardware (per telescope)"), kv([
+          ["Telescopes requested", h.telescopes_requested],
+          ["Aperture", `${h.aperture_cm} cm, ${Math.round(h.obstruction * 100)} % obstruction, f/${h.f_ratio} (${h.focal_mm} mm)`],
+          ["Detector", h.sensor],
+          ["Pixel scale / FOV", `${h.pixel_scale_arcsec}″ · ${h.fov_deg}°`],
+          ["QE × optics", `${h.qe} × ${h.throughput}`],
+          ["Read noise / dark", `${h.read_noise_e} e⁻ · ${h.dark_e_s} e⁻/s`],
+          ["Pointing jitter", `${h.jitter_arcsec_rms}″ RMS`],
+        ]))),
+      el("ul", { class: "note" }, ...r.notes.map(n => el("li", {}, n))),
+    );
+  }
+}

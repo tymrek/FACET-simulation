@@ -697,6 +697,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "png",
  "serde",
  "serde_json",
  "tiny_http",

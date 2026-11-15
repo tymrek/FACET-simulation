@@ -448,8 +448,27 @@ impl App {
         ui.add(egui::Slider::new(&mut o.aperture_cm, 5.0..=100.0).text("aperture cm"));
         ui.add(egui::Slider::new(&mut o.fov_deg, 0.1..=5.0).logarithmic(true).text("FOV ° (square)"));
         ui.add(egui::Slider::new(&mut o.exp_s, 1.0..=3600.0).logarithmic(true).text("exposure s"));
-        ui.add(egui::Slider::new(&mut o.base_lim_mag, 16.0..=24.0).text("assumed 1-sat limit (mag)"))
-            .on_hover_text("ASSUMPTION: 5σ point-source limit of one telescope at the reference exposure. Replace with a real SNR model.");
+        ui.add(egui::Slider::new(&mut o.jitter_arcsec, 0.1..=5.0).text("pointing jitter ″ RMS"))
+            .on_hover_text("ASSUMPTION: bus pointing stability over a sub-frame. Small-sat buses: ~0.5–2″.");
+        ui.add(egui::Slider::new(&mut o.read_noise_e, 0.5..=10.0).text("read noise e⁻"));
+        ui.add(egui::Slider::new(&mut o.sub_max_s, 10.0..=1200.0).logarithmic(true).text("max sub-frame s"));
+        {
+            let hw = crate::imaging::Hardware::from_obs(o);
+            let lim = crate::imaging::point_lim_mag(&hw, o.exp_s, o.exp_s.min(o.sub_max_s), 22.0);
+            ui.label(
+                RichText::new(format!(
+                    "f/{:.1}, {:.0} mm, {:.2}″/px, FWHM {:.2}″ · 1 telescope, {:.0} s: V≈{:.1} (5σ, dark sky)",
+                    hw.f_ratio(),
+                    hw.focal_mm(),
+                    hw.pixel_scale(),
+                    hw.fwhm(o.exp_s.min(o.sub_max_s)),
+                    o.exp_s,
+                    lim
+                ))
+                .small()
+                .weak(),
+            );
+        }
         ui.add(egui::Slider::new(&mut o.overhead_s, 0.0..=120.0).text("slew+settle overhead s"))
             .on_hover_text("ASSUMPTION: dead time per pointing (slew, settle, readout).");
         ui.separator();

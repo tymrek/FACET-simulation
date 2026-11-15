@@ -6,6 +6,7 @@ mod astro;
 mod catalog;
 mod constellation;
 mod draw;
+mod imaging;
 mod math;
 mod obs;
 mod server;

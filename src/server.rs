@@ -74,6 +74,12 @@ pub struct ObsRequest {
     pub ip: String,
     #[serde(skip)]
     pub dir: V3,
+    /// Hardware snapshot taken when the request first started observing.
+    #[serde(skip)]
+    pub hw: Option<crate::imaging::Hardware>,
+    /// Sim time of the most recent integration.
+    #[serde(skip)]
+    pub obs_jd: f64,
 }
 
 impl ObsRequest {
@@ -112,7 +118,9 @@ pub enum Command {
         aperture_cm: Option<f64>,
         fov_deg: Option<f64>,
         exp_s: Option<f64>,
-        base_lim_mag: Option<f64>,
+        jitter_arcsec: Option<f64>,
+        read_noise_e: Option<f64>,
+        sub_max_s: Option<f64>,
         overhead_s: Option<f64>,
         sun_excl_deg: Option<f64>,
         moon_excl_deg: Option<f64>,
@@ -153,6 +161,107 @@ pub struct Shared {
     pub control_url: Option<String>,
     pub public_url: Option<String>,
     pub errors: Vec<String>,
+    pub results: ResultCache,
+}
+
+/// Rendered observation results, keyed by (request id, progress bucket).
+#[derive(Default)]
+pub struct ResultCache {
+    map: HashMap<(u64, u32), Arc<crate::imaging::Output>>,
+    order: std::collections::VecDeque<(u64, u32)>,
+}
+
+impl ResultCache {
+    const CAP: usize = 40;
+    fn get(&self, k: (u64, u32)) -> Option<Arc<crate::imaging::Output>> {
+        self.map.get(&k).cloned()
+    }
+    fn put(&mut self, k: (u64, u32), v: Arc<crate::imaging::Output>) {
+        if self.map.insert(k, v).is_none() {
+            self.order.push_back(k);
+        }
+        while self.order.len() > Self::CAP {
+            if let Some(old) = self.order.pop_front() {
+                self.map.remove(&old);
+            }
+        }
+    }
+}
+
+/// Renders are CPU-heavy: do one at a time.
+static RENDER_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serve `/api/result/{id}[/full.png|/crop.png]`. Runs on its own thread.
+fn handle_result(shared: SharedRef, req: Request, path: String) {
+    let rest = path.trim_start_matches("/api/result/");
+    let (id_s, part) = rest.split_once('/').unwrap_or((rest, ""));
+    let Ok(id) = id_s.parse::<u64>() else {
+        return err(req, 400, "bad id");
+    };
+    let spec = {
+        let sh = shared.lock().unwrap();
+        let Some(r) = sh.requests.iter().find(|r| r.id == id) else {
+            drop(sh);
+            return err(req, 404, "no such request");
+        };
+        let (Some(hw), true) = (r.hw, r.progress_s > 0.0) else {
+            drop(sh);
+            return err(req, 404, "no data yet: the request has not been observed");
+        };
+        let done = r.state == ReqState::Done;
+        let required = r.required_s();
+        // Quantise live stacks to 5 % steps so repeated polls hit the cache.
+        let bucket = if done { u32::MAX } else { ((r.progress_s / required * 20.0).floor() as u32).max(1) };
+        let total = if done { r.progress_s } else { (bucket as f64 / 20.0 * required).min(r.progress_s.max(1e-6)) };
+        (
+            (id, bucket),
+            crate::imaging::Spec {
+                id,
+                target_name: r.target_name.clone(),
+                dir: r.dir,
+                body: r.body,
+                jd: r.obs_jd,
+                total_s: total,
+                required_s: required,
+                telescopes: r.telescopes,
+                exposure_s: r.exposure_s,
+                hw,
+                done,
+            },
+        )
+    };
+    let (key, spec) = spec;
+    let cached = shared.lock().unwrap().results.get(key);
+    let out = match cached {
+        Some(o) => o,
+        None => {
+            let _g = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            // Another thread may have rendered it while we waited.
+            let again = shared.lock().unwrap().results.get(key);
+            match again {
+                Some(o) => o,
+                None => {
+                    let o = Arc::new(crate::imaging::render(&spec));
+                    shared.lock().unwrap().results.put(key, o.clone());
+                    o
+                }
+            }
+        }
+    };
+    match part {
+        "" => json(req, 200, out.report.clone()),
+        "full.png" => send_bytes(req, "image/png", out.full_png.clone()),
+        "crop.png" => send_bytes(req, "image/png", out.crop_png.clone()),
+        _ => err(req, 404, "not found"),
+    }
+}
+
+fn send_bytes(req: Request, ctype: &str, body: Vec<u8>) {
+    let resp = Response::from_data(body)
+        .with_header(header("Content-Type", ctype))
+        .with_header(header("Cache-Control", "no-store"))
+        .with_header(header("X-Content-Type-Options", "nosniff"));
+    let _ = req.respond(resp);
 }
 
 pub type SharedRef = Arc<Mutex<Shared>>;
@@ -193,7 +302,7 @@ fn send(req: Request, code: u16, ctype: &str, body: String) {
         .with_header(header("Referrer-Policy", "no-referrer"))
         .with_header(header(
             "Content-Security-Policy",
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:",
         ));
     let _ = req.respond(resp);
 }
@@ -272,6 +381,7 @@ fn requests_json(sh: &Shared, director: bool) -> serde_json::Value {
         .map(|r| {
             let mut j = serde_json::to_value(r).unwrap_or_default();
             j["required_s"] = serde_json::json!(r.required_s());
+            j["has_result"] = serde_json::json!(r.hw.is_some() && r.progress_s > 0.0);
             if director {
                 j["ip"] = serde_json::json!(r.ip);
             }
@@ -372,6 +482,8 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         note: clean(sub.note.as_deref().unwrap_or(""), 200),
         ip,
         dir,
+        hw: None,
+        obs_jd: 0.0,
     };
     sh.requests.push(r);
     // Bound memory: drop the oldest closed requests.
@@ -407,6 +519,7 @@ fn apply_request_cmd(sh: &mut Shared, id: u64, action: &str, priority: Option<i3
             r.state = ReqState::Approved;
             r.progress_s = 0.0;
             r.completed_utc = None;
+            r.hw = None;
         }
         "update" => {}
         "approve" | "reject" | "cancel" | "requeue" => return Err("not valid in this state"),
@@ -437,6 +550,11 @@ fn control_loop(server: Server, shared: SharedRef) {
             (Method::Get, "/api/status") => {
                 let s = status_with(&shared.lock().unwrap(), true);
                 send(req, 200, "application/json", s)
+            }
+            (Method::Get, p) if p.starts_with("/api/result/") => {
+                let sh = shared.clone();
+                let p = p.to_string();
+                std::thread::spawn(move || handle_result(sh, req, p));
             }
             (Method::Post, "/api/cmd") => {
                 let Some(body) = read_body(&mut req) else {
@@ -493,6 +611,11 @@ fn public_loop(server: Server, shared: SharedRef) {
             (Method::Get, "/api/status") => {
                 let s = status_with(&shared.lock().unwrap(), false);
                 send(req, 200, "application/json", s)
+            }
+            (Method::Get, p) if p.starts_with("/api/result/") => {
+                let sh = shared.clone();
+                let p = p.to_string();
+                std::thread::spawn(move || handle_result(sh, req, p));
             }
             (Method::Post, "/api/request") => handle_submit(&shared, req),
             _ => err(req, 404, "not found"),
