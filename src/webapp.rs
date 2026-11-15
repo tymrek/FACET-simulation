@@ -968,7 +968,19 @@ impl App {
             let raw = self.science.bytes / 1e12 / (self.science.elapsed_s / 86_400.0).max(1e-9);
             self.traffic.json(raw, n)
         };
+        let costs_json = {
+            let r = self.cost_result();
+            serde_json::json!({
+                "scenario": self.cost_model.name, "fleet": r.fleet, "total": r.total,
+                "first_year": self.cost_model.first_year, "horizon_years": self.cost_model.horizon_years,
+                "first_science_year": r.first_science_year, "full_fleet_year": r.full_fleet_year,
+                "steady_annual": r.steady_annual, "avg_unit_cost": r.avg_unit_cost,
+                "per_tel_hour": r.cost_per_tel_hour, "per_observation": r.cost_per_observation,
+                "per_etendue_hour": r.cost_per_etendue_hour, "per_tb": r.cost_per_tb,
+            })
+        };
         let status = serde_json::json!({
+            "costs": costs_json,
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,
             "playing": self.playing,

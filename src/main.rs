@@ -2,12 +2,15 @@
 //! small space telescopes inside it.
 
 #![forbid(unsafe_code)]
+#![recursion_limit = "256"]
 
 mod app;
 mod astro;
 mod attitude;
 mod catalog;
 mod constellation;
+mod costs;
+mod costs_ui;
 mod defence;
 mod draw;
 mod imaging;

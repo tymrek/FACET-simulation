@@ -108,6 +108,10 @@ pub struct App {
     pub search_share: f64,
     /// Other operators' satellites and debris: data relay, streaks, conjunctions.
     pub traffic: crate::traffic::Traffic,
+    /// Programme cost model and its separate window.
+    pub cost_model: crate::costs::Model,
+    pub cost_window_open: bool,
+    pub cost_msg: Option<String>,
     pub science: crate::programme::Science,
     /// Campaign targets given on the command line, started once web is up.
     pub pending_stares: Vec<String>,
@@ -201,6 +205,9 @@ impl App {
             pd_preset: 0,
             pending_defence: false,
             search_share: 0.10,
+            cost_model: crate::costs::Model::baseline(),
+            cost_window_open: false,
+            cost_msg: None,
             traffic: crate::traffic::Traffic::new(Default::default(), jd0_for_traffic(), 550.0),
             science: crate::programme::Science::default(),
             pending_stares: Vec::new(),
@@ -274,6 +281,7 @@ impl App {
                 "--target-eyes" => self.obs_params.target_eyes = val().parse().unwrap_or(25),
                 "--click-target" => self.click_target = true,
                 "--no-programme" => self.gen.on = false,
+                "--costs" => self.cost_window_open = true,
                 "--starlink" => self.traffic.cfg.starlink_n = val().parse().unwrap_or(9_950),
                 "--starlink-alt" => self.traffic.cfg.starlink_alt_km = val().parse().unwrap_or(480.0),
                 "--no-oneweb" => self.traffic.cfg.oneweb = false,
@@ -732,6 +740,14 @@ impl App {
         self.stats(ui);
         ui.separator();
 
+        if ui
+            .button(if self.cost_window_open { "Cost model window (open)" } else { "Open cost model window" })
+            .on_hover_text("Programme costs in a separate window: edit prices and trends live")
+            .clicked()
+        {
+            self.cost_window_open = true;
+        }
+        ui.separator();
         self.defence_panel(ui);
         ui.separator();
         self.traffic_panel(ui);
@@ -909,6 +925,7 @@ impl App {
                     }
                 }
             });
+        self.cost_window(ctx);
     }
 }
 

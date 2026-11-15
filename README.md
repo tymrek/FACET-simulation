@@ -399,6 +399,52 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## Cost model
+
+**Open cost model window** in the simulator's controls (or `--costs`) opens a
+separate native window, which can sit on a second monitor. Results recompute
+live as you edit, and from the running simulation's science figures.
+
+* **Line items**, each with a value now and an annual trend in % per year
+  (negative = getting cheaper):
+  * satellite first-unit costs (bus, telescope, focal plane, optical
+    terminals, assembly/integration/test), with a learning curve (Wright's
+    law) across the production run;
+  * launch: dedicated price, satellites per launch, rideshare $/kg, cadence,
+    insurance;
+  * development, overhead and design life;
+  * operations staff and ground stations;
+  * data: relay, archive, processing.
+
+  Hover a row for its source or assumption.
+* **Programme settings:** fleet size (follows the simulator or set by hand),
+  horizon, start year, dedicated or rideshare launch, and planes per
+  dedicated launch. More than one plane per launch relies on differential
+  nodal drift, which takes months.
+* **Outputs:**
+  * programme cost, first-science and full-fleet years, annual cost,
+    average satellite cost;
+  * cost per telescope-hour, per completed observation, per m²·deg²·h of
+    étendue × time, per TB delivered and per public telescope-hour, using
+    the simulator's science ledger (typical values until six simulated
+    hours have run);
+  * a stacked annual-spend chart with fleet growth, a year-by-year table,
+    and funding tranches: when a budget of $100M … $5B runs out and how many
+    satellites are in orbit by then.
+* **Scenarios:** Baseline, Optimistic and Pessimistic presets; **Save** /
+  **Load** write and read `facet-costs.json` in the working folder.
+
+Launch defaults are 2026 public list prices: Falcon 9 dedicated $74M (up
+from $67M in 2022) and Transporter rideshare $7,000/kg (up from $5,000/kg at
+the programme's start), so both trend upward by default. Rideshares fly to
+sun-synchronous orbits, so FACET's 53° planes need dedicated launches or a
+drift strategy. Every other line item is an **assumption** to be replaced
+with quotes.
+
+In the baseline, launch dominates. One dedicated launch per 31-satellite
+plane uses a fraction of a Falcon 9, so the number of planes per launch is
+the biggest lever on programme cost.
+
 ## Performance and threading
 
 The simulation and the window run on separate threads:
