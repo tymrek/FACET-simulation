@@ -62,6 +62,18 @@ impl App {
             errors: Vec::new(),
             results: Default::default(),
             jd_now: self.jd,
+            events: Default::default(),
+            fleet_json: "{}".into(),
+            inspect_req: None,
+            inspect_json: "{}".into(),
+            coast_json: {
+                let lines: Vec<Vec<[f32; 2]>> = self
+                    .coast
+                    .iter()
+                    .map(|l| l.iter().map(|&(lo, la)| [(lo * 10.0).round() / 10.0, (la * 10.0).round() / 10.0]).collect())
+                    .collect();
+                serde_json::to_string(&lines).unwrap_or_else(|_| "[]".into())
+            },
         };
         let shared = Arc::new(Mutex::new(shared));
         server::start(
@@ -90,32 +102,6 @@ impl App {
         let resolved = names_snapshot.unwrap_or_default();
         for c in cmds {
             match c {
-                Command::Shell { n, planes, phasing, alt_km, inc_deg, sso, raan_span_deg } => {
-                    let p = &mut self.shell_params;
-                    if let Some(v) = n {
-                        p.n = v.clamp(2, 10_000);
-                    }
-                    if let Some(v) = planes {
-                        p.planes = v.min(p.n.min(400));
-                    }
-                    if let Some(v) = phasing {
-                        p.phasing = v;
-                    }
-                    if let Some(v) = alt_km {
-                        p.alt_km = v.clamp(300.0, 2000.0);
-                    }
-                    if let Some(v) = inc_deg {
-                        p.inc_deg = v.clamp(0.0, 180.0);
-                        self.sun_sync = false;
-                    }
-                    if let Some(v) = sso {
-                        self.sun_sync = v;
-                    }
-                    if let Some(v) = raan_span_deg {
-                        p.raan_span_deg = if v < 270.0 { 180.0 } else { 360.0 };
-                    }
-                    p.phasing = p.phasing.min(p.effective_planes().saturating_sub(1));
-                }
                 Command::PublicShare { share } => {
                     if share.is_finite() {
                         self.public_share = share.clamp(0.0, 1.0);
@@ -142,63 +128,10 @@ impl App {
                         }
                     }
                 }
-                Command::Time { rate, playing, now } => {
-                    if let Some(r) = rate {
-                        self.rate = r.clamp(0.0, 864_000.0);
+                Command::SafeHold { sat, on } => {
+                    if let Some(h) = self.obs.hold.get_mut(sat) {
+                        *h = on;
                     }
-                    if let Some(p) = playing {
-                        self.playing = p;
-                    }
-                    if now == Some(true) {
-                        self.jd = astro::jd_now();
-                    }
-                }
-                Command::Telescope {
-                    aperture_cm,
-                    fov_deg,
-                    exp_s,
-                    jitter_arcsec,
-                    read_noise_e,
-                    sub_max_s,
-                    rate_limit_dps,
-                    wheel_torque_nm,
-                    inertia_kgm2,
-                    settle_tau_s,
-                    acquire_s,
-                    coarse_jitter_arcsec,
-                    guide_mag,
-                    overhead_s,
-                    sun_excl_deg,
-                    moon_excl_deg,
-                    limb_margin_deg,
-                    neo_elong_deg,
-                    neo_band_deg,
-                } => {
-                    let o = &mut self.obs_params;
-                    let set = |dst: &mut f64, v: Option<f64>, lo: f64, hi: f64| {
-                        if let Some(v) = v.filter(|v| v.is_finite()) {
-                            *dst = v.clamp(lo, hi);
-                        }
-                    };
-                    set(&mut o.aperture_cm, aperture_cm, 5.0, 100.0);
-                    set(&mut o.fov_deg, fov_deg, 0.1, 5.0);
-                    set(&mut o.exp_s, exp_s, 1.0, 3600.0);
-                    set(&mut o.jitter_arcsec, jitter_arcsec, 0.1, 5.0);
-                    set(&mut o.read_noise_e, read_noise_e, 0.5, 10.0);
-                    set(&mut o.sub_max_s, sub_max_s, 10.0, 1200.0);
-                    set(&mut o.rate_limit_dps, rate_limit_dps, 0.1, 10.0);
-                    set(&mut o.wheel_torque_nm, wheel_torque_nm, 0.01, 2.0);
-                    set(&mut o.inertia_kgm2, inertia_kgm2, 2.0, 200.0);
-                    set(&mut o.settle_tau_s, settle_tau_s, 0.2, 30.0);
-                    set(&mut o.acquire_s, acquire_s, 0.0, 60.0);
-                    set(&mut o.coarse_jitter_arcsec, coarse_jitter_arcsec, 0.5, 60.0);
-                    set(&mut o.guide_mag, guide_mag, 6.0, 18.0);
-                    set(&mut o.overhead_s, overhead_s, 0.0, 120.0);
-                    set(&mut o.sun_excl_deg, sun_excl_deg, 5.0, 120.0);
-                    set(&mut o.moon_excl_deg, moon_excl_deg, 0.0, 45.0);
-                    set(&mut o.limb_margin_deg, limb_margin_deg, 0.0, 40.0);
-                    set(&mut o.neo_elong_deg, neo_elong_deg, 5.0, 120.0);
-                    set(&mut o.neo_band_deg, neo_band_deg, 0.0, 60.0);
                 }
                 // Handled in the server thread.
                 Command::Request { .. } | Command::AutoApprove { .. } => {}
@@ -286,6 +219,7 @@ impl App {
         let mut sh = web.lock().unwrap();
         let utc = astro::format_utc(self.jd);
         let jd = self.jd;
+        let mut events: Vec<(&str, String)> = Vec::new();
         for r in sh.requests.iter_mut().filter(|r| r.state.is_schedulable()) {
             if let Some(&(n, sum)) = slews.get(&r.id) {
                 r.slews += n;
@@ -293,12 +227,20 @@ impl App {
             }
             let (got, jit2, fine_s, locked) = per.get(&r.id).copied().unwrap_or_default();
             r.locked_now = locked;
-            if r.full_lock_jd.is_none() && locked >= r.telescopes {
-                r.full_lock_jd = Some(jd);
-            }
             if got > 0.0 {
                 if r.first_light_jd.is_none() {
                     r.first_light_jd = Some(jd);
+                    events.push((
+                        "good",
+                        format!(
+                            "Request #{} first light on {} ({} telescope{} locked{})",
+                            r.id,
+                            r.target_name,
+                            locked,
+                            if locked == 1 { "" } else { "s" },
+                            r.response_s().map(|t| format!(", +{t:.0} s after approval")).unwrap_or_default()
+                        ),
+                    ));
                 }
                 r.obs_jd = jd;
                 r.progress_s += got;
@@ -310,10 +252,23 @@ impl App {
                     r.assigned_now = 0;
                     r.locked_now = 0;
                     r.completed_utc = Some(utc.clone());
+                    events.push((
+                        "good",
+                        format!("Request #{} complete: {} — {:.0} telescope-seconds, {} repoints", r.id, r.target_name, r.progress_s, r.slews),
+                    ));
                     continue;
                 }
             }
+            if r.full_lock_jd.is_none() && r.first_light_jd.is_some() && locked >= r.telescopes {
+                r.full_lock_jd = Some(jd);
+                if let Some(t) = r.full_lock_s() {
+                    events.push(("good", format!("Request #{} at full strength: {} telescopes locked (+{:.0} s)", r.id, locked, t)));
+                }
+            }
             r.state = if r.assigned_now > 0 { ReqState::Observing } else { ReqState::Approved };
+        }
+        for (lvl, m) in events {
+            sh.log(lvl, m);
         }
     }
 
@@ -406,10 +361,158 @@ impl App {
             "footprints": fps,
             "footprint_stride": stride,
         });
+        let fleet_due = self.last_fleet.map_or(true, |t| now.duration_since(t).as_secs_f64() >= 1.0);
+        let fleet = if fleet_due {
+            self.last_fleet = Some(now);
+            Some(self.fleet_json())
+        } else {
+            None
+        };
+        let inspect_req = web.lock().unwrap().inspect_req;
+        let inspect = inspect_req.map(|i| self.inspect_json(i, &web));
         let mut sh = web.lock().unwrap();
         sh.status_json = status.to_string();
         sh.jd_now = self.jd;
+        if let Some(f) = fleet {
+            sh.fleet_json = f;
+        }
+        if let Some(j) = inspect {
+            sh.inspect_json = j;
+        }
+        if self.logged_fleet_n != n {
+            if self.logged_fleet_n != 0 {
+                sh.log("warn", format!("Fleet roster changed: {} satellites in {} planes", n, sp.effective_planes()));
+            } else {
+                sh.log("info", format!("Operations console online · fleet of {} satellites in {} planes", n, sp.effective_planes()));
+            }
+            self.logged_fleet_n = n;
+        }
         sh.utc_now = astro::format_utc(self.jd);
+    }
+
+    /// Sub-satellite points and states for the ground-track map.
+    fn fleet_json(&self) -> String {
+        use crate::attitude::Phase;
+        let gm = astro::gmst(self.jd);
+        let ll = |p: V3| {
+            let e = p.rot_z(-gm);
+            let lon = deg(e.y.atan2(e.x));
+            let lat = deg((e.z / e.norm()).clamp(-1.0, 1.0).asin());
+            [r1(lon), r1(lat)]
+        };
+        let sats: Vec<[f64; 3]> = self
+            .shell
+            .pos
+            .iter()
+            .enumerate()
+            .map(|(i, &p)| {
+                let [lon, lat] = ll(p);
+                let code = if self.obs.hold.get(i).copied().unwrap_or(false) {
+                    5.0
+                } else {
+                    match self.obs.att.get(i).map(|a| a.phase()) {
+                        Some(Phase::Slewing) => 2.0,
+                        Some(Phase::Settling) | Some(Phase::Acquiring) => 3.0,
+                        Some(Phase::Locked) => 4.0,
+                        _ => {
+                            if self.obs.lit.get(i).copied().unwrap_or(true) {
+                                0.0
+                            } else {
+                                1.0
+                            }
+                        }
+                    }
+                };
+                [lon, lat, code]
+            })
+            .collect();
+        let sub = ll(self.bodies[0].dir * 1.0e8);
+        serde_json::json!({ "utc": astro::format_utc(self.jd), "subsolar": sub, "sats": sats }).to_string()
+    }
+
+    /// Detail record for one satellite (the console's inspector).
+    fn inspect_json(&self, i: usize, web: &crate::server::SharedRef) -> String {
+        use crate::attitude::Phase;
+        if i >= self.shell.len() {
+            return serde_json::json!({ "index": i, "error": "no such satellite" }).to_string();
+        }
+        let ag = crate::attitude::Agility::from_obs(&self.obs_params);
+        let p = self.shell.pos[i];
+        let gm = astro::gmst(self.jd);
+        let e = p.rot_z(-gm);
+        let sat = &self.shell.sats[i];
+        let a = &self.obs.att[i];
+        let hold = self.obs.hold.get(i).copied().unwrap_or(false);
+        let phase = if hold {
+            "SAFE HOLD"
+        } else {
+            match a.phase() {
+                Phase::Idle => "idle",
+                Phase::Slewing => "slewing",
+                Phase::Settling => "settling",
+                Phase::Acquiring => "acquiring guide star",
+                Phase::Locked => "locked · integrating",
+            }
+        };
+        let j = self.obs.job.get(i).copied().unwrap_or(0);
+        let task = match obs::job_tag(j) {
+            0 => if hold { "none (safe hold)".to_string() } else { "unassigned".to_string() },
+            obs::TAG_SURVEY => "Programme: survey (zenith stare)".into(),
+            obs::TAG_STACK => format!("Programme: stack on {}", self.target_name()),
+            obs::TAG_MOSAIC => format!("Programme: mosaic of {}, tile {}", self.target_name(), obs::job_val(j) >> 20),
+            obs::TAG_NEO => "Programme: NEO sweep".into(),
+            obs::TAG_QUEUE => {
+                let id = obs::job_val(j);
+                let name = web
+                    .lock()
+                    .unwrap()
+                    .requests
+                    .iter()
+                    .find(|r| r.id == id)
+                    .map(|r| format!("{} for {}", r.target_name, r.submitter))
+                    .unwrap_or_default();
+                format!("Request #{id}: {name}")
+            }
+            _ => "?".into(),
+        };
+        let (bra, bdec) = a.dir.to_radec();
+        let tgt = (a.job != 0).then(|| {
+            let (r, d) = a.target.to_radec();
+            serde_json::json!({ "ra": r2(deg(r)), "dec": r2(deg(d)) })
+        });
+        let (mut up, mut blocked) = (0, 0);
+        for (k, &(x, y)) in self.shell.links.iter().enumerate() {
+            if x as usize == i || y as usize == i {
+                if self.obs.link_blocked.get(k).copied().unwrap_or(false) {
+                    blocked += 1;
+                } else {
+                    up += 1;
+                }
+            }
+        }
+        let v = (crate::astro::MU_EARTH / p.norm()).sqrt();
+        serde_json::json!({
+            "index": i,
+            "name": format!("FACET-{:05}", i + 1),
+            "plane": sat.plane + 1,
+            "slot": sat.slot + 1,
+            "alt_km": r1(p.norm() - crate::astro::EARTH_RADIUS_KM),
+            "lat": r2(deg((e.z / e.norm()).asin())),
+            "lon": r2(deg(e.y.atan2(e.x))),
+            "speed_km_s": r2(v),
+            "sunlit": self.obs.lit.get(i).copied().unwrap_or(true),
+            "hold": hold,
+            "phase": phase,
+            "task": task,
+            "boresight": { "ra": r2(deg(bra)), "dec": r2(deg(bdec)) },
+            "target": tgt,
+            "pointing_error_arcsec": r2(a.error_arcsec(&ag, 0.8)),
+            "guidance": if a.job == 0 { "—" } else if a.fine { "fine (guide star)" } else { "star tracker only" },
+            "jitter_arcsec": if a.phase() == Phase::Locked { Some(r2(a.jitter(&ag))) } else { None },
+            "links_up": up,
+            "links_blocked": blocked,
+        })
+        .to_string()
     }
 
     pub fn web_panel(&mut self, ui: &mut egui::Ui) {

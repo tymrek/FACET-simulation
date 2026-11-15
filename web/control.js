@@ -1,8 +1,13 @@
 "use strict";
+// FACET operations console. Talks only to the ops API: programme, targets,
+// public share, request book and satellite safe-hold. It cannot change the
+// simulated fleet, orbits, hardware or clock.
+
 const $ = (id) => document.getElementById(id);
 const token = new URLSearchParams(location.search).get("token") || "";
 const H = { "X-Facet-Token": token };
-let last = null, formsLoaded = false;
+const Q = `?token=${encodeURIComponent(token)}`;
+let last = null, fleet = null, selected = null, coast = [];
 
 function flash(text, bad) { const m = $("msg"); m.className = "msg small" + (bad ? " warn" : ""); m.textContent = text; }
 
@@ -10,117 +15,263 @@ async function cmd(body) {
   try {
     const r = await fetch("/api/cmd", { method: "POST", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
-    if (!r.ok) flash(j.error || "command failed", true); else flash("ok");
+    if (!r.ok) flash(j.error || "command failed", true); else flash("");
     poll();
-  } catch { flash("simulator offline", true); }
+  } catch { flash("lost contact with the operations server", true); }
 }
 
-const map = new SkyMap($("sky"), (ra, dec) => cmd({ cmd: "target", ra_deg: ra, dec_deg: dec }));
-fetch("/api/stars", { headers: H }).then(r => r.ok ? r.json() : Promise.reject()).then(s => map.setStars(s))
+// ---------------------------------------------------------------- ground map
+const PHASE_COL = ["#e9e2d0", "#5f73b4", "#ff9628", "#ffe150", "#5affa0", "#ff4b4b"];
+class GroundMap {
+  constructor(canvas, onPick) {
+    this.c = canvas; this.g = canvas.getContext("2d"); this.onPick = onPick;
+    canvas.addEventListener("click", (e) => {
+      if (!fleet) return;
+      const [lon, lat] = this.inv(e.offsetX * this.dpr, e.offsetY * this.dpr);
+      let best = -1, bd = 1e9;
+      fleet.sats.forEach(([lo, la], i) => {
+        let dl = Math.abs(lo - lon); if (dl > 180) dl = 360 - dl;
+        const d = Math.hypot(dl * Math.cos(lat * Math.PI / 180), la - lat);
+        if (d < bd) { bd = d; best = i; }
+      });
+      if (best >= 0 && bd < 6) this.onPick(best);
+    });
+    window.addEventListener("resize", () => this.draw());
+  }
+  layout() {
+    const dpr = window.devicePixelRatio || 1; this.dpr = dpr;
+    const w = this.c.clientWidth * dpr, h = this.c.clientHeight * dpr;
+    if (this.c.width !== w || this.c.height !== h) { this.c.width = w; this.c.height = h; }
+    this.w = w; this.h = h;
+  }
+  xy(lon, lat) { return [(lon + 180) / 360 * this.w, (90 - lat) / 180 * this.h]; }
+  inv(x, y) { return [x / this.w * 360 - 180, 90 - y / this.h * 180]; }
+  draw() {
+    this.layout(); const g = this.g, { w, h } = this;
+    g.fillStyle = "#061020"; g.fillRect(0, 0, w, h);
+    // graticule
+    g.strokeStyle = "rgba(90,120,170,0.18)"; g.lineWidth = this.dpr;
+    for (let lon = -180; lon <= 180; lon += 30) { const [x] = this.xy(lon, 0); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+    for (let lat = -60; lat <= 60; lat += 30) { const [, y] = this.xy(0, lat); g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+    // coastlines
+    g.strokeStyle = "rgba(150,200,160,0.65)"; g.lineWidth = 1 * this.dpr;
+    for (const line of coast) {
+      g.beginPath(); let prev = null;
+      for (const [lo, la] of line) {
+        const p = this.xy(lo, la);
+        if (prev && Math.abs(p[0] - prev[0]) < w / 2) g.lineTo(p[0], p[1]); else g.moveTo(p[0], p[1]);
+        prev = p;
+      }
+      g.stroke();
+    }
+    if (!fleet) return;
+    // night side
+    const [sl, sb] = fleet.subsolar, D = Math.PI / 180;
+    const tb = Math.tan(sb * D) || 1e-6;
+    g.fillStyle = "rgba(0,0,12,0.55)"; g.beginPath();
+    const edge = sb > 0 ? -90 : 90;
+    g.moveTo(...this.xy(-180, edge));
+    for (let lon = -180; lon <= 180; lon += 2) {
+      const lat = Math.atan(-Math.cos((lon - sl) * D) / tb) / D;
+      g.lineTo(...this.xy(lon, lat));
+    }
+    g.lineTo(...this.xy(180, edge)); g.closePath(); g.fill();
+    // subsolar point
+    const [sx, sy] = this.xy(sl, sb);
+    g.fillStyle = "#ffd25a"; g.beginPath(); g.arc(sx, sy, 5 * this.dpr, 0, 7); g.fill();
+    // satellites
+    const r = (fleet.sats.length > 3000 ? 1.2 : fleet.sats.length > 500 ? 1.7 : 2.4) * this.dpr;
+    for (const code of [0, 1, 3, 2, 4, 5]) {
+      g.fillStyle = PHASE_COL[code];
+      for (const [lo, la, c] of fleet.sats) if (c === code) { const [x, y] = this.xy(lo, la); g.fillRect(x - r, y - r, 2 * r, 2 * r); }
+    }
+    if (selected !== null && fleet.sats[selected]) {
+      const [x, y] = this.xy(fleet.sats[selected][0], fleet.sats[selected][1]);
+      g.strokeStyle = "#ffffff"; g.lineWidth = 1.5 * this.dpr;
+      g.beginPath(); g.arc(x, y, 8 * this.dpr, 0, 7); g.stroke();
+      g.fillStyle = "#fff"; g.font = `${11 * this.dpr}px system-ui`; g.fillText(`FACET-${String(selected + 1).padStart(5, "0")}`, x + 10 * this.dpr, y - 8 * this.dpr);
+    }
+  }
+}
+
+const ground = new GroundMap($("ground"), (i) => inspect(i));
+const sky = new SkyMap($("sky"), (ra, dec) => cmd({ cmd: "target", ra_deg: ra, dec_deg: dec }));
+const viewer = new ResultViewer($("result"), Q);
+
+fetch("/api/stars", { headers: H }).then(r => r.ok ? r.json() : Promise.reject()).then(s => sky.setStars(s))
   .catch(() => flash("Not authorised. Open the console with the ?token=… URL the simulator printed.", true));
+fetch("/api/coast", { headers: H }).then(r => r.ok ? r.json() : []).then(c => { coast = c; ground.draw(); }).catch(() => {});
 
-// Log-scale satellite slider: 2 … 10 000
-const nFromSlider = (v) => Math.round(2 * Math.pow(5000, v / 1000));
-const sliderFromN = (n) => Math.round(1000 * Math.log(n / 2) / Math.log(5000));
-$("n").addEventListener("input", () => $("nval").textContent = nFromSlider(+$("n").value).toLocaleString());
-$("n").addEventListener("change", () => cmd({ cmd: "shell", n: nFromSlider(+$("n").value) }));
-for (const n of [2, 10, 50, 100, 500, 1000, 5000, 10000])
-  $("stages").append(el("button", { onclick: () => cmd({ cmd: "shell", n }) }, n.toLocaleString()));
-
-for (const [label, rate] of [["Pause", 0], ["1×", 1], ["60×", 60], ["600×", 600], ["1 h/s", 3600], ["1 d/s", 86400]])
-  $("timebtns").append(el("button", { "data-rate": rate, onclick: () => cmd(rate === 0 ? { cmd: "time", playing: false } : { cmd: "time", rate, playing: true }) }, label));
-$("timebtns").append(el("button", { onclick: () => cmd({ cmd: "time", now: true }) }, "Now"));
-
-const modes = [["survey", "Survey"], ["stack", "Stack"], ["mosaic", "Mosaic"], ["neo", "NEO sweep"], ["queue", "Queue"]];
-for (const [k, label] of modes) $("modebtns").append(el("button", { "data-mode": k, onclick: () => cmd({ cmd: "mode", mode: k }) }, label));
-
+// ---------------------------------------------------------------- programme
+const MODES = [["survey", "Survey"], ["stack", "Stack"], ["mosaic", "Mosaic"], ["neo", "NEO sweep"], ["queue", "Public queue"]];
+for (const [k, label] of MODES) $("modebtns").append(el("button", { "data-mode": k, onclick: () => cmd({ cmd: "mode", mode: k }) }, label));
+$("settarget").addEventListener("click", () => cmd({ cmd: "target", name: $("target").value }));
+$("target").addEventListener("keydown", (e) => { if (e.key === "Enter") cmd({ cmd: "target", name: $("target").value }); });
+$("auto").addEventListener("change", () => cmd({ cmd: "auto_approve", on: $("auto").checked }));
 $("share").addEventListener("input", () => $("shareval").textContent = `${$("share").value} %`);
 $("share").addEventListener("change", () => cmd({ cmd: "public_share", share: +$("share").value / 100 }));
-$("settarget").addEventListener("click", () => cmd({ cmd: "target", name: $("target").value }));
-$("auto").addEventListener("change", () => cmd({ cmd: "auto_approve", on: $("auto").checked }));
-$("applyshell").addEventListener("click", () => {
-  const b = { cmd: "shell", alt_km: +$("alt").value, planes: +$("planes").value, phasing: +$("phasing").value, sso: $("sso").checked };
-  if (!$("sso").checked) b.inc_deg = +$("inc").value;
-  cmd(b);
-});
-const telKeys = ["aperture_cm", "fov_deg", "sun_excl_deg", "moon_excl_deg", "limb_margin_deg", "neo_elong_deg", "jitter_arcsec", "read_noise_e", "sub_max_s",
-                 "inertia_kgm2", "wheel_torque_nm", "rate_limit_dps", "settle_tau_s", "acquire_s", "coarse_jitter_arcsec", "guide_mag"];
-const viewer = new ResultViewer($("result"), `?token=${encodeURIComponent(token)}`);
-$("applytel").addEventListener("click", () => {
-  const b = { cmd: "telescope" }; for (const k of telKeys) b[k] = +$(k).value; cmd(b);
-});
 
-function stat(k, v) { return el("div", { class: "stat" }, el("div", { class: "k" }, k), el("div", { class: "v" }, v)); }
+// ---------------------------------------------------------------- inspector
+function parseSat(q) { const m = String(q).match(/(\d+)/); return m ? +m[1] - 1 : null; }
+$("satgo").addEventListener("click", () => { const i = parseSat($("satq").value); if (i !== null) inspect(i); });
+$("satq").addEventListener("keydown", (e) => { if (e.key === "Enter") $("satgo").click(); });
 
+async function inspect(i) {
+  selected = i; ground.draw();
+  await loadInspector();
+}
+async function loadInspector() {
+  if (selected === null) return;
+  try {
+    const r = await fetch(`/api/sat/${selected}`, { headers: H });
+    const s = await r.json();
+    if (s.pending) { $("inspector").textContent = "requesting telemetry…"; setTimeout(loadInspector, 400); return; }
+    if (s.error) { $("inspector").textContent = s.error; return; }
+    renderInspector(s);
+  } catch {}
+}
+function renderInspector(s) {
+  const kv = (rows) => el("table", { class: "kv" }, ...rows.filter(([, v]) => v !== null && v !== undefined)
+    .map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))));
+  const lamp = s.hold ? "red" : s.phase.startsWith("locked") ? "green" : s.phase === "idle" ? "grey" : "amber";
+  $("inspector").className = "";
+  $("inspector").replaceChildren(
+    el("div", { class: "insphead" }, el("span", { class: `lamp ${lamp}` }), el("b", {}, s.name), el("span", { class: "muted small" }, ` plane ${s.plane} · slot ${s.slot}`)),
+    kv([
+      ["State", s.phase],
+      ["Task", s.task],
+      ["Position", `${s.lat >= 0 ? s.lat + "° N" : -s.lat + "° S"}, ${s.lon >= 0 ? s.lon + "° E" : -s.lon + "° W"} · ${s.alt_km} km · ${s.speed_km_s} km/s`],
+      ["Illumination", s.sunlit ? "sunlit" : "eclipse"],
+      ["Boresight", `RA ${s.boresight.ra}° Dec ${s.boresight.dec >= 0 ? "+" : ""}${s.boresight.dec}°`],
+      ["Commanded", s.target ? `RA ${s.target.ra}° Dec ${s.target.dec >= 0 ? "+" : ""}${s.target.dec}°` : null],
+      ["Pointing error", s.target ? `${s.pointing_error_arcsec}″` : null],
+      ["Guidance", s.guidance],
+      ["Jitter", s.jitter_arcsec !== null ? `${s.jitter_arcsec}″ RMS` : null],
+      ["Laser links", `${s.links_up} up` + (s.links_blocked ? ` · ${s.links_blocked} blocked by atmosphere` : "")],
+    ]),
+    el("div", { class: "btns" }, s.hold
+      ? el("button", { class: "primary", onclick: () => cmd({ cmd: "safe_hold", sat: s.index, on: false }) }, "Return to service")
+      : el("button", { class: "danger", onclick: () => cmd({ cmd: "safe_hold", sat: s.index, on: true }) }, "Command safe hold")),
+  );
+}
+
+// ---------------------------------------------------------------- tables & panels
 function reqRow(r) {
-  const prio = el("input", { type: "number", value: r.priority, min: -100, max: 100, style: "width:58px" });
-  const tel = el("input", { type: "number", value: r.telescopes, min: 1, max: 10000, style: "width:70px" });
+  const prio = el("input", { type: "number", value: r.priority, min: -100, max: 100, class: "tiny" });
+  const tel = el("input", { type: "number", value: r.telescopes, min: 1, max: 10000, class: "tiny" });
   const act = (action) => cmd({ cmd: "request", id: r.id, action, priority: +prio.value, telescopes: +tel.value });
-  const btns = el("td", {});
-  if (r.state === "pending") btns.append(el("button", { class: "primary", onclick: () => act("approve") }, "Approve"), " ",
+  const btns = el("td", { class: "acts" });
+  if (r.state === "pending") btns.append(el("button", { class: "primary", onclick: () => act("approve") }, "Approve"),
                                          el("button", { class: "danger", onclick: () => act("reject") }, "Reject"));
-  else if (["approved", "observing"].includes(r.state)) btns.append(el("button", { onclick: () => act("update") }, "Update"), " ",
+  else if (["approved", "observing"].includes(r.state)) btns.append(el("button", { onclick: () => act("update") }, "Update"),
                                          el("button", { class: "danger", onclick: () => act("cancel") }, "Cancel"));
   else btns.append(el("button", { onclick: () => act("requeue") }, "Re-queue"));
-  if (r.has_result) btns.append(" ", el("button", { class: "view", onclick: () => viewer.show(r.id) }, r.state === "done" ? "Result" : "Live"));
+  if (r.has_result) btns.append(el("button", { class: "view", onclick: () => viewer.show(r.id) }, r.state === "done" ? "Result" : "Live"));
   const who = el("td", {}, r.submitter); who.title = `${r.ip} · submitted ${r.submitted_utc}${r.note ? "\n" + r.note : ""}`;
-  return el("tr", { onmouseenter: () => { map.highlight = r.id; map.draw(); } },
+  return el("tr", { onmouseenter: () => { sky.highlight = r.id; sky.draw(); } },
     el("td", {}, r.id), who, el("td", {}, r.target_name, r.note ? el("div", { class: "small muted" }, r.note) : ""),
     el("td", { class: "num" }, tel), el("td", { class: "num" }, fmtDur(r.exposure_s)),
     el("td", { class: "num" }, prio), stateCell(r), progressCell(r), btns);
 }
 
+function kvRows(tbl, rows) {
+  tbl.replaceChildren(...rows.map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))));
+}
+
 function render(s) {
   last = s;
-  $("clock").textContent = `${s.utc} · ${s.playing ? `${s.rate}×` : "paused"}`;
+  const [d, t] = s.utc.split(" ");
+  $("utc").textContent = `${t} UTC`;
+  const doy = Math.floor((Date.parse(d + "T00:00:00Z") - Date.parse(d.slice(0, 4) + "-01-01T00:00:00Z")) / 86400000) + 1;
+  $("doy").textContent = `${d} · DOY ${String(doy).padStart(3, "0")}`;
   $("modelabel").textContent = s.mode_label;
-  map.setStatus(s);
+  sky.setStatus(s);
+
+  // System state pill
+  const hold = fleet ? fleet.sats.filter(x => x[2] === 5).length : 0;
+  const pill = $("sysstate");
+  const caution = hold > 0 || s.shell.links_blocked > 0;
+  pill.textContent = caution ? "CAUTION" : "NOMINAL"; pill.className = `pill ${caution ? "amber" : "green"}`;
+
+  // Fleet
+  const st = s.stats, n = s.shell.n, idle = Math.max(0, n - st.locked - st.slewing - st.settling - hold);
+  $("f_service").textContent = (n - hold).toLocaleString();
+  $("f_hold").textContent = hold.toLocaleString();
+  $("f_locked").textContent = st.locked.toLocaleString();
+  const parts = [["integrating", st.locked, "#5affa0"], ["slewing", st.slewing, "#ff9628"], ["settling", st.settling, "#ffe150"],
+                 ["idle", idle, "#3a4558"], ["safe hold", hold, "#ff4b4b"]];
+  $("phasebar").replaceChildren(...parts.filter(p => p[1] > 0).map(([k, v, c]) =>
+    el("div", { style: `flex:${v};background:${c}`, title: `${k}: ${v}` })));
+  $("phaselegend").replaceChildren(...parts.map(([k, v, c]) => el("span", {}, el("i", { style: `background:${c}` }), `${k} ${v}`)));
+  kvRows($("fleetkv"), [
+    ["Shell", `${n.toLocaleString()} sats · ${s.shell.planes} planes · ${s.shell.alt_km.toFixed(0)} km · ${s.shell.inc_deg}°`],
+    ["Orbital period", `${s.shell.period_min} min`],
+    ["Sunlit / eclipse", `${st.lit} / ${st.eclipsed}`],
+    ["Optical mesh", `${(s.shell.links - s.shell.links_blocked).toLocaleString()} links up` + (s.shell.links_blocked ? ` · ${s.shell.links_blocked} through atmosphere` : "")],
+    ["Sky reachable now", `${st.sky_reachable} %`],
+  ]);
+  const t2 = s.telescope;
+  kvRows($("payloadkv"), [
+    ["Telescope", `${t2.aperture_cm} cm aperture · ${t2.fov_deg}° field`],
+    ["Pointing", `${t2.jitter_arcsec}″ RMS fine-guided · ${t2.coarse_jitter_arcsec}″ star tracker`],
+    ["Agility", `${t2.omega_dps}°/s · repoint 10° ${t2.repoint_10_s} s, 90° ${t2.repoint_90_s} s`],
+    ["Keep-out", `Sun ${t2.sun_excl_deg}° · Moon ${t2.moon_excl_deg}° · limb +${t2.limb_margin_deg}°`],
+    ["1-telescope depth", `V ≈ ${t2.lim_1tel_60s} in 60 s`],
+  ]);
+
+  // Programme
   document.querySelectorAll("#modebtns button").forEach(b => b.classList.toggle("sel", b.dataset.mode === s.mode));
-  document.querySelectorAll("#timebtns button[data-rate]").forEach(b =>
-    b.classList.toggle("sel", (+b.dataset.rate === 0 && !s.playing) || (s.playing && +b.dataset.rate === s.rate)));
   $("auto").checked = s.auto_approve;
   if (document.activeElement !== $("share")) {
     $("share").value = Math.round(s.public_share * 100); $("share").disabled = s.mode === "queue";
-    $("shareval").textContent = `${Math.round(s.public_share * 100)} %`;
+    $("shareval").textContent = s.mode === "queue" ? "100 % (public queue mode)" : `${Math.round(s.public_share * 100)} %`;
   }
-  if (document.activeElement !== $("n")) { $("n").value = sliderFromN(s.shell.n); $("nval").textContent = s.shell.n.toLocaleString(); }
-  if (!formsLoaded) {
-    $("alt").value = s.shell.alt_km; $("inc").value = s.shell.inc_deg; $("planes").value = s.shell.planes_setting;
-    $("phasing").value = s.shell.phasing; $("sso").checked = s.shell.sso;
-    for (const k of telKeys) $(k).value = s.telescope[k];
-    formsLoaded = true;
-  }
-  const t = s.telescope;
-  $("agilityinfo").textContent = `α ${t.alpha_dps2}°/s², ω ${t.omega_dps}°/s · repoint 10°: ${t.repoint_10_s} s, 90°: ${t.repoint_90_s} s (slew + settle + guide lock)`;
-  $("shellinfo").textContent = `${s.shell.planes} planes · period ${s.shell.period_min} min · node drift ${s.shell.node_drift_deg_day}°/day · ` +
-    `${s.shell.links} laser links (${s.shell.links_blocked} through atmosphere)`;
+  const tl = $("targetline");
+  if (s.target && ["stack", "mosaic"].includes(s.mode)) {
+    tl.replaceChildren(el("b", {}, s.target.name), " · ",
+      s.target.blocked ? el("span", { class: "warn" }, s.target.blocked)
+        : `${s.target.locked} locked of ${s.target.visible} with line of sight` + (s.mode === "stack" && s.target.locked ? ` · depth V ≈ ${s.stats.stack_lim_mag}` : ""));
+  } else tl.textContent = s.mode === "queue" ? "All telescopes serve the public request queue." : s.mode === "survey" ? "Zenith-stare survey." : s.mode === "neo" ? "Near-Sun asteroid sweep." : "";
+
+  // Alerts
+  const alerts = [];
+  if (hold) alerts.push(["warn", `${hold} satellite${hold > 1 ? "s" : ""} in safe hold`]);
+  if (s.shell.links_blocked) alerts.push(["warn", `${s.shell.links_blocked} laser links pass through the atmosphere`]);
+  if (s.target && s.target.blocked && ["stack", "mosaic"].includes(s.mode)) alerts.push(["warn", `Director target ${s.target.name}: ${s.target.blocked}`]);
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
-  const busyQ = open.reduce((a, r) => a + r.assigned_now, 0);
-  $("stats").replaceChildren(
-    stat("Satellites", s.shell.n.toLocaleString()),
-    stat("Locked / slewing / settling", `${s.stats.locked} / ${s.stats.slewing} / ${s.stats.settling}`),
-    stat("Sunlit / eclipsed", `${s.stats.lit} / ${s.stats.eclipsed}`),
-    stat("Sky reachable", `${s.stats.sky_reachable}%`),
-    stat("Open requests", `${open.length} (${open.filter(r => r.state === "pending").length} pending)`),
-    stat("On queue now", `${busyQ} telescopes`),
-    ...(["stack", "mosaic"].includes(s.mode) && s.target ? [
-      stat("Target", `${s.target.name}: ${s.target.blocked || `${s.target.locked} locked of ${s.target.visible}`}`),
-      stat("Stacked depth (est.)", s.target.visible ? `V ≈ ${s.stats.stack_lim_mag}` : "—"),
-    ] : []),
-  );
-  // Don't rebuild the table while the director is typing in it.
-  if ($("queue").contains(document.activeElement)) return;
-  const q = $("queue"); q.replaceChildren();
-  for (const r of s.requests.slice(0, 120)) q.append(reqRow(r));
-  if (!q.children.length) q.append(el("tr", {}, el("td", { class: "muted small", colspan: 9 }, "No requests yet.")));
+  const pending = open.filter(r => r.state === "pending").length;
+  if (pending) alerts.push(["info", `${pending} public request${pending > 1 ? "s" : ""} awaiting approval`]);
+  const stuck = open.filter(r => r.waiting_s > 600);
+  if (stuck.length) alerts.push(["warn", `${stuck.length} approved request${stuck.length > 1 ? "s" : ""} waiting > 10 min for telescopes`]);
+  if (s.mode !== "queue" && s.public_share === 0 && open.length) alerts.push(["warn", "Public time share is 0 %: the queue is not being served"]);
+  $("alerts").replaceChildren(...(alerts.length ? alerts.map(([l, m]) => el("li", { class: l }, m)) : [el("li", { class: "muted" }, "none")]));
+
+  // Queue (don't rebuild while the director is typing in it)
+  const done = s.requests.filter(r => r.state === "done").length;
+  $("qsummary").textContent = `${open.length} open · ${pending} pending · ${done} done`;
+  if (!$("queue").contains(document.activeElement)) {
+    const q = $("queue"); q.replaceChildren();
+    for (const r of s.requests.slice(0, 150)) q.append(reqRow(r));
+    if (!q.children.length) q.append(el("tr", {}, el("td", { class: "muted small", colspan: 9 }, "No requests.")));
+  }
+
+  // Event log
+  $("log").replaceChildren(...(s.events || []).map(e =>
+    el("li", { class: e.level }, el("span", { class: "t" }, e.utc.slice(11, 19)), e.msg)));
 }
 
 async function poll() {
   try {
     const r = await fetch("/api/status", { headers: H });
-    if (r.status === 401) { flash("Not authorised: wrong or missing token.", true); return; }
+    if (r.status === 401) { $("sysstate").textContent = "NO AUTH"; $("sysstate").className = "pill red"; return; }
     if (r.ok) render(await r.json());
-  } catch { $("clock").textContent = "simulator offline"; }
+  } catch { $("sysstate").textContent = "NO CONTACT"; $("sysstate").className = "pill red"; }
+}
+async function pollFleet() {
+  try { const r = await fetch("/api/fleet", { headers: H }); if (r.ok) { fleet = await r.json(); ground.draw(); } } catch {}
+  $("gt_note").textContent = fleet && fleet.sats ? `· ${fleet.sats.length.toLocaleString()} satellites` : "";
 }
 setInterval(poll, 1000); poll();
+setInterval(pollFleet, 1500); pollFleet();
+setInterval(loadInspector, 1500);
 { const rid = new URLSearchParams(location.search).get("result"); if (rid) viewer.show(+rid); }

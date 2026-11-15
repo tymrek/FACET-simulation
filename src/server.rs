@@ -126,15 +126,9 @@ impl ObsRequest {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
-    Shell {
-        n: Option<usize>,
-        planes: Option<usize>,
-        phasing: Option<usize>,
-        alt_km: Option<f64>,
-        inc_deg: Option<f64>,
-        sso: Option<bool>,
-        raan_span_deg: Option<f64>,
-    },
+    // NOTE: the operations console deliberately cannot change the simulated
+    // universe (fleet size, orbits, hardware, clock). Those live only in the
+    // desktop simulator window.
     Mode {
         mode: String,
     },
@@ -143,31 +137,10 @@ pub enum Command {
         ra_deg: Option<f64>,
         dec_deg: Option<f64>,
     },
-    Time {
-        rate: Option<f64>,
-        playing: Option<bool>,
-        now: Option<bool>,
-    },
-    Telescope {
-        aperture_cm: Option<f64>,
-        fov_deg: Option<f64>,
-        exp_s: Option<f64>,
-        jitter_arcsec: Option<f64>,
-        read_noise_e: Option<f64>,
-        sub_max_s: Option<f64>,
-        rate_limit_dps: Option<f64>,
-        wheel_torque_nm: Option<f64>,
-        inertia_kgm2: Option<f64>,
-        settle_tau_s: Option<f64>,
-        acquire_s: Option<f64>,
-        coarse_jitter_arcsec: Option<f64>,
-        guide_mag: Option<f64>,
-        overhead_s: Option<f64>,
-        sun_excl_deg: Option<f64>,
-        moon_excl_deg: Option<f64>,
-        limb_margin_deg: Option<f64>,
-        neo_elong_deg: Option<f64>,
-        neo_band_deg: Option<f64>,
+    /// Take a satellite out of tasking (safe hold) or return it to service.
+    SafeHold {
+        sat: usize,
+        on: bool,
     },
     // Applied directly by the server thread (request book):
     Request {
@@ -208,6 +181,25 @@ pub struct Shared {
     pub results: ResultCache,
     /// Sim Julian date at the last status publish.
     pub jd_now: f64,
+    /// Operations event log, newest last.
+    pub events: std::collections::VecDeque<serde_json::Value>,
+    /// Sub-satellite points etc. for the ground-track map (published ~1 Hz).
+    pub fleet_json: String,
+    /// Satellite the console is inspecting, and its latest detail record.
+    pub inspect_req: Option<usize>,
+    pub inspect_json: String,
+    pub coast_json: String,
+}
+
+impl Shared {
+    /// Append to the operations event log. level: "info" | "good" | "warn".
+    pub fn log(&mut self, level: &str, msg: impl Into<String>) {
+        let e = serde_json::json!({ "utc": self.utc_now, "level": level, "msg": msg.into() });
+        self.events.push_back(e);
+        while self.events.len() > 300 {
+            self.events.pop_front();
+        }
+    }
 }
 
 /// Rendered observation results, keyed by (request id, progress bucket).
@@ -461,6 +453,9 @@ fn status_with(sh: &Shared, director: bool) -> String {
         serde_json::from_str(&sh.status_json).unwrap_or_else(|_| serde_json::json!({}));
     v["requests"] = requests_json(sh, director);
     v["auto_approve"] = serde_json::json!(sh.auto_approve);
+    if director {
+        v["events"] = serde_json::Value::Array(sh.events.iter().rev().take(120).cloned().collect());
+    }
     v.to_string()
 }
 
@@ -558,7 +553,13 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         slew_deg_sum: 0.0,
         agility: None,
     };
+    let msg = format!(
+        "Request #{} from {}: {} ({} × {:.0} s){}",
+        r.id, r.submitter, r.target_name, r.telescopes, r.exposure_s,
+        if state == ReqState::Approved { " · auto-approved" } else { " · awaiting approval" }
+    );
     sh.requests.push(r);
+    sh.log("info", msg);
     // Bound memory: drop the oldest closed requests.
     if sh.requests.len() > MAX_KEPT {
         let excess = sh.requests.len() - MAX_KEPT;
@@ -640,6 +641,29 @@ fn control_loop(server: Server, shared: SharedRef) {
                 let p = p.to_string();
                 std::thread::spawn(move || handle_result(sh, req, p));
             }
+            (Method::Get, "/api/fleet") => {
+                let s = shared.lock().unwrap().fleet_json.clone();
+                send(req, 200, "application/json", s)
+            }
+            (Method::Get, "/api/coast") => {
+                let s = shared.lock().unwrap().coast_json.clone();
+                send(req, 200, "application/json", s)
+            }
+            (Method::Get, p) if p.starts_with("/api/sat/") => {
+                let Ok(i) = p.trim_start_matches("/api/sat/").parse::<usize>() else {
+                    err(req, 400, "bad satellite index");
+                    continue;
+                };
+                let mut sh = shared.lock().unwrap();
+                sh.inspect_req = Some(i);
+                let cur: serde_json::Value = serde_json::from_str(&sh.inspect_json).unwrap_or_default();
+                drop(sh);
+                if cur.get("index").and_then(|v| v.as_u64()) == Some(i as u64) {
+                    json(req, 200, cur)
+                } else {
+                    json(req, 202, serde_json::json!({ "pending": true }))
+                }
+            }
             (Method::Post, "/api/cmd") => {
                 let Some(body) = read_body(&mut req) else {
                     err(req, 413, "request too large");
@@ -655,14 +679,40 @@ fn control_loop(server: Server, shared: SharedRef) {
                 let mut sh = shared.lock().unwrap();
                 let res = match &cmd {
                     Command::Request { id, action, priority, telescopes } => {
-                        apply_request_cmd(&mut sh, *id, action, *priority, *telescopes)
+                        let r = apply_request_cmd(&mut sh, *id, action, *priority, *telescopes);
+                        if r.is_ok() && action != "update" {
+                            let past = match action.as_str() {
+                                "approve" => "approved",
+                                "reject" => "rejected",
+                                "cancel" => "cancelled",
+                                "requeue" => "re-queued",
+                                _ => action.as_str(),
+                            };
+                            sh.log(if action == "approve" || action == "requeue" { "good" } else { "warn" }, format!("Director {past} request #{id}"));
+                        } else if r.is_ok() {
+                            sh.log("info", format!("Director updated request #{id} (priority / telescopes)"));
+                        }
+                        r
                     }
                     Command::AutoApprove { on } => {
                         sh.auto_approve = *on;
+                        sh.log("info", format!("Auto-approval of public requests {}", if *on { "ON" } else { "OFF" }));
                         Ok(())
                     }
                     Command::Target { name: Some(n), .. } if sh.resolve(n).is_none() => Err("unknown target name"),
                     _ => {
+                        let msg = match &cmd {
+                            Command::Mode { mode } => format!("Programme mode → {mode}"),
+                            Command::Target { name: Some(n), .. } => format!("Director target → {n}"),
+                            Command::Target { ra_deg: Some(r), dec_deg: Some(d), .. } => format!("Director target → RA {r:.2}° Dec {d:+.2}°"),
+                            Command::PublicShare { share } => format!("Public time share → {:.0} %", share * 100.0),
+                            Command::SafeHold { sat, on } => format!("FACET-{:05} {}", sat + 1, if *on { "commanded to SAFE HOLD" } else { "returned to service" }),
+                            _ => String::new(),
+                        };
+                        if !msg.is_empty() {
+                            let lvl = if matches!(cmd, Command::SafeHold { on: true, .. }) { "warn" } else { "info" };
+                            sh.log(lvl, msg);
+                        }
                         sh.commands.push(cmd.clone());
                         Ok(())
                     }
@@ -767,8 +817,12 @@ mod tests {
 
     #[test]
     fn commands_parse() {
-        let c: Command = serde_json::from_str(r#"{"cmd":"shell","n":500,"sso":true}"#).unwrap();
-        assert!(matches!(c, Command::Shell { n: Some(500), sso: Some(true), .. }));
+        // The console must not be able to reshape the simulated universe.
+        for sim_only in [r#"{"cmd":"shell","n":500}"#, r#"{"cmd":"time","rate":60}"#, r#"{"cmd":"telescope","fov_deg":2}"#] {
+            assert!(serde_json::from_str::<Command>(sim_only).is_err(), "{sim_only}");
+        }
+        let c: Command = serde_json::from_str(r#"{"cmd":"safe_hold","sat":12,"on":true}"#).unwrap();
+        assert!(matches!(c, Command::SafeHold { sat: 12, on: true }));
         let c: Command = serde_json::from_str(r#"{"cmd":"request","id":3,"action":"approve"}"#).unwrap();
         assert!(matches!(c, Command::Request { id: 3, .. }));
     }

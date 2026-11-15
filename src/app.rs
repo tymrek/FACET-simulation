@@ -91,6 +91,8 @@ pub struct App {
     pub last_publish: Option<Instant>,
     /// Fraction of telescopes serving the public queue outside Queue mode.
     pub public_share: f64,
+    pub last_fleet: Option<Instant>,
+    pub logged_fleet_n: usize,
 }
 
 pub const PRESET_NS: [usize; 8] = [2, 10, 50, 100, 500, 1000, 5000, 10_000];
@@ -170,6 +172,8 @@ impl App {
             web_token: None,
             last_publish: None,
             public_share: 0.25,
+            last_fleet: None,
+            logged_fleet_n: 0,
         };
         app.apply_args(std::env::args().skip(1).collect());
         app.start_web();

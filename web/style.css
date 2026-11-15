@@ -56,3 +56,53 @@ table.kv th { color: var(--muted); font-weight: 400; width: 45%; }
 table.kv td, table.kv th { padding: 3px 6px; font-size: 12.5px; }
 button.view { padding: 2px 8px; font-size: 12px; }
 canvas.trace { width: 100%; height: 150px; display: block; background: #05070d; border-radius: 4px; margin-top: 8px; }
+
+/* ---------------------------------------------------------- operations console */
+body.ops { --panel: #0b1018; --line: #1a2232; font-size: 13px; }
+.opsbar { display: flex; align-items: center; gap: 18px; padding: 8px 16px; border-bottom: 1px solid var(--line);
+          background: linear-gradient(#0d1420, #080b12); position: sticky; top: 0; z-index: 5; }
+.opsbar .brand { display: flex; align-items: baseline; gap: 12px; }
+.opsbar .mark { font-weight: 800; letter-spacing: .25em; font-size: 18px; color: #e6f0ff; }
+.opsbar .sub { color: var(--muted); font-size: 12px; letter-spacing: .04em; }
+.clockbox { margin-left: auto; text-align: right; }
+.clockbox .utc { font-family: ui-monospace, Menlo, monospace; font-size: 22px; letter-spacing: .05em; color: #e6f0ff; }
+.pill { font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; padding: 4px 10px; border-radius: 3px;
+        border: 1px solid var(--line); color: var(--muted); }
+.pill.green { color: #5affa0; border-color: #1f7a50; background: #0b2418; }
+.pill.amber { color: #ffb43c; border-color: #7a5a1f; background: #241a0b; }
+.pill.red { color: #ff6b5c; border-color: #7a2e1f; background: #240f0b; }
+.pill.sim { color: #9aa5b8; border-style: dashed; }
+.opsgrid { display: grid; grid-template-columns: 300px minmax(0, 1fr) 360px; gap: 10px; padding: 10px; }
+.opsgrid .col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.opsgrid .span { grid-column: 1 / -1; }
+.opsgrid .split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 10px; }
+@media (max-width: 1200px) { .opsgrid { grid-template-columns: 1fr; } .opsgrid .split { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; }
+.panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .14em; color: #7f8ba3; margin: 0 0 8px; font-weight: 600; }
+.panel .tag { font-size: 9px; letter-spacing: .1em; border: 1px solid var(--line); padding: 1px 5px; border-radius: 2px; margin-left: 6px; }
+.bignums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; text-align: center; margin-bottom: 8px; }
+.bignums .n { font-family: ui-monospace, monospace; font-size: 24px; color: #e6f0ff; }
+.bignums .k { font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.phasebar { display: flex; height: 10px; border-radius: 2px; overflow: hidden; background: #141b27; margin: 4px 0 6px; }
+.alerts { list-style: none; margin: 0; padding: 0; }
+.alerts li { padding: 5px 8px; border-left: 3px solid var(--line); margin-bottom: 4px; background: #0e1420; font-size: 12px; }
+.alerts li.warn { border-color: #ffb43c; color: #ffd9a0; }
+.alerts li.info { border-color: #63c8ff; }
+canvas.ground { width: 100%; aspect-ratio: 2 / 1; display: block; border-radius: 3px; cursor: crosshair; }
+.seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg button { flex: 1 1 auto; }
+.inline { display: flex; gap: 6px; } .inline input { flex: 1; }
+.targetline { margin-top: 6px; font-size: 12px; color: #c7cfdd; min-height: 1.3em; }
+label.check { display: flex; align-items: center; gap: 6px; color: #c7cfdd; margin-top: 10px; }
+.insphead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 14px; }
+.lamp { width: 10px; height: 10px; border-radius: 50%; display: inline-block; box-shadow: 0 0 6px currentColor; }
+.lamp.green { background: #5affa0; color: #5affa0; } .lamp.amber { background: #ffb43c; color: #ffb43c; }
+.lamp.red { background: #ff4b4b; color: #ff4b4b; } .lamp.grey { background: #6b7588; color: transparent; }
+.scroll { max-height: 360px; overflow: auto; }
+table.queue td.acts { white-space: nowrap; } table.queue td.acts button { margin-right: 4px; padding: 3px 8px; font-size: 12px; }
+input.tiny { width: 64px; padding: 3px 5px; }
+.log { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow: auto; font-family: ui-monospace, monospace; font-size: 11.5px; }
+.log li { padding: 3px 4px; border-bottom: 1px solid #121926; }
+.log li .t { color: #6b7588; margin-right: 8px; }
+.log li.good { color: #9ff5c6; } .log li.warn { color: #ffd9a0; }
+body.ops .msg { grid-column: 1 / -1; }

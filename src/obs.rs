@@ -177,6 +177,8 @@ pub struct ObsState {
     pub n_locked_target: usize,
     /// Repoints started in the last step: (satellite, job, angle rad).
     pub new_slews: Vec<(usize, u64, f64)>,
+    /// Satellites in safe hold (excluded from all tasking).
+    pub hold: Vec<bool>,
 }
 
 pub const TAG_SURVEY: u64 = 1;
@@ -293,6 +295,7 @@ pub fn update(
         // Shell rebuilt: everyone starts idle, pointing at zenith.
         st.att = st.rhat.iter().map(|&z| crate::attitude::Att::new(z)).collect();
         st.job = vec![0; n];
+        st.hold = vec![false; n];
     }
     std::mem::swap(&mut st.prev_job, &mut st.job);
     st.prev_job.resize(n, 0);
@@ -334,7 +337,7 @@ pub fn update(
         Mode::Survey => {
             for i in 0..n {
                 let z = st.rhat[i];
-                if ok(z) {
+                if !st.hold[i] && ok(z) {
                     st.pointing[i] = Some(z);
                     st.job[i] = job(TAG_SURVEY, 0);
                     st.fine[i] = guide(z);
@@ -345,7 +348,7 @@ pub fn update(
             if let Some(t) = target {
                 st.target_blocked_by = sky_blocked(o, t, sun, moon);
                 let visible: Vec<usize> = if st.target_blocked_by.is_none() {
-                    (0..n).filter(|&i| t.dot(st.rhat[i]) > cos_lim).collect()
+                    (0..n).filter(|&i| !st.hold[i] && t.dot(st.rhat[i]) > cos_lim).collect()
                 } else {
                     Vec::new()
                 };
@@ -420,7 +423,7 @@ pub fn update(
                 let band = ((i as f64 * 0.754_877_666_2).fract() - 0.5) * o.neo_band_deg;
                 let el = rad((elong + band).max(o.sun_excl_deg));
                 let d = sun.rot_axis(perp, el).rot_axis(sun, az).unit();
-                if ok(d) && d.dot(st.rhat[i]) > cos_lim {
+                if !st.hold[i] && ok(d) && d.dot(st.rhat[i]) > cos_lim {
                     st.pointing[i] = Some(d);
                     st.job[i] = job(TAG_NEO, i as u64);
                     st.fine[i] = guide(d);
@@ -473,7 +476,7 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
         let mut got = 0;
         let mut cands: Vec<(f64, usize)> = Vec::new();
         for i in 0..n {
-            if taken[i] || it.dir.dot(st.rhat[i]) <= st.cos_lim {
+            if taken[i] || st.hold[i] || it.dir.dot(st.rhat[i]) <= st.cos_lim {
                 continue;
             }
             if st.prev_job[i] == me && got < it.want && used < budget {

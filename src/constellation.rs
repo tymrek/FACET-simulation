@@ -68,6 +68,8 @@ impl ShellParams {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Sat {
+    pub plane: u32,
+    pub slot: u32,
     raan0: f64,
     u0: f64,
 }
@@ -113,6 +115,8 @@ impl Shell {
             for s in 0..count {
                 let u0 = TAU * s as f64 / count as f64 + phase_step * pl as f64;
                 sats.push(Sat {
+                    plane: pl as u32,
+                    slot: s as u32,
                     raan0,
                     u0,
                 });

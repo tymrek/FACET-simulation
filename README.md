@@ -70,10 +70,34 @@ The simulator serves two ports while it runs:
 
 | port | who | what |
 |---|---|---|
-| **8780** director console | observatory director, token-protected | run the constellation (size, orbit, planes), operating mode, director's target, sim clock, telescope parameters and constraints; approve, reject, prioritise, resize, cancel and re-queue requests; auto-approve switch |
+| **8780** operations console | observatory director, token-protected | an in-world ops centre (see below) |
 | **8781** public access node | anyone | live all-sky map (Hammer–Aitoff, centred on the anti-Sun) showing telescope pointings, keep-outs, planets and the queue; status; observation-request form (click the map to fill in RA/Dec); "your requests" tracker |
 
-When the app starts it prints the director URL with its token and shows it in the
+**Simulator vs. operations.** The desktop window is the *simulator*. It alone
+controls the simulated universe: fleet size, orbits, hardware, agility, keep-out
+geometry and the clock. The web consoles are *part of the simulation*: they show
+what FACET's real operations staff and public users would have. The ops API
+cannot change the fleet, orbits, hardware or clock (`cargo test` checks that
+such commands are rejected).
+
+The **operations console** (port 8780) is a mock-up of the hoped-for
+control surface. It has:
+- **Fleet** status: in service, safe hold and integrating counts, a phase bar,
+  sunlit/eclipse split and the optical mesh;
+- **Alerts**;
+- a read-only payload and constraints summary;
+- a **ground-track map**: every satellite by state, day/night terminator, subsolar point;
+- the **sky map**;
+- **Programme** control: survey, stack, mosaic, NEO sweep or the public queue;
+  director's target; public time share; auto-approval;
+- a **satellite inspector** (click any satellite): state, task, position,
+  illumination, boresight vs commanded pointing, pointing error, guidance mode,
+  jitter, laser links, and a **safe hold / return to service** command;
+- the **request queue** with approve / reject / priority / telescopes / results;
+- a timestamped **event log**: submissions, approvals, first light, full
+  strength, completions, programme changes, safe holds, fleet changes.
+
+When the app starts it prints the console URL with its token and shows it in the
 *Web access* panel. The token is random each run unless you set `--token`.
 
 By default both ports listen on **127.0.0.1 only**. To reach them from other machines:
@@ -101,14 +125,15 @@ Public-port limits: 5 open requests per IP, 500 open requests in total,
 characters. Submitter IP addresses are visible only on the director port.
 
 API (JSON): `GET /api/status`, `GET /api/stars` on both ports;
-`POST /api/request` on the public port; `POST /api/cmd` on the director port,
-with header `X-Facet-Token` or `?token=`. Example commands:
+`POST /api/request` on the public port. On the ops port, with header
+`X-Facet-Token` or `?token=`: `GET /api/fleet` (sub-satellite points and states),
+`GET /api/sat/<index>` (inspector record), `GET /api/coast`, and
+`POST /api/cmd`. Example ops commands:
 
 ```json
-{"cmd":"shell","n":1000,"alt_km":550,"sso":true}
 {"cmd":"mode","mode":"queue"}
 {"cmd":"target","name":"Jupiter"}
-{"cmd":"time","rate":600,"playing":true}
+{"cmd":"safe_hold","sat":41,"on":true}
 {"cmd":"request","id":7,"action":"approve","priority":5,"telescopes":200}
 {"cmd":"auto_approve","on":true}
 {"cmd":"public_share","share":0.25}
