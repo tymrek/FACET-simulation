@@ -37,6 +37,8 @@ pub enum ReqState {
     Done,
     Rejected,
     Cancelled,
+    /// Science programme request whose deadline passed before completion.
+    Expired,
 }
 
 impl ReqState {
@@ -95,6 +97,16 @@ pub struct ObsRequest {
     #[serde(skip)]
     pub fine_s: f64,
     pub slews: u32,
+    /// Science-programme case key (None = public / director request).
+    pub programme: Option<&'static str>,
+    /// Data are only useful if complete within this many seconds of submission.
+    pub deadline_s: Option<f64>,
+    #[serde(skip)]
+    pub submit_jd: f64,
+    #[serde(skip)]
+    pub case_idx: Option<usize>,
+    #[serde(skip)]
+    pub inv_idx: Option<usize>,
     #[serde(skip)]
     pub slew_deg_sum: f64,
     #[serde(skip)]
@@ -274,6 +286,22 @@ pub struct Shared {
 }
 
 impl Shared {
+    /// Bound memory: drop the oldest closed requests.
+    pub fn prune(&mut self) {
+        if self.requests.len() > MAX_KEPT {
+            let excess = self.requests.len() - MAX_KEPT;
+            let mut removed = 0;
+            self.requests.retain(|r| {
+                if removed < excess && !r.state.is_open() {
+                    removed += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+
     /// Append to the operations event log. level: "info" | "good" | "warn".
     pub fn log(&mut self, level: &str, msg: impl Into<String>) {
         let e = serde_json::json!({ "utc": self.utc_now, "level": level, "msg": msg.into() });
@@ -750,7 +778,9 @@ fn static_route(path: &str, director: bool) -> Option<(&'static str, &'static st
 
 fn requests_json(sh: &Shared, director: bool) -> serde_json::Value {
     let mut list: Vec<&ObsRequest> = sh.requests.iter().collect();
-    list.sort_by_key(|r| (!r.state.is_open(), std::cmp::Reverse(r.priority), r.id));
+    // Open public/director requests first (they may need approval), then the
+    // science programme by priority, then closed ones, newest first.
+    list.sort_by_key(|r| (!r.state.is_open(), r.programme.is_some(), std::cmp::Reverse(r.priority), std::cmp::Reverse(if r.state.is_open() { 0 } else { r.id })));
     let v: Vec<serde_json::Value> = list
         .iter()
         .take(400)
@@ -822,7 +852,7 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         Err(_) => return err(req, 400, "malformed JSON"),
     };
     let mut sh = shared.lock().unwrap();
-    let open_total = sh.requests.iter().filter(|r| r.state.is_open()).count();
+    let open_total = sh.requests.iter().filter(|r| r.state.is_open() && r.programme.is_none()).count();
     let open_ip = sh.requests.iter().filter(|r| r.state.is_open() && r.ip == ip).count();
     if open_total >= MAX_OPEN_TOTAL {
         drop(sh);
@@ -894,6 +924,11 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         slews: 0,
         slew_deg_sum: 0.0,
         agility: None,
+        programme: None,
+        deadline_s: None,
+        submit_jd: sh.jd_now,
+        case_idx: None,
+        inv_idx: None,
     };
     let msg = format!(
         "Request #{} from {}: {} ({} × {:.0} s){}",
@@ -902,19 +937,7 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
     );
     sh.requests.push(r);
     sh.log("info", msg);
-    // Bound memory: drop the oldest closed requests.
-    if sh.requests.len() > MAX_KEPT {
-        let excess = sh.requests.len() - MAX_KEPT;
-        let mut removed = 0;
-        sh.requests.retain(|r| {
-            if removed < excess && !r.state.is_open() {
-                removed += 1;
-                false
-            } else {
-                true
-            }
-        });
-    }
+    sh.prune();
     drop(sh);
     json(req, 201, serde_json::json!({ "id": id, "state": state }));
 }

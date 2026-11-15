@@ -43,7 +43,7 @@ impl Mode {
             Mode::Stack => "Target: stack",
             Mode::Mosaic => "Target: mosaic",
             Mode::NeoSweep => "NEO sweep (solar elongation ring)",
-            Mode::Queue => "Queue (observation requests)",
+            Mode::Queue => "Science operations (request queue)",
         }
     }
 }
@@ -469,11 +469,12 @@ pub fn update(
                 }
             }
         }
-        Mode::Queue => {} // pointing assigned by `assign_queue`
+        Mode::Queue => {} // pointing assigned by `assign_queue`; idle eyes survey
     }
-    // Stack/Mosaic: telescopes not on the target (over the cap, no target,
-    // or no line of sight) carry on with the zenith survey.
-    if matches!(mode, Mode::Stack | Mode::Mosaic) {
+    // Stack/Mosaic/Queue: telescopes with nothing else to do (over the target
+    // cap, no line of sight, no queued work they can see) run the zenith survey.
+    // Queue work and STARE campaigns override this below.
+    if matches!(mode, Mode::Stack | Mode::Mosaic | Mode::Queue) {
         for i in 0..n {
             let z = st.rhat[i];
             if st.pointing[i].is_none() && !st.hold[i] && ok(z) {
@@ -509,14 +510,32 @@ pub struct QueueResult {
 /// `budget` caps how many telescopes the queue may use in total (the public
 /// time share); the queue runs after the director's mode and pre-empts its
 /// assignments up to that cap.
-pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: V3, moon: V3, budget: usize) -> Vec<QueueResult> {
+///
+/// Call it more than once per step for separate pools (public share, then the
+/// science programme): telescopes already given queue work this step are
+/// skipped. With `steal` false only idle or surveying telescopes are used.
+pub fn assign_queue(
+    st: &mut ObsState,
+    o: &ObsParams,
+    items: &[QueueItem],
+    sun: V3,
+    moon: V3,
+    budget: usize,
+    steal: bool,
+    pool: &'static str,
+) -> Vec<QueueResult> {
     let n = st.rhat.len();
     let mut out = Vec::with_capacity(items.len());
-    let mut taken = vec![false; n];
+    let mut taken: Vec<bool> = (0..n)
+        .map(|i| {
+            let t = job_tag(st.job[i]);
+            t == TAG_QUEUE || (!steal && t != 0 && t != TAG_SURVEY)
+        })
+        .collect();
     let mut used = 0usize;
     for it in items {
         if budget == 0 {
-            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some("public time share is 0 %") });
+            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(pool) });
             continue;
         }
         if let Some(why) = sky_blocked(o, it.dir, sun, moon) {
@@ -538,7 +557,8 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
                 st.fine[i] = it.fine;
                 got += 1;
             } else {
-                let busy = st.prev_job[i] != 0 && st.prev_job[i] != me;
+                let pt = job_tag(st.prev_job[i]);
+                let busy = pt != 0 && pt != TAG_SURVEY && st.prev_job[i] != me;
                 let cost = st.att[i].dir.angle(it.dir) + if busy { 10.0 } else { 0.0 };
                 cands.push((cost, i));
             }
@@ -561,7 +581,7 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
         let free = taken.iter().filter(|t| !**t).count();
         let blocked = if got == 0 {
             Some(if used >= budget {
-                "waiting: public share of telescopes fully booked"
+                pool
             } else if free == 0 {
                 "no free telescopes"
             } else {

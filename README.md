@@ -399,6 +399,64 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## Science programme and science return
+
+The sim starts in **Science operations** mode with a simulated science
+programme running: 120 invented investigator teams submit observing requests
+across ten science cases, and the request queue schedules them alongside
+public requests, STARE campaigns and the director's target. Every team,
+target and designation is synthetic; the case mix, team sizes, integration
+times, priorities and deadlines are **assumptions** (see `src/programme.rs`).
+
+| Case | Telescopes | Integration each | Priority | Deadline | Sky |
+|---|---|---|---|---|---|
+| NEO follow-up astrometry | 1–3 | 2–10 min | 6–8 | 24 h | ecliptic, 60–175° elongation |
+| Supernova / transient follow-up | 4–16 | 10–30 min | 7–8 | 48 h | \|b\| > 30° |
+| GRB afterglow (ToO) | 10–40 | 10–20 min | 10 | 2 h | anywhere |
+| Stellar occultation timing | 4–12 | 2–5 min | 9 | 2 h | ecliptic, opposition side |
+| Exoplanet transit photometry | 2–6 | 30–120 min | 4–5 | 12 h | anywhere |
+| Variable-star monitoring | 1–2 | 5–15 min | 3–4 | 3 d | Galactic plane |
+| Comet monitoring | 2–4 | 5–15 min | 5–6 | 48 h | ecliptic, 50–110° |
+| Planetary atmospheres | 2–8 | 5–20 min | 4–6 | 24 h | Mercury … Neptune |
+| Clusters & nearby galaxies | 4–12 | 15–40 min | 2–3 | 7 d | anywhere |
+| Deep fields | 20–80 | 30–90 min | 1–2 | 14 d | \|b\| > 30° |
+
+Proposers avoid targets inside the Sun and Moon keep-outs. **Demand** is
+metered in telescope-seconds: at 1.0× work arrives as fast as the whole
+fleet could integrate it; the default 1.5× makes the facility oversubscribed,
+so priorities matter and low-priority deep fields wait. Desktop knobs:
+*Science programme* panel (on/off, demand, number of teams);
+`--no-programme`, `--load X`, `--teams N`.
+
+**Allocation.** Public and director requests get first claim on the public
+time share; the programme then takes every telescope still free (idle or
+surveying). In Stack/Mosaic it uses the eyes beyond the target cap; Survey
+and NEO-sweep modes dedicate the whole fleet, so the programme pauses there.
+Anything left over runs the zenith survey.
+
+**Science-return metrics** (ops console *Science return* panel, public page
+summary, desktop panel, `science` in `/api/status`):
+
+* *Open-shutter efficiency*: satellite time spent integrating; the rest is
+  slew/settle/guide-star acquisition overhead, idle or safe hold. *Pointed
+  science* is the part spent on requests, STARE and director targets.
+* *Time use*: integration hours by programme, public, STARE, director,
+  survey and NEO sweep.
+* *Requests completed per day*, and *on time*: completed before the case's
+  deadline, as a share of completed + expired. Requests that miss their
+  deadline expire, because late NEO astrometry or a late GRB afterglow is
+  worth little.
+* *Median response* per case: submission to first locked integration
+  (slew, settle and acquisition included).
+* *Median depth* per case: 5σ point-source limit reached by the stacked
+  integration against the zodiacal background at the target.
+* *Étendue × time*: Σ collecting area × field of view × integration time
+  (m²·deg²·h), the standard survey-speed figure of merit; it lets FACET be
+  compared with other facilities on one number.
+* *Raw data per day*: 16-bit full frames before compression. This sizes the
+  downlink.
+* *Teams served*, and the most-served teams by telescope-hours.
+
 ## Licence
 
 The code is licensed under either of the **Apache License 2.0**

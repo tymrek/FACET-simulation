@@ -233,6 +233,47 @@ function reqRow(r) {
     el("td", { class: "num" }, prio), stateCell(r), progressCell(r), btns);
 }
 
+// ---------------------------------------------------------------- science return
+const USE = [["programme", "Science programme", "#4fa3ff"], ["public", "Public requests", "#5fe0a0"], ["stare", "STARE", "#c58bff"],
+             ["director", "Director target", "#ffd166"], ["survey", "Zenith survey", "#7c8aa5"], ["neo_sweep", "NEO sweep", "#ff9f6e"]];
+function fmtNum(x, d = 0) { return x === null || x === undefined ? "–" : Number(x).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }); }
+function tile(label, value, hint) { return el("div", { class: "tile", title: hint || "" }, el("div", { class: "tv" }, value), el("div", { class: "tl" }, label)); }
+function renderScience(s) {
+  const sc = s.science; if (!sc) return;
+  const e = sc.efficiency, d = sc.per_day;
+  $("sci_since").textContent = `since ${sc.since_utc.slice(0, 16)} UTC · ${fmtDur(sc.elapsed_s)} simulated` + (s.programme ? ` · demand ${s.programme.load.toFixed(2)}× capacity · ${s.programme.investigators} teams` : "");
+  $("sci_tiles").replaceChildren(
+    tile("requests completed / day", fmtNum(d.completed), "Programme requests finished per simulated day"),
+    tile("on time", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`, "Completed before the science case's deadline, of all completed + expired"),
+    tile("open-shutter efficiency", `${e.integrating_pct.toFixed(1)} %`, "Satellite time spent integrating (any use)"),
+    tile("pointed science", `${e.pointed_science_pct.toFixed(1)} %`, "Satellite time integrating on requests, STARE and director targets"),
+    tile("telescope-hours / day", fmtNum(d.tel_h), "Integration delivered per day, all uses"),
+    tile("étendue × time / day", `${fmtNum(d.etendue_m2deg2h)} m²·deg²·h`, "Σ collecting area × field of view × integration time: the standard survey-speed figure of merit"),
+    tile("raw data / day", `${d.tb.toFixed(1)} TB`, "16-bit full frames before compression: sizes the downlink"),
+    tile("teams served", `${sc.investigators_served} / ${sc.investigators}`, "Investigator teams with at least one completed request"),
+  );
+  const tot = 100;
+  const segs = USE.map(([k, , c]) => [sc.use_h[k] * 3600 / Math.max(1, sc.elapsed_s * (s.shell.n || 1)) * 100, c]);
+  segs.push([e.overhead_pct, "#3a4256"], [e.idle_pct + e.hold_pct, "#1a2130"]);
+  $("sci_use").replaceChildren(...segs.map(([p, c]) => el("div", { style: `width:${Math.max(0, p / tot * 100)}%;background:${c}` })));
+  $("sci_legend").replaceChildren(...USE.map(([k, l, c]) => el("span", {}, el("i", { style: `background:${c}` }), `${l} ${fmtNum(sc.use_h[k])} h`)),
+    el("span", {}, el("i", { style: "background:#3a4256" }), `slew/settle/acquire ${e.overhead_pct.toFixed(1)} %`),
+    el("span", {}, el("i", { style: "background:#1a2130" }), `idle/hold ${(e.idle_pct + e.hold_pct).toFixed(1)} %`));
+  $("sci_cases").replaceChildren(...sc.cases.map(c => {
+    const fin = c.completed + c.expired;
+    return el("tr", {}, el("td", {}, c.label), el("td", { class: "num" }, fmtDur(c.deadline_h * 3600)),
+      el("td", { class: "num" }, fmtNum(c.submitted)), el("td", { class: "num" }, fmtNum(c.open)),
+      el("td", { class: "num" }, fmtNum(c.completed)), el("td", { class: "num" + (c.expired ? " warn" : "") }, fmtNum(c.expired)),
+      el("td", { class: "num" }, fin ? `${(100 * c.on_time / fin).toFixed(1)} %` : "–"),
+      el("td", { class: "num" }, c.median_response_s === null ? "–" : fmtDur(c.median_response_s)),
+      el("td", { class: "num" }, c.median_depth_mag === null ? "–" : `V ${c.median_depth_mag.toFixed(1)}`),
+      el("td", { class: "num" }, fmtNum(c.tel_s / 3600)));
+  }));
+  $("sci_top").replaceChildren(...(sc.top.length ? sc.top.map(t => el("tr", {}, el("td", {}, t.name, el("div", { class: "small muted" }, t.case)),
+    el("td", { class: "num" }, `${fmtNum(t.tel_h)} tel.-h`), el("td", { class: "num" }, `${t.done} done`))) : [el("tr", {}, el("td", { class: "muted small" }, "Nothing completed yet."))]));
+}
+$("qfilter").addEventListener("change", () => last && render(last));
+
 function kvRows(tbl, rows) {
   tbl.replaceChildren(...rows.map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))));
 }
@@ -301,21 +342,26 @@ function render(s) {
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
   const pending = open.filter(r => r.state === "pending").length;
   if (pending) alerts.push(["info", `${pending} public request${pending > 1 ? "s" : ""} awaiting approval`]);
-  const stuck = open.filter(r => r.waiting_s > 600);
-  if (stuck.length) alerts.push(["warn", `${stuck.length} approved request${stuck.length > 1 ? "s" : ""} waiting > 10 min for telescopes`]);
+  const stuck = open.filter(r => r.waiting_s > 600 && !r.programme);
+  if (stuck.length) alerts.push(["warn", `${stuck.length} approved public request${stuck.length > 1 ? "s" : ""} waiting > 10 min for telescopes`]);
+  if (s.programme && s.programme.on && !s.programme.active) alerts.push(["info", "Science programme paused: fleet dedicated to the director's sweep"]);
   if (s.mode !== "queue" && s.public_share === 0 && open.length) alerts.push(["warn", "Public time share is 0 %: the queue is not being served"]);
   $("alerts").replaceChildren(...(alerts.length ? alerts.map(([l, m]) => el("li", { class: l }, m)) : [el("li", { class: "muted" }, "none")]));
 
   // Queue (don't rebuild while the director is typing in it)
   const done = s.requests.filter(r => r.state === "done").length;
-  $("qsummary").textContent = `${open.length} open · ${pending} pending · ${done} done`;
+  const progOpen = (s.science && s.science.cases || []).reduce((a, c) => a + (c.open || 0), 0);
+  $("qsummary").textContent = `${open.length - open.filter(r => r.programme).length} public open · ${pending} pending · ${progOpen} programme open · ${done} done (shown)`;
   if (!$("queue").contains(document.activeElement)) {
     const q = $("queue"); q.replaceChildren();
-    for (const r of s.requests.slice(0, 150)) q.append(reqRow(r));
+    const f = $("qfilter").value;
+    const rows = s.requests.filter(r => f === "all" || (f === "programme") === !!r.programme);
+    for (const r of rows.slice(0, 150)) q.append(reqRow(r));
     if (!q.children.length) q.append(el("tr", {}, el("td", { class: "muted small", colspan: 9 }, "No requests.")));
   }
 
   renderStares(s);
+  renderScience(s);
   for (const c of (s.campaigns || []).filter(c => c.active)) {
     if (c.paused) alerts.push(["info", `STARE ${c.target_name} paused: ${String(c.blocked).toLowerCase()}`]);
     else if (c.eligible_s > 0 && c.locked_now === 0 && !c.blocked) alerts.push(["warn", `STARE #${c.id} on ${c.target_name}: no eyes locked`]);

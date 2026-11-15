@@ -11,6 +11,7 @@ mod imaging;
 mod math;
 mod obs;
 mod optics;
+mod programme;
 mod server;
 mod webapp;
 mod tle;

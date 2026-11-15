@@ -112,3 +112,16 @@ body.ops .msg { grid-column: 1 / -1; }
 .stare .btns { margin-top: 4px; } .stare .btns button { padding: 3px 8px; font-size: 12px; }
 figure.psf { margin-top: 8px; } figure.psf img { width: 160px; height: 160px; image-rendering: auto; border-radius: 3px; }
 .stare.ready { background: #0b1019; border-style: dashed; } .stare.ready .btns { margin-top: 2px; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+.tile { background: #0b1019; border: 1px solid #1f2838; border-radius: 6px; padding: 8px 10px; }
+.tile .tv { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .tl { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.usebar { display: flex; height: 12px; border-radius: 3px; overflow: hidden; background: #1a2130; }
+.usebar > div { height: 100%; }
+.uselegend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 10px; color: var(--muted); }
+.uselegend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.split2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+@media (max-width: 1100px) { .split2 { grid-template-columns: 1fr; } }
+td.warn { color: #ffb44a; }
+h2 select.tiny { margin-left: 8px; font-size: 12px; }

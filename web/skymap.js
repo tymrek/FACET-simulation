@@ -152,10 +152,14 @@ class SkyMap {
       if (!["pending", "approved", "observing"].includes(r.state)) continue;
       const col = r.state === "observing" ? "#5affa0" : r.state === "approved" ? "#63c8ff" : "#ffd166";
       const [x, y] = this.project(r.ra_deg, r.dec_deg);
-      const s = (this.highlight === r.id ? 7 : 4.5) * this.dpr;
-      g.strokeStyle = col; g.lineWidth = 1.5 * this.dpr;
+      // Programme requests are many: small, unlabelled (ToOs and the hovered one excepted).
+      const prog = !!r.programme, hl = this.highlight === r.id, loud = !prog || hl || r.priority >= 9;
+      const s = (hl ? 7 : prog && !loud ? 2.5 : 4.5) * this.dpr;
+      g.strokeStyle = col; g.lineWidth = (prog && !loud ? 1 : 1.5) * this.dpr;
+      g.globalAlpha = prog && !loud ? 0.6 : 1;
       g.beginPath(); g.moveTo(x, y - s); g.lineTo(x + s, y); g.lineTo(x, y + s); g.lineTo(x - s, y); g.closePath(); g.stroke();
-      this.label(x, y, `#${r.id}`, col, 10);
+      g.globalAlpha = 1;
+      if (loud) this.label(x, y, `#${r.id}`, col, 10);
     }
     // STARE campaigns
     for (const c of st.campaigns || []) {

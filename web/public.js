@@ -25,6 +25,25 @@ function estimate() {
     `(dark sky, soft estimate; the result page computes it exactly). Field of view ${t.fov_deg}° per telescope.`;
 }
 
+function renderScience(s) {
+  const sc = s.science; if (!sc) return;
+  const d = sc.per_day, n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const tile = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
+  $("sci_since").textContent = `· ${fmtDur(sc.elapsed_s)} simulated`;
+  $("sci_tiles").replaceChildren(
+    tile("observations completed per day", n(d.completed)),
+    tile("finished in time to be useful", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`),
+    tile("of the time the shutters are open", `${sc.efficiency.integrating_pct.toFixed(0)} %`),
+    tile("research teams served", `${sc.investigators_served}`));
+  $("sci_cases").replaceChildren(...sc.cases.map(c => {
+    const fin = c.completed + c.expired;
+    return el("tr", {}, el("td", {}, c.label), el("td", { class: "num" }, n(c.completed)),
+      el("td", { class: "num" }, fin ? `${(100 * c.on_time / fin).toFixed(0)} %` : "–"),
+      el("td", { class: "num" }, c.median_response_s === null ? "–" : fmtDur(c.median_response_s)),
+      el("td", { class: "num" }, c.median_depth_mag === null ? "–" : `mag ${c.median_depth_mag.toFixed(1)}`));
+  }));
+}
+
 function render(s) {
   last = s;
   $("clock").textContent = `${s.utc} · ${s.playing ? (s.rate === 1 ? "real time" : `${s.rate}× speed`) : "paused"}`;
@@ -36,9 +55,10 @@ function render(s) {
     stat("Slewing / settling", `${s.stats.slewing} / ${s.stats.settling}`),
     stat("In sunlight", `${s.stats.lit.toLocaleString()}`),
     stat("Sky reachable now", `${s.stats.sky_reachable}%`),
-    stat("Telescopes for the public", s.mode === "queue" ? "all (queue mode)" : `${Math.round(s.public_share * 100)} %`),
+    stat("Telescopes reserved for the public", `${Math.round(s.public_share * 100)} %`),
     stat("Mode", s.mode_label),
   );
+  renderScience(s);
   const q = $("queue"); q.replaceChildren();
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
   const recent = s.requests.filter(r => r.state === "done").slice(0, 10);

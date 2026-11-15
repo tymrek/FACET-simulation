@@ -311,11 +311,36 @@ impl App {
         let Some(web) = self.web.clone() else { return };
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
         let mut sh = web.lock().unwrap();
-        let mut order: Vec<usize> = (0..sh.requests.len())
+        let mut all: Vec<usize> = (0..sh.requests.len())
             .filter(|&i| sh.requests[i].state.is_schedulable())
             .collect();
-        order.sort_by_key(|&i| (std::cmp::Reverse(sh.requests[i].priority), sh.requests[i].id));
-        order.truncate(300);
+        all.sort_by_key(|&i| (std::cmp::Reverse(sh.requests[i].priority), sh.requests[i].id));
+        let n = self.shell.len();
+        // Pool 1: public / director requests on the public time share (they
+        // may pre-empt director tasks outside Science operations, as before).
+        // Pool 2: the science programme, on every telescope still free. It
+        // only takes idle or surveying telescopes, so in Stack/Mosaic it uses
+        // the eyes beyond the target cap; in Survey and NEO-sweep modes the
+        // director has given the whole fleet to the sweep.
+        let pools: [(Vec<usize>, usize, bool, &'static str); 2] = [
+            (
+                all.iter().copied().filter(|&i| sh.requests[i].programme.is_none()).take(300).collect(),
+                (self.public_share * n as f64).round() as usize,
+                self.mode != Mode::Queue,
+                "waiting: public share of telescopes fully booked",
+            ),
+            (
+                all.iter().copied().filter(|&i| sh.requests[i].programme.is_some()).take(400).collect(),
+                if matches!(self.mode, Mode::Survey | Mode::NeoSweep) { 0 } else { n },
+                false,
+                if matches!(self.mode, Mode::Survey | Mode::NeoSweep) {
+                    "paused: fleet dedicated to the director's sweep"
+                } else {
+                    "waiting: every telescope that can see it is busy"
+                },
+            ),
+        ];
+        for (order, budget, steal, pool) in pools {
         let o = &self.obs_params;
         let items: Vec<QueueItem> = order
             .iter()
@@ -331,13 +356,7 @@ impl App {
                 QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine }
             })
             .collect();
-        let n = self.shell.len();
-        let budget = if self.mode == Mode::Queue {
-            n
-        } else {
-            (self.public_share * n as f64).round() as usize
-        };
-        let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon, budget);
+        let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon, budget, steal, pool);
         for (res, &i) in results.iter().zip(&order) {
             let r = &mut sh.requests[i];
             r.assigned_now = res.assigned as u32;
@@ -347,6 +366,7 @@ impl App {
                 r.agility = Some(crate::attitude::Agility::from_obs(&self.obs_params));
             }
         }
+        }
     }
 
     /// After the attitude step: credit locked integration to requests, track
@@ -355,6 +375,7 @@ impl App {
         let Some(web) = self.web.clone() else { return };
         let ag = crate::attitude::Agility::from_obs(&self.obs_params);
         let mut per: HashMap<u64, (f64, f64, f64, u32)> = HashMap::new(); // id -> (s, jit²·s, fine s, locked sats)
+        let mut longest: HashMap<u64, f64> = HashMap::new(); // id -> longest integration this step
         for i in 0..self.obs.att.len() {
             let j = self.obs.job[i];
             if obs::job_tag(j) != obs::TAG_QUEUE {
@@ -367,6 +388,8 @@ impl App {
                 e.3 += 1;
             }
             if dt > 0.0 {
+                let m = longest.entry(obs::job_val(j)).or_insert(0.0);
+                *m = m.max(dt);
                 let jit = a.jitter(&ag);
                 e.0 += dt;
                 e.1 += dt * jit * jit;
@@ -394,9 +417,24 @@ impl App {
             }
             let (got, jit2, fine_s, locked) = per.get(&r.id).copied().unwrap_or_default();
             r.locked_now = locked;
+            if let (Some(c), true) = (r.case_idx, got > 0.0) {
+                self.science.cases[c].tel_s += got;
+                if let Some(v) = r.inv_idx {
+                    *self.science.inv(v).0 += got;
+                }
+            }
+            let loud = r.programme.is_none() || r.priority >= 9;
             if got > 0.0 {
                 if r.first_light_jd.is_none() {
-                    r.first_light_jd = Some(jd);
+                    // Integration began `longest` seconds before the end of the step.
+                    let start = jd - longest.get(&r.id).copied().unwrap_or(0.0) / 86_400.0;
+                    r.first_light_jd = Some(r.approved_jd.map_or(start, |a| start.max(a)));
+                    if let Some(c) = r.case_idx {
+                        if let Some(t) = r.response_s() {
+                            crate::programme::Science::push_capped(&mut self.science.cases[c].resp, t);
+                        }
+                    }
+                    if loud {
                     events.push((
                         "good",
                         format!(
@@ -408,6 +446,7 @@ impl App {
                             r.response_s().map(|t| format!(", +{t:.0} s after approval")).unwrap_or_default()
                         ),
                     ));
+                    }
                 }
                 r.obs_jd = jd;
                 r.progress_s += got;
@@ -419,24 +458,221 @@ impl App {
                     r.assigned_now = 0;
                     r.locked_now = 0;
                     r.completed_utc = Some(utc.clone());
-                    events.push((
-                        "good",
-                        format!("Request #{} complete: {} — {:.0} telescope-seconds, {} repoints", r.id, r.target_name, r.progress_s, r.slews),
-                    ));
+                    if let Some(c) = r.case_idx {
+                        let age = (jd - r.submit_jd) * 86_400.0;
+                        let cs = &mut self.science.cases[c];
+                        cs.completed += 1;
+                        if r.deadline_s.map_or(true, |d| age <= d) {
+                            cs.on_time += 1;
+                        }
+                        if let Some(hw) = &r.hw {
+                            let sub = r.exposure_s.min(hw.sub_max_s);
+                            let lim = crate::imaging::point_lim_mag(hw, r.progress_s, sub, crate::imaging::zodi_sb(r.dir, self.bodies[0].dir));
+                            crate::programme::Science::push_capped(&mut cs.depth, lim);
+                        }
+                        if let Some(v) = r.inv_idx {
+                            *self.science.inv(v).1 += 1;
+                        }
+                    }
+                    if loud {
+                        events.push((
+                            "good",
+                            format!("Request #{} complete: {} — {:.0} telescope-seconds, {} repoints", r.id, r.target_name, r.progress_s, r.slews),
+                        ));
+                    }
                     continue;
                 }
             }
             if r.full_lock_jd.is_none() && r.first_light_jd.is_some() && locked >= r.telescopes {
                 r.full_lock_jd = Some(jd);
-                if let Some(t) = r.full_lock_s() {
+                if let (Some(t), true) = (r.full_lock_s(), loud) {
                     events.push(("good", format!("Request #{} at full strength: {} telescopes locked (+{:.0} s)", r.id, locked, t)));
                 }
             }
             r.state = if r.assigned_now > 0 { ReqState::Observing } else { ReqState::Approved };
         }
+        // Programme deadlines: late data are worthless for these cases.
+        let mut expired_n = 0;
+        for r in sh.requests.iter_mut().filter(|r| r.state.is_open()) {
+            if let (Some(d), Some(c)) = (r.deadline_s, r.case_idx) {
+                if (jd - r.submit_jd) * 86_400.0 > d {
+                    r.state = ReqState::Expired;
+                    r.assigned_now = 0;
+                    r.locked_now = 0;
+                    r.completed_utc = Some(utc.clone());
+                    self.science.cases[c].expired += 1;
+                    expired_n += 1;
+                    if r.priority >= 9 {
+                        events.push(("warn", format!("Request #{} ({}) EXPIRED before completion: {}", r.id, crate::programme::CASES[c].label, r.target_name)));
+                    }
+                }
+            }
+        }
+        let _ = expired_n;
         for (lvl, m) in events {
             sh.log(lvl, m);
         }
+    }
+
+    /// Science programme: investigators submit work in proportion to the
+    /// fleet's capacity (`load`).
+    pub fn programme_tick(&mut self, dt_sim: f64) {
+        let Some(web) = self.web.clone() else { return };
+        if self.science.since_utc.is_empty() {
+            self.science = crate::programme::Science::new(astro::format_utc(self.jd));
+        }
+        if dt_sim <= 0.0 {
+            return;
+        }
+        let mut sh = web.lock().unwrap();
+        let open = sh.requests.iter().filter(|r| r.state.is_open() && r.programme.is_some()).count();
+        let room = 1200usize.saturating_sub(open);
+        let planets: Vec<V3> = self.bodies.iter().map(|b| b.dir).collect();
+        let drafts = self.gen.tick(
+            dt_sim,
+            self.shell.len(),
+            room,
+            self.bodies[0].dir,
+            self.obs_params.sun_excl_deg,
+            self.bodies[1].dir,
+            self.obs_params.moon_excl_deg,
+            &planets,
+        );
+        // The attitude step that follows covers (jd − dt, jd]: treat this
+        // step's arrivals as arriving at its start.
+        let t0 = self.jd - dt_sim / 86_400.0;
+        if drafts.is_empty() {
+            return;
+        }
+        let utc = astro::format_utc(self.jd);
+        for d in drafts {
+            let c = &crate::programme::CASES[d.case];
+            let id = sh.next_id;
+            sh.next_id += 1;
+            let (ra, dec) = d.dir.to_radec();
+            let inv = self.gen.investigators[d.inv].name.clone();
+            if d.priority >= 9 {
+                sh.log("warn", format!("ToO request #{id} from {inv}: {} — {} × {:.0} s, priority {}", d.target_name, d.telescopes, d.exposure_s, d.priority));
+            }
+            self.science.cases[d.case].submitted += 1;
+            sh.requests.push(crate::server::ObsRequest {
+                id,
+                submitter: inv,
+                target_name: d.target_name,
+                body: d.body,
+                ra_deg: deg(ra),
+                dec_deg: deg(dec),
+                telescopes: d.telescopes,
+                exposure_s: d.exposure_s,
+                priority: d.priority,
+                state: ReqState::Approved,
+                progress_s: 0.0,
+                assigned_now: 0,
+                blocked: None,
+                submitted_utc: utc.clone(),
+                completed_utc: None,
+                note: c.label.to_string(),
+                ip: String::new(),
+                dir: d.dir,
+                hw: None,
+                obs_jd: 0.0,
+                locked_now: 0,
+                approved_jd: Some(t0),
+                first_light_jd: None,
+                full_lock_jd: None,
+                jit2_s: 0.0,
+                fine_s: 0.0,
+                slews: 0,
+                slew_deg_sum: 0.0,
+                agility: None,
+                programme: Some(c.key),
+                deadline_s: Some(c.deadline_h * 3600.0),
+                submit_jd: t0,
+                case_idx: Some(d.case),
+                inv_idx: Some(d.inv),
+            });
+        }
+        sh.prune();
+    }
+
+    /// Fleet time accounting for the science-return figures.
+    pub fn science_account(&mut self, dt: f64) {
+        if dt <= 0.0 || self.science.since_utc.is_empty() {
+            return;
+        }
+        let o = &self.obs_params;
+        let prog: std::collections::HashSet<u64> = match &self.web {
+            Some(w) => w.lock().unwrap().requests.iter().filter(|r| r.programme.is_some() && r.state.is_open()).map(|r| r.id).collect(),
+            None => Default::default(),
+        };
+        let area_m2 = std::f64::consts::PI * (o.aperture_cm / 200.0).powi(2) * (1.0 - o.obstruction * o.obstruction);
+        let omega = o.fov_deg * o.fov_deg;
+        let sub = o.exp_s.min(o.sub_max_s).max(1.0);
+        let frame_bytes = o.sensor_px * (o.sensor_px * 2.0 / 3.0) * 2.0; // 3:2 sensor, 16-bit
+        let s = &mut self.science;
+        s.elapsed_s += dt;
+        let n = self.obs.att.len();
+        s.sat_s += n as f64 * dt;
+        for i in 0..n {
+            if self.obs.hold.get(i).copied().unwrap_or(false) {
+                s.hold_s += dt;
+                continue;
+            }
+            let j = self.obs.job[i];
+            if j == 0 {
+                s.idle_s += dt;
+                continue;
+            }
+            let got = self.obs.obs_dt[i].clamp(0.0, dt);
+            s.integrating_s += got;
+            s.overhead_s += dt - got;
+            if got <= 0.0 {
+                continue;
+            }
+            let u = &mut s.by_use;
+            match obs::job_tag(j) {
+                obs::TAG_QUEUE if prog.contains(&obs::job_val(j)) => u.programme += got,
+                obs::TAG_QUEUE => u.public += got,
+                obs::TAG_STARE => u.stare += got,
+                obs::TAG_STACK | obs::TAG_MOSAIC => u.director += got,
+                obs::TAG_NEO => u.neo_sweep += got,
+                _ => u.survey += got,
+            }
+            s.etendue_s += area_m2 * omega * got;
+            s.frames += got / sub;
+            s.bytes += got / sub * frame_bytes;
+        }
+    }
+
+    pub fn science_panel(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new("Science programme (simulated investigators)").strong());
+        ui.checkbox(&mut self.gen.on, "Investigators submit requests");
+        ui.add(egui::Slider::new(&mut self.gen.load, 0.1..=3.0).text("demand × fleet capacity"))
+            .on_hover_text("1.0 = work arrives as fast as the whole fleet could integrate it. Above 1 the facility is oversubscribed.");
+        let mut ninv = self.gen.investigators.len();
+        if ui.add(egui::Slider::new(&mut ninv, 1..=500).logarithmic(true).text("investigator teams")).changed() {
+            self.gen.set_investigators(ninv);
+        }
+        if matches!(self.mode, Mode::Survey | Mode::NeoSweep) {
+            ui.label(RichText::new("Paused: Survey / NEO-sweep modes dedicate the fleet. Use Science operations.").small().color(egui::Color32::from_rgb(255, 180, 60)));
+        }
+        let s = self.science.summary(&self.gen.investigators);
+        let e = &s["efficiency"];
+        let d = &s["per_day"];
+        let f = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0);
+        ui.label(RichText::new(format!(
+            "Open shutter {:.1} % ({:.1} % pointed science) · overhead {:.1} % · idle {:.1} %",
+            f(&e["integrating_pct"]), f(&e["pointed_science_pct"]), f(&e["overhead_pct"]), f(&e["idle_pct"])
+        )).small());
+        ui.label(RichText::new(format!(
+            "Per day: {:.0} requests done · {:.0} telescope-h · {:.0} m²·deg²·h étendue-time · {:.1} TB raw",
+            f(&d["completed"]), f(&d["tel_h"]), f(&d["etendue_m2deg2h"]), f(&d["tb"])
+        )).small());
+        ui.label(RichText::new(format!(
+            "On-time {} · {} done, {} expired · {}/{} teams served",
+            s["on_time_pct"].as_f64().map(|p| format!("{p:.1} %")).unwrap_or_else(|| "-".into()),
+            s["completed"], s["expired"], s["investigators_served"], s["investigators"]
+        )).small());
     }
 
     pub fn publish_status(&mut self, now: Instant) {
@@ -485,13 +721,30 @@ impl App {
         });
         let m = obs::metrics(o, self.obs.n_locked_target, self.obs.max_baseline_km, 0);
         let ag = crate::attitude::Agility::from_obs(o);
+        let science = {
+            let mut s = self.science.summary(&self.gen.investigators);
+            let sh = web.lock().unwrap();
+            if let Some(cs) = s["cases"].as_array_mut() {
+                for c in cs {
+                    let key = c["key"].as_str().unwrap_or("").to_string();
+                    let open = sh.requests.iter().filter(|r| r.state.is_open() && r.programme == Some(key.as_str()) ).count();
+                    c["open"] = serde_json::json!(open);
+                }
+            }
+            s
+        };
         let status = serde_json::json!({
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,
             "playing": self.playing,
             "rate": self.rate,
             "mode": self.mode.key(),
-            "public_share": if self.mode == Mode::Queue { 1.0 } else { self.public_share },
+            "public_share": self.public_share,
+            "programme": {
+                "on": self.gen.on, "load": self.gen.load, "investigators": self.gen.investigators.len(),
+                "active": self.gen.on && !matches!(self.mode, Mode::Survey | Mode::NeoSweep),
+            },
+            "science": science,
             "mode_label": self.mode.label(),
             "shell": {
                 "n": n, "planes": sp.effective_planes(), "planes_setting": sp.planes, "phasing": sp.phasing,

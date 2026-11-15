@@ -96,6 +96,9 @@ pub struct App {
     pub last_fleet: Option<Instant>,
     pub logged_fleet_n: usize,
     pub stare_eyes: u32,
+    /// Synthetic investigators submitting work, and the science-return ledger.
+    pub gen: crate::programme::Generator,
+    pub science: crate::programme::Science,
     /// Campaign targets given on the command line, started once web is up.
     pub pending_stares: Vec<String>,
 }
@@ -131,7 +134,7 @@ impl App {
             sun_sync: false,
             shell,
             obs_params: ObsParams::default(),
-            mode: Mode::Stack,
+            mode: Mode::Queue,
             obs: ObsState::default(),
             jd,
             playing: true,
@@ -181,6 +184,8 @@ impl App {
             last_fleet: None,
             logged_fleet_n: 0,
             stare_eyes: 10,
+            gen: crate::programme::Generator::new(120, 0x5EED_FACE_7),
+            science: crate::programme::Science::default(),
             pending_stares: Vec::new(),
         };
         app.apply_args(std::env::args().skip(1).collect());
@@ -246,6 +251,12 @@ impl App {
                 "--no-target" => self.target = None,
                 "--target-eyes" => self.obs_params.target_eyes = val().parse().unwrap_or(25),
                 "--click-target" => self.click_target = true,
+                "--no-programme" => self.gen.on = false,
+                "--load" => self.gen.load = val().parse::<f64>().unwrap_or(1.5).clamp(0.0, 10.0),
+                "--teams" => {
+                    let n = val().parse().unwrap_or(120);
+                    self.gen.set_investigators(n);
+                }
                 "--look-sun" => self.look_at(astro::bodies(self.jd)[0].dir),
                 "--control-addr" => self.web_control_addr = Some(val()),
                 "--public-addr" => self.web_public_addr = Some(val()),
@@ -345,11 +356,13 @@ impl App {
         );
         // STARE campaigns first (director commitments), then the public queue
         // on its share of the shell.
+        self.programme_tick(dt_sim);
         self.stare_assign();
         self.queue_assign();
         let ag = crate::attitude::Agility::from_obs(&self.obs_params);
         obs::advance_attitudes(&mut self.obs, &ag, dt_sim, target);
         self.queue_credit();
+        self.science_account(dt_sim);
         self.stare_credit(dt_sim);
         self.publish_status(now);
 
@@ -622,6 +635,8 @@ impl App {
         self.stats(ui);
         ui.separator();
 
+        self.science_panel(ui);
+        ui.separator();
         self.web_panel(ui);
         ui.separator();
 

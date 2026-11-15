@@ -100,10 +100,25 @@
     <div class="panel result" id="result" hidden></div>
   </section>
 
+  <section class="span">
+    <div class="panel">
+      <h2>Science return <span class="small muted" id="sci_since"></span></h2>
+      <div class="tiles" id="sci_tiles"></div>
+      <div class="usebar" id="sci_use"></div>
+      <div class="uselegend small" id="sci_legend"></div>
+      <div class="split2">
+        <div class="scroll"><table class="queue"><thead><tr><th>Science case</th><th class="num">Deadline</th><th class="num">Submitted</th><th class="num">Open</th><th class="num">Done</th><th class="num">Expired</th><th class="num">On time</th><th class="num">Median response</th><th class="num">Median depth</th><th class="num">Tel.-hours</th></tr></thead>
+        <tbody id="sci_cases"></tbody></table></div>
+        <div><h3 class="small muted" style="margin:4px 0">Most-served investigator teams</h3><table class="queue"><tbody id="sci_top"></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
   <!-- Queue + log -->
   <section class="span split">
     <div class="panel">
-      <h2>Request queue <span class="small muted" id="qsummary"></span></h2>
+      <h2>Request queue <span class="small muted" id="qsummary"></span>
+        <select id="qfilter" class="tiny"><option value="all">all</option><option value="public">public / director</option><option value="programme">science programme</option></select></h2>
       <div class="scroll">
         <table class="queue"><thead><tr><th>#</th><th>Observer</th><th>Target</th><th class="num">Tel.</th><th class="num">Exp.</th><th class="num">Prio</th><th>State</th><th>Progress</th><th></th></tr></thead>
         <tbody id="queue"></tbody></table>
