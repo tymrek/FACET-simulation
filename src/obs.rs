@@ -104,6 +104,9 @@ pub struct ObsParams {
     pub coarse_jitter_arcsec: f64,
     /// Faintest usable guide star (V) in the science field.
     pub guide_mag: f64,
+    /// Most telescopes the director's target may take in Stack/Mosaic
+    /// (0 = every telescope that can see it). The rest keep surveying.
+    pub target_eyes: u32,
 }
 
 impl Default for ObsParams {
@@ -143,6 +146,7 @@ impl Default for ObsParams {
             acquire_s: 3.0,
             coarse_jitter_arcsec: 6.0,
             guide_mag: 13.0,
+            target_eyes: 25,
         }
     }
 }
@@ -360,7 +364,7 @@ pub fn update(
         Mode::Stack | Mode::Mosaic => {
             if let Some(t) = target {
                 st.target_blocked_by = sky_blocked(o, t, sun, moon);
-                let visible: Vec<usize> = if st.target_blocked_by.is_none() {
+                let mut visible: Vec<usize> = if st.target_blocked_by.is_none() {
                     (0..n).filter(|&i| !st.hold[i] && t.dot(st.rhat[i]) > cos_lim).collect()
                 } else {
                     Vec::new()
@@ -374,6 +378,21 @@ pub fn update(
                     Some(b) => 0xF_FF00 | b as u64,
                     None => dir_key(t),
                 };
+                // Cap the number of eyes the target may take: current members
+                // first (no needless handovers), then the cheapest slews.
+                let cap = o.target_eyes as usize;
+                if cap > 0 && visible.len() > cap {
+                    let member = |i: usize| {
+                        let pj = st.prev_job[i];
+                        (job_tag(pj) == TAG_STACK || job_tag(pj) == TAG_MOSAIC) && (job_val(pj) & 0xF_FFFF) == tkey
+                    };
+                    visible.sort_by(|&a, &b| {
+                        member(b).cmp(&member(a)).then(
+                            st.att[a].dir.angle(t).partial_cmp(&st.att[b].dir.angle(t)).unwrap_or(std::cmp::Ordering::Equal),
+                        )
+                    });
+                    visible.truncate(cap);
+                }
                 let target_is_body = target_body.is_some();
                 if mode == Mode::Stack {
                     let fine = target_is_body || guide(t);
@@ -451,6 +470,18 @@ pub fn update(
             }
         }
         Mode::Queue => {} // pointing assigned by `assign_queue`
+    }
+    // Stack/Mosaic: telescopes not on the target (over the cap, no target,
+    // or no line of sight) carry on with the zenith survey.
+    if matches!(mode, Mode::Stack | Mode::Mosaic) {
+        for i in 0..n {
+            let z = st.rhat[i];
+            if st.pointing[i].is_none() && !st.hold[i] && ok(z) {
+                st.pointing[i] = Some(z);
+                st.job[i] = job(TAG_SURVEY, 0);
+                st.fine[i] = guide(z);
+            }
+        }
     }
     st.n_active = st.pointing.iter().filter(|p| p.is_some()).count();
 }
@@ -903,8 +934,11 @@ mod stare_tests {
         advance_attitudes(&mut st, &ag, 3600.0, Some(b[6].dir));
         let slews = st.new_slews.len();
         assert!(slews > 0, "retarget should start slews");
-        let short: Vec<f64> = st.obs_dt.iter().cloned().filter(|&d| d > 0.0).collect();
-        assert!(short.iter().all(|&d| d < 3600.0 - 7.0), "integration must lose the repoint time");
+        let on: Vec<f64> = (0..st.job.len()).filter(|&i| job_tag(st.job[i]) == TAG_STACK).map(|i| st.obs_dt[i]).collect();
+        assert!(!on.is_empty() && on.len() <= o.target_eyes as usize, "target capped at {} eyes, got {}", o.target_eyes, on.len());
+        assert!(on.iter().all(|&d| d < 3600.0 - 7.0), "integration must lose the repoint time");
+        // Everyone else keeps surveying.
+        assert!(st.job.iter().any(|&j| job_tag(j) == TAG_SURVEY));
     }
 
     #[test]

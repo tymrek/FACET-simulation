@@ -129,29 +129,44 @@ $("st_start").addEventListener("click", () => {
   else { flash("Give a STARE target (name, or Shift-click the sky).", true); return; }
   cmd(b);
 });
+$("st_all").addEventListener("click", () => cmd({ cmd: "stare_activate_all" }));
 function renderStares(s) {
   const box = $("stares");
   if (box.contains(document.activeElement)) return;
-  const act = (s.campaigns || []).filter(c => c.active);
-  const ended = (s.campaigns || []).filter(c => !c.active).slice(0, 3);
-  box.replaceChildren(...[...act, ...ended].map(c => {
+  const all = s.campaigns || [];
+  const act = all.filter(c => c.active), ready = all.filter(c => c.armed && !c.active);
+  const ended = all.filter(c => !c.active && !c.armed).slice(-3).reverse();
+  $("st_all").disabled = ready.length === 0;
+  const row = (c) => {
     const { full, any } = stareCoverage(c);
-    const lamp = !c.active ? "grey" : c.blocked ? "amber" : c.locked_now >= c.eyes ? "green" : c.locked_now > 0 ? "amber" : "red";
     const eyes = el("input", { type: "number", value: c.eyes, min: 1, max: 5000, class: "tiny" });
+    if (c.armed && !c.active) {
+      return el("div", { class: "stare ready" },
+        el("div", { class: "insphead" }, el("span", { class: "lamp grey" }), el("b", {}, c.target_name),
+          el("span", { class: "muted small" }, c.blocked ? ` · ready · in ${c.blocked.toLowerCase()} (would start paused)` : " · ready")),
+        el("div", { class: "btns" },
+          el("button", { class: "primary", onclick: () => cmd({ cmd: "stare_activate", id: c.id }) }, "Start"),
+          eyes, el("button", { onclick: () => cmd({ cmd: "stare_eyes", id: c.id, eyes: +eyes.value }) }, "Set eyes")));
+    }
+    const lamp = !c.active ? "grey" : c.paused ? "amber" : c.locked_now >= c.eyes ? "green" : c.locked_now > 0 ? "amber" : "red";
     const hours = (c.eligible_s + c.excluded_s) / 3600;
     return el("div", { class: "stare" },
       el("div", { class: "insphead" }, el("span", { class: `lamp ${lamp}` }), el("b", {}, `#${c.id} ${c.target_name}`),
-        el("span", { class: "muted small" }, c.active ? ` · ${c.locked_now}/${c.eyes} locked` : " · ended")),
+        el("span", { class: "muted small" }, c.active ? (c.paused ? " · PAUSED" : ` · ${c.locked_now}/${c.eyes} locked`) : " · ended")),
       el("div", { class: "small" },
-        c.blocked ? el("span", { class: "warn" }, c.blocked + " · ") : "",
-        full !== null ? `full strength ${full.toFixed(2)} % · ≥1 eye ${any.toFixed(2)} % · ` : "acquiring… · ",
+        c.paused ? el("div", { class: "warn" }, `Target inside the ${String(c.blocked).toLowerCase()} — eyes released, resumes automatically`) : "",
+        !c.paused && c.blocked ? el("span", { class: "warn" }, c.blocked + " · ") : "",
+        full !== null ? `full strength ${full.toFixed(2)} % · ≥1 eye ${any.toFixed(2)} % · ` : (c.paused ? "" : "acquiring… · "),
         `gaps ${c.gaps}${c.max_gap_s > 0 ? ` (max ${fmtDur(c.max_gap_s)})` : ""} · handovers ${c.handovers}` +
-        (hours > 0.05 ? ` (${(c.handovers / hours).toFixed(1)}/h)` : "") + ` · ${fmtDur(c.integ_s)} integrated`),
+        (hours > 0.05 ? ` (${(c.handovers / hours).toFixed(1)}/h)` : "") + ` · ${fmtDur(c.integ_s)} integrated` +
+        (c.excluded_s > 0 ? ` · ${fmtDur(c.excluded_s)} paused` : "")),
       el("div", { class: "btns" },
         c.has_frame ? el("button", { class: "view", onclick: () => { viewer.close(); stareViewer.show(c.id); } }, "Live frame") : "",
         c.active ? eyes : "", c.active ? el("button", { onclick: () => cmd({ cmd: "stare_eyes", id: c.id, eyes: +eyes.value }) }, "Set eyes") : "",
         c.active ? el("button", { class: "danger", onclick: () => cmd({ cmd: "stare_stop", id: c.id }) }, "Stop") : ""));
-  }));
+  };
+  box.replaceChildren(...act.map(row), ...(ready.length ? [el("div", { class: "small muted", style: "margin-top:4px" }, "Ready")] : []), ...ready.map(row),
+                      ...(ended.length ? [el("div", { class: "small muted", style: "margin-top:4px" }, "Ended")] : []), ...ended.map(row));
   if (!box.children.length) box.append(el("div", { class: "muted small" }, "No campaigns."));
 }
 
@@ -301,8 +316,9 @@ function render(s) {
   }
 
   renderStares(s);
-  for (const c of (s.campaigns || []).filter(c => c.active && c.acquired !== false)) {
-    if (c.eligible_s > 0 && c.locked_now === 0 && !c.blocked) alerts.push(["warn", `STARE #${c.id} on ${c.target_name}: no eyes locked`]);
+  for (const c of (s.campaigns || []).filter(c => c.active)) {
+    if (c.paused) alerts.push(["info", `STARE ${c.target_name} paused: ${String(c.blocked).toLowerCase()}`]);
+    else if (c.eligible_s > 0 && c.locked_now === 0 && !c.blocked) alerts.push(["warn", `STARE #${c.id} on ${c.target_name}: no eyes locked`]);
   }
   $("alerts").replaceChildren(...(alerts.length ? alerts.map(([l, m]) => el("li", { class: l }, m)) : [el("li", { class: "muted" }, "none")]));
 

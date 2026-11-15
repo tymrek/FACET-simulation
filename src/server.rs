@@ -139,6 +139,13 @@ pub struct Campaign {
     /// Cadence of the published frames (each frame stacks eyes × frame_s).
     pub frame_s: f64,
     pub active: bool,
+    /// Built-in campaign for a solar-system body (stopping returns it to ready).
+    pub preset: bool,
+    /// Ready to start at the push of a button (not running).
+    pub armed: bool,
+    /// Running, but the target is inside a keep-out zone: eyes released,
+    /// resumes automatically when it leaves.
+    pub paused: bool,
     pub started_utc: String,
     pub stopped_utc: Option<String>,
     pub duration_h: Option<f64>,
@@ -218,6 +225,12 @@ pub enum Command {
     StareStop {
         id: u64,
     },
+    /// Start a ready (armed) campaign.
+    StareActivate {
+        id: u64,
+    },
+    /// Start every ready campaign.
+    StareActivateAll,
     StareEyes {
         id: u64,
         eyes: u32,
@@ -295,6 +308,8 @@ impl ResultCache {
     }
 }
 
+/// Start a campaign from the console/CLI. If the target is a solar-system
+/// body that already has a built-in (preset) campaign, that one is started.
 pub fn start_campaign(
     sh: &mut Shared,
     target: Option<&str>,
@@ -304,6 +319,37 @@ pub fn start_campaign(
     frame_s: Option<f64>,
     duration_h: Option<f64>,
 ) -> Result<(), &'static str> {
+    if let Some(t) = target {
+        if let Some(Resolved::Body(b, _)) = sh.resolve(t) {
+            if let Some(id) = sh.campaigns.iter().find(|c| c.preset && c.body == Some(b) && !c.active).map(|c| c.id) {
+                if let Some(c) = sh.campaigns.iter_mut().find(|c| c.id == id) {
+                    if let Some(e) = eyes {
+                        c.eyes = e.clamp(1, 5000);
+                    }
+                    if let Some(f) = frame_s {
+                        c.frame_s = f.clamp(1.0, 3600.0);
+                    }
+                    c.duration_h = duration_h.filter(|h| h.is_finite() && *h > 0.0);
+                }
+                return activate_campaign(sh, id);
+            }
+        }
+    }
+    create_campaign(sh, target, ra, dec, eyes, frame_s, duration_h, true, false).map(|_| ())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_campaign(
+    sh: &mut Shared,
+    target: Option<&str>,
+    ra: Option<f64>,
+    dec: Option<f64>,
+    eyes: Option<u32>,
+    frame_s: Option<f64>,
+    duration_h: Option<f64>,
+    active: bool,
+    preset: bool,
+) -> Result<u64, &'static str> {
     let (body, name, dir) = match (target, ra, dec) {
         (Some(t), _, _) if !t.trim().is_empty() => match sh.resolve(t) {
             Some(Resolved::Body(i, n)) => (Some(i), n, V3::Z),
@@ -316,7 +362,7 @@ pub fn start_campaign(
         }
         _ => return Err("give a target name or ra_deg/dec_deg"),
     };
-    if sh.campaigns.iter().filter(|c| c.active).count() >= 50 {
+    if active && sh.campaigns.iter().filter(|c| c.active).count() >= 50 {
         return Err("too many active campaigns (50)");
     }
     let id = sh.next_cid;
@@ -334,8 +380,11 @@ pub fn start_campaign(
         dir,
         eyes,
         frame_s,
-        active: true,
-        started_utc: sh.utc_now.clone(),
+        active,
+        preset,
+        armed: !active,
+        paused: false,
+        started_utc: if active { sh.utc_now.clone() } else { String::new() },
         stopped_utc: None,
         duration_h,
         start_jd: sh.jd_now,
@@ -359,14 +408,73 @@ pub fn start_campaign(
         last_jd: 0.0,
     };
     sh.campaigns.push(c);
-    sh.log(
-        "good",
-        format!(
-            "STARE #{id} started on {name}: {eyes} eyes, {frame_s:.0} s frames{}",
-            duration_h.map(|h| format!(", {h} h")).unwrap_or_else(|| ", until stopped".into())
-        ),
+    if active {
+        sh.log(
+            "good",
+            format!(
+                "STARE #{id} started on {name}: {eyes} eyes, {frame_s:.0} s frames{}",
+                duration_h.map(|h| format!(", {h} h")).unwrap_or_else(|| ", until stopped".into())
+            ),
+        );
+    }
+    Ok(id)
+}
+
+/// Start (or restart) a ready campaign, with fresh statistics.
+pub fn activate_campaign(sh: &mut Shared, id: u64) -> Result<(), &'static str> {
+    if sh.campaigns.iter().filter(|c| c.active).count() >= 50 {
+        return Err("too many active campaigns (50)");
+    }
+    let (jd, utc) = (sh.jd_now, sh.utc_now.clone());
+    let c = sh.campaigns.iter_mut().find(|c| c.id == id).ok_or("no such campaign")?;
+    if c.active {
+        return Err("campaign already running");
+    }
+    if !c.armed {
+        return Err("campaign has ended; start a new one");
+    }
+    c.active = true;
+    c.armed = false;
+    c.paused = false;
+    c.start_jd = jd;
+    c.started_utc = utc;
+    c.stopped_utc = None;
+    c.eligible_s = 0.0;
+    c.excluded_s = 0.0;
+    c.full_s = 0.0;
+    c.any_s = 0.0;
+    c.gaps = 0;
+    c.max_gap_s = 0.0;
+    c.cur_gap_s = 0.0;
+    c.acquired = false;
+    c.handovers = 0;
+    c.integ_s = 0.0;
+    c.jit2_s = 0.0;
+    c.fine_s = 0.0;
+    c.hw = None;
+    c.agility = None;
+    let msg = format!(
+        "STARE #{} started on {}: {} eyes, {:.0} s frames{}",
+        c.id,
+        c.target_name,
+        c.eyes,
+        c.frame_s,
+        c.duration_h.map(|h| format!(", {h} h")).unwrap_or_else(|| ", until stopped".into())
     );
+    sh.log("good", msg);
     Ok(())
+}
+
+/// Arm the built-in campaigns: the Moon and the seven planets, ready to start.
+pub fn arm_presets(sh: &mut Shared, eyes: u32) {
+    let names: Vec<&str> = crate::astro::BODY_NAMES[1..].to_vec();
+    for n in &names {
+        if sh.campaigns.iter().any(|c| c.preset && c.target_name == *n) {
+            continue;
+        }
+        let _ = create_campaign(sh, Some(n), None, None, Some(eyes), None, None, false, true);
+    }
+    sh.log("info", format!("{} STARE campaigns armed (Moon and planets), ready to start", names.len()));
 }
 
 /// Serve `/api/campaign/{id}[/full.png|/crop.png]`: the latest STARE frame.
@@ -674,9 +782,12 @@ fn status_with(sh: &Shared, director: bool) -> String {
     v["campaigns"] = serde_json::Value::Array(
         sh.campaigns
             .iter()
-            .rev()
             .filter(|c| c.active || director)
-            .take(60)
+            .rev()
+            .take(80)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
             .map(|c| {
                 let mut j = serde_json::to_value(c).unwrap_or_default();
                 j["has_frame"] = serde_json::json!(c.integ_s > 0.0 && c.hw.is_some());
@@ -942,9 +1053,16 @@ fn control_loop(server: Server, shared: SharedRef) {
                     Command::StareStop { id } => match sh.campaigns.iter_mut().find(|c| c.id == *id && c.active) {
                         Some(c) => {
                             c.active = false;
+                            c.paused = false;
+                            c.armed = c.preset; // built-ins return to "ready"
                             c.assigned_now = 0;
                             c.locked_now = 0;
-                            let msg = format!("STARE #{} on {} stopped by director", c.id, c.target_name);
+                            let msg = format!(
+                                "STARE #{} on {} stopped by director{}",
+                                c.id,
+                                c.target_name,
+                                if c.preset { " (ready to restart)" } else { "" }
+                            );
                             let utc = sh.utc_now.clone();
                             if let Some(c) = sh.campaigns.iter_mut().find(|c| c.id == *id) {
                                 c.stopped_utc = Some(utc);
@@ -954,7 +1072,15 @@ fn control_loop(server: Server, shared: SharedRef) {
                         }
                         None => Err("no such active campaign"),
                     },
-                    Command::StareEyes { id, eyes } => match sh.campaigns.iter_mut().find(|c| c.id == *id && c.active) {
+                    Command::StareActivate { id } => activate_campaign(&mut sh, *id),
+                    Command::StareActivateAll => {
+                        let ids: Vec<u64> = sh.campaigns.iter().filter(|c| c.armed && !c.active).map(|c| c.id).collect();
+                        for id in ids {
+                            let _ = activate_campaign(&mut sh, id);
+                        }
+                        Ok(())
+                    }
+                    Command::StareEyes { id, eyes } => match sh.campaigns.iter_mut().find(|c| c.id == *id && (c.active || c.armed)) {
                         Some(c) => {
                             c.eyes = (*eyes).clamp(1, 5000);
                             let msg = format!("STARE #{} on {} → {} eyes", c.id, c.target_name, c.eyes);

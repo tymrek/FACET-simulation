@@ -111,3 +111,4 @@ body.ops .msg { grid-column: 1 / -1; }
 .stare { border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; background: #0e1420; }
 .stare .btns { margin-top: 4px; } .stare .btns button { padding: 3px 8px; font-size: 12px; }
 figure.psf { margin-top: 8px; } figure.psf img { width: 160px; height: 160px; image-rendering: auto; border-radius: 3px; }
+.stare.ready { background: #0b1019; border-style: dashed; } .stare.ready .btns { margin-top: 2px; }

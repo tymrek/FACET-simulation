@@ -140,6 +140,8 @@ impl App {
                 | Command::AutoApprove { .. }
                 | Command::StareStart { .. }
                 | Command::StareStop { .. }
+                | Command::StareActivate { .. }
+                | Command::StareActivateAll
                 | Command::StareEyes { .. } => {}
             }
         }
@@ -171,11 +173,22 @@ impl App {
                 c.dec_deg = deg(dec);
             }
         }
+        // Ready (armed) campaigns: keep their target position and keep-out
+        // status current so the console can show "would start paused".
+        for c in sh.campaigns.iter_mut().filter(|c| c.armed && !c.active) {
+            if let Some(b) = c.body {
+                c.dir = self.bodies[b].dir;
+                let (ra, dec) = c.dir.to_radec();
+                c.ra_deg = deg(ra);
+                c.dec_deg = deg(dec);
+            }
+            c.blocked = obs::sky_blocked(o, c.dir, sun, moon).map(String::from);
+        }
         let utc = sh.utc_now.clone();
         for m in ended {
             sh.log("good", m);
         }
-        for c in sh.campaigns.iter_mut().filter(|c| !c.active && c.stopped_utc.is_none()) {
+        for c in sh.campaigns.iter_mut().filter(|c| !c.active && !c.armed && c.stopped_utc.is_none()) {
             c.stopped_utc = Some(utc.clone());
         }
         let idx: Vec<usize> = (0..sh.campaigns.len()).filter(|&i| sh.campaigns[i].active).collect();
@@ -240,10 +253,22 @@ impl App {
             c.locked_now = locked;
             c.last_jd = jd;
             let excluded = matches!(c.blocked.as_deref(), Some("Sun exclusion") | Some("Moon exclusion"));
+            if excluded && !c.paused {
+                c.paused = true;
+                events.push((
+                    "warn",
+                    format!(
+                        "STARE #{} on {}: PAUSED — target inside the {}; will resume automatically",
+                        c.id,
+                        c.target_name,
+                        c.blocked.as_deref().unwrap_or("").to_lowercase()
+                    ),
+                ));
+            } else if !excluded && c.paused {
+                c.paused = false;
+                events.push(("good", format!("STARE #{} on {}: target left the keep-out zone — resuming", c.id, c.target_name)));
+            }
             if excluded {
-                if c.acquired {
-                    events.push(("warn", format!("STARE #{} on {}: target entered {} — paused", c.id, c.target_name, c.blocked.as_deref().unwrap_or("").to_lowercase())));
-                }
                 c.excluded_s += dt;
                 c.acquired = false;
                 c.cur_gap_s = 0.0;
@@ -724,24 +749,57 @@ impl App {
         // STARE campaigns (desktop shortcut; normally run from the ops console)
         ui.add_space(4.0);
         ui.label(RichText::new("STARE campaigns (Sustained Tracking And Rotating Eyes)").small().strong());
-        let active: Vec<usize> = (0..sh.campaigns.len()).filter(|&i| sh.campaigns[i].active).collect();
-        for &i in &active {
+        let shown: Vec<usize> = (0..sh.campaigns.len()).filter(|&i| sh.campaigns[i].active || sh.campaigns[i].armed).collect();
+        let mut activate = Vec::new();
+        for &i in &shown {
             let c = &mut sh.campaigns[i];
             ui.horizontal(|ui| {
-                let cov = if c.eligible_s > 0.0 { format!("{:.2} %", 100.0 * c.full_s / c.eligible_s) } else { "acquiring".into() };
-                ui.label(
-                    RichText::new(format!(
-                        "#{} {} · {}/{} locked · {} · gaps {} · handovers {}",
-                        c.id, c.target_name, c.locked_now, c.eyes, c.blocked.clone().unwrap_or(cov), c.gaps, c.handovers
-                    ))
-                    .small(),
-                );
-                if ui.small_button("stop").clicked() {
-                    c.active = false;
-                    c.assigned_now = 0;
-                    c.locked_now = 0;
+                if c.active {
+                    let state = if c.paused {
+                        format!("PAUSED ({})", c.blocked.clone().unwrap_or_default())
+                    } else if c.eligible_s > 0.0 {
+                        format!("{:.2} % full", 100.0 * c.full_s / c.eligible_s)
+                    } else {
+                        "acquiring".into()
+                    };
+                    ui.label(
+                        RichText::new(format!(
+                            "● #{} {} · {}/{} locked · {} · gaps {} · handovers {}",
+                            c.id, c.target_name, c.locked_now, c.eyes, state, c.gaps, c.handovers
+                        ))
+                        .small()
+                        .color(if c.paused { egui::Color32::from_rgb(255, 180, 60) } else { egui::Color32::from_rgb(90, 255, 150) }),
+                    );
+                    if ui.small_button("stop").clicked() {
+                        c.active = false;
+                        c.paused = false;
+                        c.armed = c.preset;
+                        c.assigned_now = 0;
+                        c.locked_now = 0;
+                    }
+                } else {
+                    ui.label(
+                        RichText::new(format!(
+                            "○ #{} {} · ready{}",
+                            c.id,
+                            c.target_name,
+                            c.blocked.as_ref().map(|b| format!(" (in {b}: would start paused)")).unwrap_or_default()
+                        ))
+                        .small(),
+                    );
+                    if ui.small_button("start").clicked() {
+                        activate.push(c.id);
+                    }
                 }
             });
+        }
+        if shown.iter().any(|&i| sh.campaigns[i].armed) && ui.small_button("Start all ready").clicked() {
+            activate.extend(shown.iter().filter(|&&i| sh.campaigns[i].armed).map(|&i| sh.campaigns[i].id));
+        }
+        for id in activate {
+            if let Err(e) = crate::server::activate_campaign(&mut sh, id) {
+                sh.errors.push(format!("STARE: {e}"));
+            }
         }
         let tgt = match &self.target {
             Some(crate::app::Target::Body(i)) => Some(BODY_NAMES[*i].to_string()),

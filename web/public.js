@@ -58,9 +58,10 @@ function render(s) {
   $("streams").replaceChildren(...(streams.length ? streams.map(c => {
     const { any } = stareCoverage(c);
     return el("div", { class: "stare" },
-      el("div", { class: "insphead" }, el("span", { class: `lamp ${c.blocked ? "amber" : c.locked_now ? "green" : "grey"}` }),
-        el("b", {}, c.target_name), el("span", { class: "muted small" }, ` · ${c.locked_now} telescopes watching · new frame every ${fmtDur(c.frame_s)}`)),
-      el("div", { class: "small muted" }, c.blocked ? c.blocked : any !== null ? `on target ${any.toFixed(2)} % of the time since ${c.started_utc.slice(0, 16)} UTC` : "acquiring…"),
+      el("div", { class: "insphead" }, el("span", { class: `lamp ${c.paused || c.blocked ? "amber" : c.locked_now ? "green" : "grey"}` }),
+        el("b", {}, c.target_name), el("span", { class: "muted small" }, c.paused ? " · paused" : ` · ${c.locked_now} telescopes watching · new frame every ${fmtDur(c.frame_s)}`)),
+      el("div", { class: "small muted" }, c.paused ? `Paused: ${c.target_name} is too close to the ${String(c.blocked).startsWith("Sun") ? "Sun" : "Moon"} to observe safely. The stream resumes automatically.`
+        : c.blocked ? c.blocked : any !== null ? `on target ${any.toFixed(2)} % of the time since ${c.started_utc.slice(0, 16)} UTC` : "acquiring…"),
       el("div", { class: "btns" }, c.has_frame ? el("button", { class: "view", onclick: () => { viewer.close(); streamViewer.show(c.id); } }, "Watch") : ""));
   }) : [el("div", { class: "muted small" }, "No live streams right now.")]));
   estimate();

@@ -300,7 +300,7 @@ impl App {
         if let Some(p) = tgt_tip {
             text(&painter, p, Align2::LEFT_BOTTOM, format!("  {}", self.target_name()), 12.0, c3(C_ACTIVE, 1.0));
         }
-        if unified && resp.clicked() {
+        if unified && self.click_target && resp.clicked() {
             if let Some(mp) = resp.interact_pointer_pos() {
                 let unproj = |p: Pos2| -> V3 {
                     let x = (p.x - c.x) as f64 / focal;
@@ -394,7 +394,7 @@ impl App {
         self.sky_layers(&painter, rect, &proj, &px_per_rad, f, self.sky_cam.fov_deg);
 
         // Picking
-        if resp.clicked() {
+        if self.click_target && resp.clicked() {
             if let Some(mp) = resp.interact_pointer_pos() {
                 self.target = Some(self.pick(mp, &proj, &unproj));
             }
@@ -417,9 +417,9 @@ impl App {
         );
         let hint = if let Some(hp) = resp.hover_pos() {
             let (ra, dec) = unproj(hp).to_radec();
-            format!("{} {}   ·   drag: pan · scroll: zoom · click: set target", fmt_ra(ra), fmt_dec(dec))
+            format!("{} {}   ·   drag: pan · scroll: zoom{}", fmt_ra(ra), fmt_dec(dec), if self.click_target { " · click: set target" } else { "" })
         } else {
-            "drag: pan · scroll: zoom · click: set target".into()
+            format!("drag: pan · scroll: zoom{}", if self.click_target { " · click: set target" } else { "" })
         };
         text(&painter, rect.left_bottom() + egui::vec2(10.0, -8.0), Align2::LEFT_BOTTOM, hint, 11.0, Color32::from_gray(120));
     }

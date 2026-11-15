@@ -12,6 +12,14 @@ Rust + egui/eframe (OpenGL via glow). One native binary, data embedded.
 cargo run --release
 ```
 
+It starts with 1,000 satellites at 1× real time, with STARE campaigns armed for
+the Moon and planets. In the *Target: stack/mosaic* modes the director's target
+takes at most **25 telescopes** by default (slider *max eyes on target*,
+`--target-eyes N`, 0 = every telescope that can see it); the rest keep
+surveying. **Clear** (or Esc) drops the target, `--no-target` starts without
+one, and clicking the sky only sets the target when *Click on the sky sets the
+target* is ticked (`--click-target`).
+
 Needs Rust ≥ 1.79 (the windowing stack pulls `quick-xml`, which needs 1.79).
 The distro Cargo 1.75 on *crash* is too old. Install a user-local toolchain
 with rustup. It lives in `~/.rustup` and `~/.cargo` and leaves `/usr/bin/cargo` alone:
@@ -295,12 +303,21 @@ imaging model as request results. The public page lists active campaigns
 under **Live streams**, with *Watch* buttons and shareable links
 (`http://host:8781/?stream=<id>`).
 
+**Built-in campaigns.** At startup the Moon and all seven planets each have a
+STARE campaign *armed*, so starting one is a single click (or **Start all
+ready**). If a target is inside a keep-out zone (Mercury and Venus near the
+Sun, for example), its campaign starts **PAUSED**: it holds no telescopes, the
+console shows why, and it resumes on its own when the target leaves the zone.
+Pausing and resuming are both logged. Stopping a built-in campaign returns
+it to *ready*.
+
 Ways to start one:
 - the ops console's **STARE campaigns** panel: target name, or Shift-click the
   sky; eyes, frame cadence and duration;
 - the desktop *Web access* panel;
 - the command line: `--stare Jupiter --stare Saturn --stare-eyes 10`;
 - the API: `{"cmd":"stare_start","target":"Jupiter","eyes":10,"frame_s":60,"duration_h":24}`,
+  `{"cmd":"stare_activate","id":5}`, `{"cmd":"stare_activate_all"}`,
   `{"cmd":"stare_eyes","id":1,"eyes":20}`, `{"cmd":"stare_stop","id":1}`.
 
 Each campaign reports full-strength and any-eye coverage, gaps, longest gap,

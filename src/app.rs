@@ -68,6 +68,8 @@ pub struct App {
 
     pub bodies: [Body; 9],
     pub target: Option<Target>,
+    /// Clicking the sky sets the target (off = clicks only inspect/pan).
+    pub click_target: bool,
     pub view: View,
     pub orbit_cam: OrbitCam,
     pub sky_cam: SkyCam,
@@ -117,7 +119,7 @@ impl App {
         cc.egui_ctx.set_visuals(vis);
 
         let jd = astro::jd_now();
-        let shell_params = ShellParams::default();
+        let shell_params = ShellParams { n: 1000, ..ShellParams::default() };
         let shell = Shell::new(shell_params.clone(), jd);
         let bodies = astro::bodies(jd);
         let (sra, sdec) = bodies[0].dir.to_radec();
@@ -133,10 +135,11 @@ impl App {
             obs: ObsState::default(),
             jd,
             playing: true,
-            rate: 60.0,
+            rate: 1.0,
             last_tick: Instant::now(),
             bodies,
             target: Some(Target::Body(5)), // Jupiter
+            click_target: false,
             view: View::Split,
             orbit_cam: OrbitCam {
                 yaw: rad(30.0),
@@ -185,6 +188,7 @@ impl App {
         if let Some(web) = app.web.clone() {
             let mut sh = web.lock().unwrap();
             sh.jd_now = app.jd;
+            crate::server::arm_presets(&mut sh, app.stare_eyes);
             for t in std::mem::take(&mut app.pending_stares) {
                 if let Err(e) = crate::server::start_campaign(&mut sh, Some(&t), None, None, Some(app.stare_eyes), None, None) {
                     eprintln!("facet-sim: --stare {t}: {e}");
@@ -208,7 +212,7 @@ impl App {
                 "--sso" => self.sun_sync = true,
                 "--star" => self.shell_params.raan_span_deg = 180.0,
                 "--aperture" => self.obs_params.aperture_cm = val().parse().unwrap_or(20.0),
-                "--rate" => self.rate = val().parse().unwrap_or(60.0),
+                "--rate" => self.rate = val().parse().unwrap_or(1.0),
                 "--paused" => self.playing = false,
                 "--coverage" => self.show.coverage = true,
                 "--fov" => self.sky_cam.fov_deg = val().parse().unwrap_or(110.0),
@@ -239,6 +243,9 @@ impl App {
                     }
                 }
                 "--look" => self.look_at_target(),
+                "--no-target" => self.target = None,
+                "--target-eyes" => self.obs_params.target_eyes = val().parse().unwrap_or(25),
+                "--click-target" => self.click_target = true,
                 "--look-sun" => self.look_at(astro::bodies(self.jd)[0].dir),
                 "--control-addr" => self.web_control_addr = Some(val()),
                 "--public-addr" => self.web_public_addr = Some(val()),
@@ -573,8 +580,17 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.label("Target:");
             ui.label(RichText::new(self.target_name()).color(Color32::from_rgb(120, 230, 160)));
-            ui.label(RichText::new("(click the sky to pick)").weak().small());
+            if self.target.is_some() && ui.small_button("Clear").on_hover_text("No target: every telescope surveys (Esc)").clicked() {
+                self.target = None;
+            }
         });
+        ui.checkbox(&mut self.click_target, "Click on the sky sets the target");
+        if matches!(self.mode, Mode::Stack | Mode::Mosaic) {
+            let mut v = self.obs_params.target_eyes;
+            ui.add(egui::Slider::new(&mut v, 0..=1000).logarithmic(true).text("max eyes on target (0 = all)"))
+                .on_hover_text("Telescopes beyond this keep surveying; STARE and queue work is unaffected");
+            self.obs_params.target_eyes = v;
+        }
         ui.horizontal_wrapped(|ui| {
             for i in 1..9 {
                 if ui.small_button(BODY_NAMES[i]).clicked() {
@@ -735,6 +751,9 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.step();
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.wants_keyboard_input() {
+            self.target = None;
+        }
 
         egui::SidePanel::left("controls")
             .resizable(true)
