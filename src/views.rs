@@ -7,7 +7,7 @@ use crate::catalog::bv_to_rgb;
 use crate::draw::{rgba, Batch};
 use crate::math::{deg, rad, V3};
 use crate::attitude::Phase;
-use crate::obs::{tangent_basis, Mode};
+use crate::obs::{self, tangent_basis, Mode};
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Stroke};
 
 const C_ACTIVE: (u8, u8, u8) = (90, 255, 150);
@@ -599,10 +599,20 @@ impl App {
                 let d = a.dir;
                 let phase = a.phase();
                 if phase != Phase::Locked {
-                    // Moving boresight: small marker only.
+                    // Moving boresight: marker plus a tick pointing along the
+                    // remaining great-circle path toward the commanded target.
                     if let Some(p) = proj(d) {
                         let c = if phase == Phase::Slewing { C_SLEWING } else { C_SETTLING };
-                        b.point(p, 1.6, c3(c, 0.85));
+                        b.point(p, 2.2, c3(c, 0.95));
+                        if phase == Phase::Slewing && d.angle(a.target) > 1e-4 {
+                            let ahead = crate::attitude::slerp(d, a.target, (2.0f64.to_radians() / d.angle(a.target)).min(1.0));
+                            if let Some(q) = proj(ahead) {
+                                let v = q - p;
+                                if v.length() > 0.5 {
+                                    b.line(p, p + v.normalized() * 9.0, 1.4, c3(c, 0.8));
+                                }
+                            }
+                        }
                     }
                     continue;
                 }
@@ -669,7 +679,19 @@ impl App {
                     if let Some(why) = self.obs.target_blocked_by {
                         s += &format!("  ·  {why}");
                     } else {
+                        let incoming: Vec<f64> = self
+                            .obs
+                            .att
+                            .iter()
+                            .zip(&self.obs.job)
+                            .filter(|(a, &j)| obs::job_tag(j) == obs::TAG_STACK && a.phase() != Phase::Locked && a.target.angle(t) < 1e-6)
+                            .map(|(a, _)| a.time_to_lock())
+                            .collect();
                         s += &format!("  ·  {} locked / {} can see it", self.obs.n_locked_target, self.obs.n_target_visible);
+                        if !incoming.is_empty() {
+                            let max = incoming.iter().cloned().fold(0.0, f64::max);
+                            s += &format!("  ·  {} slewing in, all locked in ~{:.0} s", incoming.len(), max);
+                        }
                     }
                 }
                 text(&painter, p + egui::vec2(18.0, 14.0), Align2::LEFT_TOP, s, 13.0, col);

@@ -189,6 +189,15 @@ impl Att {
         }
     }
 
+    /// Seconds until this telescope is locked (0 when locked or idle).
+    pub fn time_to_lock(&self) -> f64 {
+        if self.job == 0 {
+            0.0
+        } else {
+            (self.total() - self.elapsed).max(0.0)
+        }
+    }
+
     /// Current steady-state jitter RMS (arcsec) while locked.
     pub fn jitter(&self, ag: &Agility) -> f64 {
         if self.fine {

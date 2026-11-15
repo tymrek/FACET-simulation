@@ -331,7 +331,10 @@ impl App {
             sun,
             moon,
             target,
-            matches!(self.target, Some(Target::Body(_))),
+            match self.target {
+                Some(Target::Body(i)) => Some(i),
+                _ => None,
+            },
         );
         // STARE campaigns first (director commitments), then the public queue
         // on its share of the shell.

@@ -299,7 +299,7 @@ pub fn update(
     sun: V3,
     moon: V3,
     target: Option<V3>,
-    target_is_body: bool,
+    target_body: Option<usize>,
 ) {
     let n = pos.len();
     st.rhat.clear();
@@ -367,7 +367,14 @@ pub fn update(
                 };
                 st.n_target_visible = visible.len();
                 // Bright solar-system targets are their own guide source.
-                let tkey = if target_is_body { 0xF_FFFF } else { dir_key(t) };
+                // Each solar-system body gets its own key so retargeting from
+                // one planet to another is a new task (a real slew), while a
+                // planet's own slow motion is tracked under the same task.
+                let tkey = match target_body {
+                    Some(b) => 0xF_FF00 | b as u64,
+                    None => dir_key(t),
+                };
+                let target_is_body = target_body.is_some();
                 if mode == Mode::Stack {
                     let fine = target_is_body || guide(t);
                     for &i in &visible {
@@ -786,7 +793,7 @@ mod tests {
         // asin((6378+100)/6928) ≈ 69.2°
         let mut st = ObsState::default();
         let pos = vec![V3::new(6928.137, 0.0, 0.0)];
-        update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[], V3::new(0.0, 1.0, 0.0), V3::Z, None, false);
+        update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[], V3::new(0.0, 1.0, 0.0), V3::Z, None, None);
         assert!((st.earth_cone_deg - 69.2).abs() < 0.2, "{}", st.earth_cone_deg);
     }
 
@@ -794,7 +801,7 @@ mod tests {
     fn opposite_pair_link_blocked() {
         let pos = vec![V3::new(6928.0, 0.0, 0.0), V3::new(-6928.0, 0.0, 0.0)];
         let mut st = ObsState::default();
-        update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[(0, 1)], V3::new(0.0, 1.0, 0.0), V3::Z, None, false);
+        update(&mut st, &ObsParams::default(), Mode::Survey, &pos, &[(0, 1)], V3::new(0.0, 1.0, 0.0), V3::Z, None, None);
         assert_eq!(st.links_blocked, 1);
     }
 }
@@ -836,7 +843,7 @@ mod stare_tests {
             shell.propagate(jd);
             let b = astro::bodies(jd);
             let (sun, moon) = (b[0].dir, b[1].dir);
-            update(&mut st, &o, Mode::Survey, &shell.pos, &[], sun, moon, None, false);
+            update(&mut st, &o, Mode::Survey, &shell.pos, &[], sun, moon, None, None);
             let items: Vec<StareItem> = targets
                 .iter()
                 .map(|&i| StareItem { id: i as u64, dir: b[i].dir, eyes, fine: true })
@@ -873,6 +880,31 @@ mod stare_tests {
             }
         }
         cov
+    }
+
+    #[test]
+    fn retarget_between_planets_is_a_real_slew_even_at_high_time_rates() {
+        let jd0 = 2_461_359.5;
+        let o = ObsParams::default();
+        let ag = Agility::from_obs(&o);
+        let shell = Shell::new(ShellParams { n: 200, ..Default::default() }, jd0);
+        let b = astro::bodies(jd0);
+        let mut st = ObsState::default();
+        let (sun, moon) = (b[0].dir, b[1].dir);
+        // Lock on Jupiter
+        for _ in 0..3 {
+            update(&mut st, &o, Mode::Stack, &shell.pos, &[], sun, moon, Some(b[5].dir), Some(5));
+            advance_attitudes(&mut st, &ag, 600.0, Some(b[5].dir));
+        }
+        assert!(st.n_locked_target > 0);
+        // Retarget to Saturn with a 1-hour step: must be a new task, with a
+        // slew whose time is subtracted from the integration.
+        update(&mut st, &o, Mode::Stack, &shell.pos, &[], sun, moon, Some(b[6].dir), Some(6));
+        advance_attitudes(&mut st, &ag, 3600.0, Some(b[6].dir));
+        let slews = st.new_slews.len();
+        assert!(slews > 0, "retarget should start slews");
+        let short: Vec<f64> = st.obs_dt.iter().cloned().filter(|&d| d > 0.0).collect();
+        assert!(short.iter().all(|&d| d < 3600.0 - 7.0), "integration must lose the repoint time");
     }
 
     #[test]
