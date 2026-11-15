@@ -1,6 +1,8 @@
 //! FACET simulator — an Earth-centred planetarium with a scalable shell of
 //! small space telescopes inside it.
 
+#![forbid(unsafe_code)]
+
 mod app;
 mod astro;
 mod attitude;
