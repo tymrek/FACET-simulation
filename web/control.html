@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FACET · director's console</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>FACET</h1><span class="sub">observatory director's console</span>
+  <span class="clock" id="clock">connecting…</span>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>Sky · <span id="modelabel"></span></h2>
+      <canvas class="sky" id="sky"></canvas>
+      <div class="legend">
+        <span><i style="background:#5affa0"></i>pointing (sunlit)</span>
+        <span><i style="background:#78c8ff"></i>pointing (eclipsed)</span>
+        <span><i style="background:#ffd166"></i>pending</span><span><i style="background:#63c8ff"></i>approved</span>
+        <span><i style="background:#5affa0"></i>observing</span>
+        <span>Click the map to set the director's target.</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Status</h2>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div class="card">
+      <h2>Request queue <label style="display:inline;margin-left:12px"><input type="checkbox" id="auto"> auto-approve public requests</label></h2>
+      <table><thead><tr><th>#</th><th>Observer</th><th>Target</th><th class="num">Tel.</th><th class="num">Exp.</th><th class="num">Prio</th><th>State</th><th>Progress</th><th></th></tr></thead>
+      <tbody id="queue"></tbody></table>
+      <p class="note">Requests are served only in <b>Queue</b> mode. Higher priority is scheduled first; ties go to the oldest request.
+      The allocator is a greedy baseline: each request takes up to its telescope count from the satellites that can see it.</p>
+    </div>
+  </section>
+  <aside>
+    <div class="card">
+      <h2>Time</h2>
+      <div class="btns" id="timebtns"></div>
+    </div>
+    <div class="card">
+      <h2>Operations</h2>
+      <div class="btns" id="modebtns"></div>
+      <label for="target">Director's target (stack / mosaic)</label>
+      <div class="row"><input id="target" list="targets" placeholder="Jupiter, Vega, M31…"><button id="settarget">Set</button></div>
+      <datalist id="targets"><option>Moon</option><option>Mercury</option><option>Venus</option><option>Mars</option><option>Jupiter</option><option>Saturn</option><option>Uranus</option><option>Neptune</option><option>M42</option><option>M31</option><option>M45</option><option>LMC</option><option>Galactic Centre</option></datalist>
+    </div>
+    <div class="card">
+      <h2>Constellation</h2>
+      <label>Satellites: <b id="nval"></b></label>
+      <input type="range" id="n" min="0" max="1000" step="1">
+      <div class="btns" id="stages"></div>
+      <div class="row">
+        <div><label for="alt">Altitude km</label><input id="alt" type="number" min="300" max="2000"></div>
+        <div><label for="inc">Inclination °</label><input id="inc" type="number" min="0" max="180" step="0.1"></div>
+      </div>
+      <div class="row">
+        <div><label for="planes">Planes (0 = auto)</label><input id="planes" type="number" min="0" max="400"></div>
+        <div><label for="phasing">Phasing F</label><input id="phasing" type="number" min="0" max="399"></div>
+      </div>
+      <label><input type="checkbox" id="sso"> sun-synchronous</label>
+      <div class="btns"><button class="primary" id="applyshell">Apply</button></div>
+      <p class="note" id="shellinfo"></p>
+    </div>
+    <div class="card">
+      <h2>Telescope &amp; constraints</h2>
+      <div class="row">
+        <div><label>Aperture cm</label><input id="aperture_cm" type="number" min="5" max="100"></div>
+        <div><label>FOV °</label><input id="fov_deg" type="number" min="0.1" max="5" step="0.1"></div>
+        <div><label>Sun exclusion °</label><input id="sun_excl_deg" type="number" min="5" max="120"></div>
+        <div><label>Moon exclusion °</label><input id="moon_excl_deg" type="number" min="0" max="45"></div>
+        <div><label>Limb margin °</label><input id="limb_margin_deg" type="number" min="0" max="40"></div>
+        <div><label>NEO elongation °</label><input id="neo_elong_deg" type="number" min="5" max="120"></div>
+      </div>
+      <div class="btns"><button class="primary" id="applytel">Apply</button></div>
+    </div>
+    <div class="msg small" id="msg"></div>
+  </aside>
+</main>
+<script src="/skymap.js"></script>
+<script src="/control.js"></script>
+</body>
+</html>

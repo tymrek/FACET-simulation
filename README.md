@@ -64,6 +64,52 @@ cone plus a limb margin, and Earth-shadow (eclipse) state.
 **Export TLEs.** Writes the shell at the current sim time as a `.tle` file.
 Checked against SGP4: within 0.3° after 12 h.
 
+## Web access
+
+The simulator serves two ports while it runs:
+
+| port | who | what |
+|---|---|---|
+| **8780** director console | observatory director, token-protected | run the constellation (size, orbit, planes), operating mode, director's target, sim clock, telescope parameters and constraints; approve, reject, prioritise, resize, cancel and re-queue requests; auto-approve switch |
+| **8781** public access node | anyone | live all-sky map (Hammer–Aitoff, centred on the anti-Sun) showing telescope pointings, keep-outs, planets and the queue; status; observation-request form (click the map to fill in RA/Dec); "your requests" tracker |
+
+When the app starts it prints the director URL with its token and shows it in the
+*Web access* panel. The token is random each run unless you set `--token`.
+
+By default both ports listen on **127.0.0.1 only**. To reach them from other machines:
+
+```sh
+facet-sim --control-addr 127.0.0.1:8780 --public-addr 0.0.0.0:8781
+```
+
+Keep the director port on localhost, or behind an SSH tunnel or a TLS reverse
+proxy (nginx, caddy). It's plain HTTP, so the token is sent unencrypted.
+To disable ports: `--no-control`, `--no-public`, `--no-web`.
+
+**Requests are served in Queue mode.** Approved requests are scheduled by priority
+(ties go to the oldest). Each takes up to its requested number of telescopes from
+the satellites that have a clear line of sight. It then accumulates telescope-seconds
+until it reaches telescopes × exposure. Requests inside the Sun or Moon keep-out
+wait, and show why. The allocator is a deliberately simple greedy baseline for
+comparing smarter schedulers against.
+
+Public-port limits: 5 open requests per IP, 500 open requests in total,
+8 KB request bodies, and text fields length-capped and stripped of control
+characters. Submitter IP addresses are visible only on the director port.
+
+API (JSON): `GET /api/status`, `GET /api/stars` on both ports;
+`POST /api/request` on the public port; `POST /api/cmd` on the director port,
+with header `X-Facet-Token` or `?token=`. Example commands:
+
+```json
+{"cmd":"shell","n":1000,"alt_km":550,"sso":true}
+{"cmd":"mode","mode":"queue"}
+{"cmd":"target","name":"Jupiter"}
+{"cmd":"time","rate":600,"playing":true}
+{"cmd":"request","id":7,"action":"approve","priority":5,"telescopes":200}
+{"cmd":"auto_approve","on":true}
+```
+
 ## Use it with Stellarium
 
 1. Click **Export TLEs** to write `facet_<N>_sats.tle`.
@@ -81,6 +127,8 @@ facet-sim --n 10000 --mode stack --target Jupiter --look --coverage
 facet-sim --view unified --n 300 --target Jupiter --camfov 60 --look
 facet-sim --n 50 --sso --mode survey --view orbit --zoom 20000
 ```
+
+Web flags: `--control-addr --public-addr --no-control --no-public --no-web --token`.
 
 Flags: `--n --planes --alt --inc --sso --star --aperture --rate --paused
 --mode survey|stack|mosaic|neo --view orbit|sky|split|unified --camfov <deg> --target <planet or star>
@@ -116,15 +164,18 @@ Every performance number is an **unchecked soft estimate**:
 | `src/views.rs` | orbit and sky rendering, picking |
 | `src/app.rs` | state, clock, control panel |
 | `src/tle.rs` | TLE export |
+| `src/server.rs` | HTTP ports, auth, limits, request book |
+| `src/webapp.rs` | sim ↔ web glue: commands, queue scheduling, status |
+| `web/` | director and public pages, all-sky map |
 | `assets/` | stars (HYG v4.0, CC BY-SA 4.0), coastlines (Natural Earth, public domain) |
 
-`cargo test` runs 16 checks: ephemeris vs ERFA, orbital period, SSO inclination,
+`cargo test` runs 20 checks: ephemeris vs ERFA, orbital period, SSO inclination,
 nodal regression, Earth-cone geometry, stacking maths and TLE format.
 
 ## Next steps
 
-- Request-load simulation: a queue of public observation requests, telescope
-  assignment and slews, plus throughput and latency.
+- Request-load simulation: synthetic request generators (bursty public demand), slew
+  costs and handover in the scheduler, plus throughput and latency statistics.
 - Live planet streams: telescopes per planet over a day, and handover.
 - Aperture trade study: sweep D and FOV against cost per satellite.
 - Ground observer view: a topocentric sky from any site, to show what FACET does

@@ -8,6 +8,8 @@ mod constellation;
 mod draw;
 mod math;
 mod obs;
+mod server;
+mod webapp;
 mod tle;
 mod views;
 

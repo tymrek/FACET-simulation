@@ -19,16 +19,31 @@ pub enum Mode {
     Mosaic,
     /// Planetary-defence sweep: a ring of pointings at fixed solar elongation.
     NeoSweep,
+    /// Serve the observation-request queue (public / director requests).
+    Queue,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 4] = [Mode::Survey, Mode::Stack, Mode::Mosaic, Mode::NeoSweep];
+    pub const ALL: [Mode; 5] = [Mode::Survey, Mode::Stack, Mode::Mosaic, Mode::NeoSweep, Mode::Queue];
+    pub fn key(self) -> &'static str {
+        match self {
+            Mode::Survey => "survey",
+            Mode::Stack => "stack",
+            Mode::Mosaic => "mosaic",
+            Mode::NeoSweep => "neo",
+            Mode::Queue => "queue",
+        }
+    }
+    pub fn from_key(k: &str) -> Option<Mode> {
+        Mode::ALL.iter().copied().find(|m| m.key() == k)
+    }
     pub fn label(self) -> &'static str {
         match self {
             Mode::Survey => "Survey (zenith stare)",
             Mode::Stack => "Target: stack",
             Mode::Mosaic => "Target: mosaic",
             Mode::NeoSweep => "NEO sweep (solar elongation ring)",
+            Mode::Queue => "Queue (observation requests)",
         }
     }
 }
@@ -255,8 +270,58 @@ pub fn update(
                 }
             }
         }
+        Mode::Queue => {} // pointing assigned by `assign_queue`
     }
     st.n_active = st.pointing.iter().filter(|p| p.is_some()).count();
+}
+
+pub struct QueueItem {
+    pub id: u64,
+    pub dir: V3,
+    pub want: usize,
+}
+
+pub struct QueueResult {
+    pub id: u64,
+    pub assigned: usize,
+    pub blocked: Option<&'static str>,
+}
+
+/// Greedy allocator: items in priority order each take up to `want` idle
+/// telescopes that have a clear line of sight. Deliberately simple — a
+/// baseline to compare smarter schedulers against (slew cost, handover,
+/// fairness, airmass-free but limb-proximity weighting, …).
+pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: V3, moon: V3) -> Vec<QueueResult> {
+    let n = st.rhat.len();
+    let mut out = Vec::with_capacity(items.len());
+    let mut idle = n;
+    for it in items {
+        if let Some(why) = sky_blocked(o, it.dir, sun, moon) {
+            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(why) });
+            continue;
+        }
+        let mut got = 0;
+        if idle > 0 {
+            for i in 0..n {
+                if got >= it.want {
+                    break;
+                }
+                if st.pointing[i].is_none() && it.dir.dot(st.rhat[i]) > st.cos_lim {
+                    st.pointing[i] = Some(it.dir);
+                    got += 1;
+                    idle -= 1;
+                }
+            }
+        }
+        let blocked = if got == 0 {
+            Some(if idle == 0 { "no free telescopes" } else { "Earth blocks every free telescope" })
+        } else {
+            None
+        };
+        out.push(QueueResult { id: it.id, assigned: got, blocked });
+    }
+    st.n_active = st.pointing.iter().filter(|p| p.is_some()).count();
+    out
 }
 
 /// Two-pass farthest-point heuristic on positions projected onto the plane ⟂ t.

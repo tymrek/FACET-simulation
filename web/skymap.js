@@ -1,0 +1,194 @@
+// All-sky map (Hammer–Aitoff, equatorial J2000), centred on the anti-Sun so
+// the night sky sits in the middle. RA increases to the left, as on the sky.
+"use strict";
+
+const D2R = Math.PI / 180, R2D = 180 / Math.PI, SQ2 = Math.SQRT2;
+const OBLIQ = 23.4393 * D2R;
+
+function vec(ra, dec) {
+  const r = ra * D2R, d = dec * D2R;
+  return [Math.cos(d) * Math.cos(r), Math.cos(d) * Math.sin(r), Math.sin(d)];
+}
+function radec(v) {
+  let ra = Math.atan2(v[1], v[0]) * R2D; if (ra < 0) ra += 360;
+  return [ra, Math.asin(Math.max(-1, Math.min(1, v[2]))) * R2D];
+}
+function cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function norm(a) { const n = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0]/n, a[1]/n, a[2]/n]; }
+
+class SkyMap {
+  constructor(canvas, onClick) {
+    this.c = canvas; this.ctx = canvas.getContext("2d");
+    this.stars = []; this.status = null; this.centerRa = 0; this.highlight = null;
+    this.onClick = onClick;
+    canvas.addEventListener("click", (e) => {
+      const p = this.unproject(e.offsetX * this.dpr, e.offsetY * this.dpr);
+      if (p && this.onClick) this.onClick(p[0], p[1]);
+    });
+    canvas.addEventListener("mousemove", (e) => {
+      const p = this.unproject(e.offsetX * this.dpr, e.offsetY * this.dpr);
+      canvas.title = p ? `RA ${p[0].toFixed(2)}°  Dec ${p[1] >= 0 ? "+" : ""}${p[1].toFixed(2)}°` : "";
+    });
+    window.addEventListener("resize", () => this.draw());
+  }
+  setStars(s) { this.stars = s; this.draw(); }
+  setStatus(s) {
+    this.status = s;
+    const sun = s.bodies && s.bodies[0];
+    if (sun) this.centerRa = (sun.ra + 180) % 360;
+    this.draw();
+  }
+  layout() {
+    const dpr = window.devicePixelRatio || 1; this.dpr = dpr;
+    const w = this.c.clientWidth * dpr, h = this.c.clientHeight * dpr;
+    if (this.c.width !== w || this.c.height !== h) { this.c.width = w; this.c.height = h; }
+    const m = 10 * dpr;
+    this.s = Math.min((w - 2*m) / (4*SQ2), (h - 2*m) / (2*SQ2));
+    this.cx = w / 2; this.cy = h / 2; this.w = w; this.h = h;
+  }
+  project(ra, dec) {
+    let l = (ra - this.centerRa) * D2R;
+    l = Math.atan2(Math.sin(l), Math.cos(l));
+    const b = dec * D2R, z = Math.sqrt(1 + Math.cos(b) * Math.cos(l / 2));
+    const x = 2 * SQ2 * Math.cos(b) * Math.sin(l / 2) / z, y = SQ2 * Math.sin(b) / z;
+    return [this.cx - x * this.s, this.cy - y * this.s];
+  }
+  unproject(px, py) {
+    const x = -(px - this.cx) / this.s, y = -(py - this.cy) / this.s;
+    if ((x*x) / 8 + (y*y) / 2 > 1) return null;
+    const z = Math.sqrt(1 - (x/4)**2 - (y/2)**2);
+    const l = 2 * Math.atan2(z * x, 2 * (2*z*z - 1));
+    const b = Math.asin(z * y);
+    let ra = (l * R2D + this.centerRa) % 360; if (ra < 0) ra += 360;
+    return [ra, b * R2D];
+  }
+  polyline(pts, style, width, dash) {
+    const g = this.ctx; g.strokeStyle = style; g.lineWidth = width * this.dpr;
+    g.setLineDash(dash ? dash.map(d => d * this.dpr) : []);
+    g.beginPath(); let prev = null;
+    for (const [ra, dec] of pts) {
+      const p = this.project(ra, dec);
+      if (prev && Math.abs(p[0] - prev[0]) < this.w / 3) g.lineTo(p[0], p[1]); else g.moveTo(p[0], p[1]);
+      prev = p;
+    }
+    g.stroke(); g.setLineDash([]);
+  }
+  ring(ra, dec, rDeg, n = 120) {
+    const c = vec(ra, dec), p = norm(Math.abs(c[2]) < 0.9 ? cross(c, [0,0,1]) : cross(c, [1,0,0])), q = cross(c, p);
+    const r = rDeg * D2R, out = [];
+    for (let k = 0; k <= n; k++) {
+      const t = k / n * 2 * Math.PI;
+      const v = [0,1,2].map(i => c[i]*Math.cos(r) + (p[i]*Math.cos(t) + q[i]*Math.sin(t)) * Math.sin(r));
+      out.push(radec(v));
+    }
+    return out;
+  }
+  dot(ra, dec, r, fill) {
+    const [x, y] = this.project(ra, dec), g = this.ctx;
+    g.fillStyle = fill; g.beginPath(); g.arc(x, y, r * this.dpr, 0, 2*Math.PI); g.fill();
+    return [x, y];
+  }
+  label(x, y, text, color, size = 11) {
+    const g = this.ctx; g.fillStyle = color; g.font = `${size * this.dpr}px system-ui, sans-serif`;
+    g.fillText(text, x + 6 * this.dpr, y - 5 * this.dpr);
+  }
+  draw() {
+    this.layout(); const g = this.ctx, st = this.status;
+    g.clearRect(0, 0, this.w, this.h);
+    // Sky ellipse
+    g.fillStyle = "#03050d"; g.beginPath();
+    g.ellipse(this.cx, this.cy, 2*SQ2*this.s, SQ2*this.s, 0, 0, 2*Math.PI); g.fill();
+    g.strokeStyle = "#1e2533"; g.lineWidth = this.dpr; g.stroke();
+    // Grid
+    for (let ra = 0; ra < 360; ra += 30) {
+      const pts = []; for (let d = -88; d <= 88; d += 2) pts.push([ra, d]);
+      this.polyline(pts, "rgba(90,120,170,0.22)", 1);
+    }
+    for (let d = -60; d <= 60; d += 30) {
+      const pts = []; for (let k = 0; k <= 360; k += 2) pts.push([this.centerRa - 179.99 + k * 0.99997, d]);
+      this.polyline(pts, d === 0 ? "rgba(110,160,230,0.5)" : "rgba(90,120,170,0.22)", 1);
+    }
+    for (let h = 0; h < 24; h += 2) {
+      const [x, y] = this.project(h * 15, 0); this.label(x - 10*this.dpr, y + 16*this.dpr, `${h}h`, "rgba(140,160,200,0.6)", 10);
+    }
+    // Ecliptic
+    const ecl = [];
+    for (let k = 0; k <= 360; k += 2) {
+      const l = k * D2R; ecl.push(radec([Math.cos(l), Math.sin(l) * Math.cos(OBLIQ), Math.sin(l) * Math.sin(OBLIQ)]));
+    }
+    ecl.sort((a, b) => ((a[0] - this.centerRa + 540) % 360) - ((b[0] - this.centerRa + 540) % 360));
+    this.polyline(ecl, "rgba(220,180,70,0.45)", 1.2, [5, 4]);
+    // Stars
+    for (const [ra, dec, mag, ci] of this.stars) {
+      const r = Math.max(0.5, (5.2 - mag) * 0.45);
+      const t = Math.max(0, Math.min(1, (ci + 0.3) / 1.9));
+      const col = `rgba(${200 + 55*t | 0},${215 - 40*t | 0},${255 - 120*t | 0},${Math.max(0.35, Math.min(1, (5.5 - mag) / 3))})`;
+      this.dot(ra, dec, r, col);
+    }
+    if (!st) return;
+    const tel = st.telescope || {};
+    const sun = st.bodies[0], moon = st.bodies[1];
+    // Keep-out zones
+    const zone = (b, r, rgb) => {
+      const pts = this.ring(b.ra, b.dec, r);
+      this.polyline(pts, `rgba(${rgb},0.8)`, 1.4);
+    };
+    zone(sun, tel.sun_excl_deg, "255,170,40");
+    zone(moon, tel.moon_excl_deg, "180,180,200");
+    if (st.mode === "neo") this.polyline(this.ring(sun.ra, sun.dec, Math.max(tel.neo_elong_deg, tel.sun_excl_deg)), "rgba(255,120,60,0.7)", 1.2, [4, 4]);
+    // Telescope pointings
+    for (const [ra, dec, lit] of st.footprints || []) {
+      this.dot(ra, dec, 1.6, lit ? "rgba(90,255,150,0.75)" : "rgba(120,200,255,0.75)");
+    }
+    // Bodies
+    const colors = ["#ffe178", "#d7d7cd", "#beb4aa", "#fff5d7", "#ff8250", "#ebcda0", "#f0d782", "#96e1eb", "#6e96ff"];
+    st.bodies.forEach((b, i) => {
+      const [x, y] = this.dot(b.ra, b.dec, i === 0 ? 7 : i === 1 ? 5 : 3, colors[i]);
+      this.label(x, y, b.name, colors[i]);
+    });
+    // Requests
+    for (const r of st.requests || []) {
+      if (!["pending", "approved", "observing"].includes(r.state)) continue;
+      const col = r.state === "observing" ? "#5affa0" : r.state === "approved" ? "#63c8ff" : "#ffd166";
+      const [x, y] = this.project(r.ra_deg, r.dec_deg);
+      const s = (this.highlight === r.id ? 7 : 4.5) * this.dpr;
+      g.strokeStyle = col; g.lineWidth = 1.5 * this.dpr;
+      g.beginPath(); g.moveTo(x, y - s); g.lineTo(x + s, y); g.lineTo(x, y + s); g.lineTo(x - s, y); g.closePath(); g.stroke();
+      this.label(x, y, `#${r.id}`, col, 10);
+    }
+    // Director's target
+    if (st.target && st.mode !== "queue" && st.mode !== "survey" && st.mode !== "neo") {
+      const [x, y] = this.project(st.target.ra, st.target.dec);
+      g.strokeStyle = st.target.blocked ? "#ff7a5c" : "#5affa0"; g.lineWidth = 1.5 * this.dpr;
+      g.beginPath(); g.arc(x, y, 9 * this.dpr, 0, 2*Math.PI); g.stroke();
+      this.label(x + 6*this.dpr, y + 14*this.dpr, st.target.name, g.strokeStyle);
+    }
+  }
+}
+
+// Small shared helpers for the two pages.
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
+  }
+  for (const k of kids) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
+  return e;
+}
+function fmtDur(s) {
+  if (s < 120) return `${s.toFixed(0)} s`;
+  if (s < 7200) return `${(s/60).toFixed(1)} min`;
+  if (s < 3*86400) return `${(s/3600).toFixed(1)} h`;
+  return `${(s/86400).toFixed(1)} d`;
+}
+function progressCell(r) {
+  const pct = Math.min(100, 100 * r.progress_s / Math.max(1e-9, r.required_s));
+  return el("td", {}, el("div", { class: "bar", title: `${pct.toFixed(1)}%` }, el("div", { style: `width:${pct}%` })));
+}
+function stateCell(r) {
+  const s = el("span", { class: `state ${r.state}` }, r.state);
+  const td = el("td", {}, s);
+  if (r.blocked && (r.state === "approved" || r.state === "observing")) td.append(el("div", { class: "small warn" }, r.blocked));
+  else if (r.state === "observing") td.append(el("div", { class: "small muted" }, `${r.assigned_now} telescopes`));
+  return td;
+}

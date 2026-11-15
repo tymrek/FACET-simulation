@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FACET · public access node</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>FACET</h1><span class="sub">an open astronomical survey shell · public access node</span>
+  <span class="clock" id="clock">connecting…</span>
+</header>
+<main>
+  <section>
+    <div class="card">
+      <h2>The sky right now</h2>
+      <canvas class="sky" id="sky"></canvas>
+      <div class="legend">
+        <span><i style="background:#5affa0"></i>telescope pointing (sunlit)</span>
+        <span><i style="background:#78c8ff"></i>pointing (in Earth's shadow)</span>
+        <span><i style="background:#ffb43c"></i>Sun keep-out</span>
+        <span><i style="background:#ffd166"></i>pending request</span>
+        <span><i style="background:#63c8ff"></i>approved</span>
+        <span><i style="background:#5affa0"></i>observing</span>
+        <span>Click the map to request that spot.</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Constellation</h2>
+      <div class="stats" id="stats"></div>
+    </div>
+    <div class="card">
+      <h2>Observation queue</h2>
+      <table><thead><tr><th>#</th><th>Observer</th><th>Target</th><th class="num">Telescopes</th><th class="num">Exposure</th><th>State</th><th>Progress</th></tr></thead>
+      <tbody id="queue"></tbody></table>
+    </div>
+  </section>
+  <aside>
+    <div class="card">
+      <h2>Request an observation</h2>
+      <form id="form" autocomplete="off">
+        <label for="who">Your name or handle</label>
+        <input id="who" maxlength="40" placeholder="anonymous">
+        <label for="target">Target: planet, bright star or catalogue name</label>
+        <input id="target" list="targets" placeholder="Jupiter, Vega, M42 … or leave blank and give RA/Dec">
+        <datalist id="targets">
+          <option>Moon</option><option>Mercury</option><option>Venus</option><option>Mars</option><option>Jupiter</option>
+          <option>Saturn</option><option>Uranus</option><option>Neptune</option><option>M42</option><option>M31</option>
+          <option>M45</option><option>LMC</option><option>Galactic Centre</option><option>Vega</option><option>Betelgeuse</option>
+        </datalist>
+        <div class="row">
+          <div><label for="ra">RA (deg)</label><input id="ra" type="number" step="any" min="0" max="360"></div>
+          <div><label for="dec">Dec (deg)</label><input id="dec" type="number" step="any" min="-90" max="90"></div>
+        </div>
+        <div class="row">
+          <div><label for="tel">Telescopes (stacked)</label><input id="tel" type="number" min="1" max="1000" value="10"></div>
+          <div><label for="exp">Exposure each (s)</label><input id="exp" type="number" min="1" max="86400" value="300"></div>
+        </div>
+        <label for="note">Note to the observatory (optional)</label>
+        <textarea id="note" rows="2" maxlength="200"></textarea>
+        <div class="btns"><button class="primary" type="submit">Submit request</button></div>
+        <div class="msg small" id="msg"></div>
+        <p class="note" id="estimate"></p>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Your requests</h2>
+      <table><tbody id="mine"><tr><td class="muted small">None yet from this browser.</td></tr></tbody></table>
+    </div>
+    <p class="note">Simulation only. FACET is a proposed constellation; every number here is
+    an unchecked soft estimate from idealised scaling, not a measured capability.</p>
+  </aside>
+</main>
+<script src="/skymap.js"></script>
+<script src="/public.js"></script>
+</body>
+</html>

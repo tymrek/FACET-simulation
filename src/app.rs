@@ -82,12 +82,19 @@ pub struct App {
 
     frame_ms: f32,
     pub export_msg: Option<String>,
+
+    // Web access
+    pub web: Option<crate::server::SharedRef>,
+    pub web_control_addr: Option<String>,
+    pub web_public_addr: Option<String>,
+    pub web_token: Option<String>,
+    pub last_publish: Option<Instant>,
 }
 
 pub const PRESET_NS: [usize; 8] = [2, 10, 50, 100, 500, 1000, 5000, 10_000];
 
 /// Named deep-sky / reference targets (J2000 RA, Dec in degrees).
-const FIXED_TARGETS: [(&str, f64, f64); 6] = [
+pub const FIXED_TARGETS: [(&str, f64, f64); 6] = [
     ("Orion Nebula (M42)", 83.822, -5.391),
     ("Andromeda (M31)", 10.685, 41.269),
     ("Galactic Centre", 266.405, -28.936),
@@ -155,8 +162,14 @@ impl App {
             cov_sky_allowed: 0.0,
             frame_ms: 0.0,
             export_msg: None,
+            web: None,
+            web_control_addr: Some("127.0.0.1:8780".into()),
+            web_public_addr: Some("127.0.0.1:8781".into()),
+            web_token: None,
+            last_publish: None,
         };
         app.apply_args(std::env::args().skip(1).collect());
+        app.start_web();
         app
     }
 
@@ -206,6 +219,15 @@ impl App {
                 }
                 "--look" => self.look_at_target(),
                 "--look-sun" => self.look_at(astro::bodies(self.jd)[0].dir),
+                "--control-addr" => self.web_control_addr = Some(val()),
+                "--public-addr" => self.web_public_addr = Some(val()),
+                "--no-control" => self.web_control_addr = None,
+                "--no-public" => self.web_public_addr = None,
+                "--no-web" => {
+                    self.web_control_addr = None;
+                    self.web_public_addr = None;
+                }
+                "--token" => self.web_token = Some(val()),
                 _ => eprintln!("facet-sim: ignoring unknown argument {a}"),
             }
         }
@@ -260,9 +282,9 @@ impl App {
             eprintln!("frame {:.1} ms", self.frame_ms);
         }
         self.last_tick = now;
-        if self.playing {
-            self.jd += dt * self.rate / 86_400.0;
-        }
+        let dt_sim = if self.playing { dt * self.rate } else { 0.0 };
+        self.jd += dt_sim / 86_400.0;
+        self.apply_web_commands();
 
         if self.sun_sync {
             if let Some(i) = ShellParams::sun_sync_inc_deg(self.shell_params.alt_km) {
@@ -286,6 +308,10 @@ impl App {
             moon,
             target,
         );
+        if self.mode == Mode::Queue {
+            self.run_queue(dt_sim);
+        }
+        self.publish_status(now);
 
         let due = self
             .last_cov
@@ -484,6 +510,9 @@ impl App {
         ui.separator();
 
         self.stats(ui);
+        ui.separator();
+
+        self.web_panel(ui);
         ui.separator();
 
         // ---------------- Display
