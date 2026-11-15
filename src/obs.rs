@@ -451,11 +451,20 @@ pub struct QueueResult {
 /// `want` telescopes with a clear line of sight: first those already working
 /// on this request (so nobody repoints needlessly), then idle telescopes with
 /// the shortest slew, and only then telescopes pre-empted from lower-priority work.
-pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: V3, moon: V3) -> Vec<QueueResult> {
+///
+/// `budget` caps how many telescopes the queue may use in total (the public
+/// time share); the queue runs after the director's mode and pre-empts its
+/// assignments up to that cap.
+pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: V3, moon: V3, budget: usize) -> Vec<QueueResult> {
     let n = st.rhat.len();
     let mut out = Vec::with_capacity(items.len());
     let mut taken = vec![false; n];
+    let mut used = 0usize;
     for it in items {
+        if budget == 0 {
+            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some("public time share is 0 %") });
+            continue;
+        }
         if let Some(why) = sky_blocked(o, it.dir, sun, moon) {
             out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(why) });
             continue;
@@ -467,7 +476,8 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
             if taken[i] || it.dir.dot(st.rhat[i]) <= st.cos_lim {
                 continue;
             }
-            if st.prev_job[i] == me && got < it.want {
+            if st.prev_job[i] == me && got < it.want && used < budget {
+                used += 1;
                 taken[i] = true;
                 st.pointing[i] = Some(it.dir);
                 st.job[i] = me;
@@ -479,7 +489,7 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
                 cands.push((cost, i));
             }
         }
-        let need = it.want.saturating_sub(got);
+        let need = it.want.saturating_sub(got).min(budget - used);
         if need > 0 && !cands.is_empty() {
             let k = need.min(cands.len());
             if k < cands.len() {
@@ -491,11 +501,18 @@ pub fn assign_queue(st: &mut ObsState, o: &ObsParams, items: &[QueueItem], sun: 
                 st.job[i] = me;
                 st.fine[i] = it.fine;
                 got += 1;
+                used += 1;
             }
         }
         let free = taken.iter().filter(|t| !**t).count();
         let blocked = if got == 0 {
-            Some(if free == 0 { "no free telescopes" } else { "Earth blocks every free telescope" })
+            Some(if used >= budget {
+                "waiting: public share of telescopes fully booked"
+            } else if free == 0 {
+                "no free telescopes"
+            } else {
+                "Earth blocks every telescope able to take it"
+            })
         } else {
             None
         };

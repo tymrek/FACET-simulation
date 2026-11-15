@@ -179,6 +179,9 @@ pub enum Command {
     AutoApprove {
         on: bool,
     },
+    PublicShare {
+        share: f64,
+    },
 }
 
 /// A resolvable target: named star, solar-system body, or catalogue object.

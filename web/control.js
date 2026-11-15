@@ -34,6 +34,8 @@ $("timebtns").append(el("button", { onclick: () => cmd({ cmd: "time", now: true 
 const modes = [["survey", "Survey"], ["stack", "Stack"], ["mosaic", "Mosaic"], ["neo", "NEO sweep"], ["queue", "Queue"]];
 for (const [k, label] of modes) $("modebtns").append(el("button", { "data-mode": k, onclick: () => cmd({ cmd: "mode", mode: k }) }, label));
 
+$("share").addEventListener("input", () => $("shareval").textContent = `${$("share").value} %`);
+$("share").addEventListener("change", () => cmd({ cmd: "public_share", share: +$("share").value / 100 }));
 $("settarget").addEventListener("click", () => cmd({ cmd: "target", name: $("target").value }));
 $("auto").addEventListener("change", () => cmd({ cmd: "auto_approve", on: $("auto").checked }));
 $("applyshell").addEventListener("click", () => {
@@ -77,6 +79,10 @@ function render(s) {
   document.querySelectorAll("#timebtns button[data-rate]").forEach(b =>
     b.classList.toggle("sel", (+b.dataset.rate === 0 && !s.playing) || (s.playing && +b.dataset.rate === s.rate)));
   $("auto").checked = s.auto_approve;
+  if (document.activeElement !== $("share")) {
+    $("share").value = Math.round(s.public_share * 100); $("share").disabled = s.mode === "queue";
+    $("shareval").textContent = `${Math.round(s.public_share * 100)} %`;
+  }
   if (document.activeElement !== $("n")) { $("n").value = sliderFromN(s.shell.n); $("nval").textContent = s.shell.n.toLocaleString(); }
   if (!formsLoaded) {
     $("alt").value = s.shell.alt_km; $("inc").value = s.shell.inc_deg; $("planes").value = s.shell.planes_setting;

@@ -89,6 +89,8 @@ pub struct App {
     pub web_public_addr: Option<String>,
     pub web_token: Option<String>,
     pub last_publish: Option<Instant>,
+    /// Fraction of telescopes serving the public queue outside Queue mode.
+    pub public_share: f64,
 }
 
 pub const PRESET_NS: [usize; 8] = [2, 10, 50, 100, 500, 1000, 5000, 10_000];
@@ -167,6 +169,7 @@ impl App {
             web_public_addr: Some("127.0.0.1:8781".into()),
             web_token: None,
             last_publish: None,
+            public_share: 0.25,
         };
         app.apply_args(std::env::args().skip(1).collect());
         app.start_web();
@@ -228,6 +231,7 @@ impl App {
                     self.web_public_addr = None;
                 }
                 "--token" => self.web_token = Some(val()),
+                "--public-share" => self.public_share = val().parse::<f64>().unwrap_or(0.25).clamp(0.0, 1.0),
                 _ => eprintln!("facet-sim: ignoring unknown argument {a}"),
             }
         }
@@ -309,14 +313,11 @@ impl App {
             target,
             matches!(self.target, Some(Target::Body(_))),
         );
-        if self.mode == Mode::Queue {
-            self.queue_assign();
-        }
+        // The public queue runs in every mode, on its share of the shell.
+        self.queue_assign();
         let ag = crate::attitude::Agility::from_obs(&self.obs_params);
         obs::advance_attitudes(&mut self.obs, &ag, dt_sim, target);
-        if self.mode == Mode::Queue {
-            self.queue_credit();
-        }
+        self.queue_credit();
         self.publish_status(now);
 
         let due = self

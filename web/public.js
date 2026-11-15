@@ -35,6 +35,7 @@ function render(s) {
     stat("Slewing / settling", `${s.stats.slewing} / ${s.stats.settling}`),
     stat("In sunlight", `${s.stats.lit.toLocaleString()}`),
     stat("Sky reachable now", `${s.stats.sky_reachable}%`),
+    stat("Telescopes for the public", s.mode === "queue" ? "all (queue mode)" : `${Math.round(s.public_share * 100)} %`),
     stat("Mode", s.mode_label),
   );
   const q = $("queue"); q.replaceChildren();

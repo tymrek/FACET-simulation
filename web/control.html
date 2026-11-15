@@ -45,6 +45,8 @@
     <div class="card">
       <h2>Operations</h2>
       <div class="btns" id="modebtns"></div>
+      <label for="share">Public time share: <b id="shareval"></b> of telescopes serve public requests (Queue mode = 100 %)</label>
+      <input type="range" id="share" min="0" max="100" step="5">
       <label for="target">Director's target (stack / mosaic)</label>
       <div class="row"><input id="target" list="targets" placeholder="Jupiter, Vega, M31…"><button id="settarget">Set</button></div>
       <datalist id="targets"><option>Moon</option><option>Mercury</option><option>Venus</option><option>Mars</option><option>Jupiter</option><option>Saturn</option><option>Uranus</option><option>Neptune</option><option>M42</option><option>M31</option><option>M45</option><option>LMC</option><option>Galactic Centre</option></datalist>

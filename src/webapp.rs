@@ -116,6 +116,11 @@ impl App {
                     }
                     p.phasing = p.phasing.min(p.effective_planes().saturating_sub(1));
                 }
+                Command::PublicShare { share } => {
+                    if share.is_finite() {
+                        self.public_share = share.clamp(0.0, 1.0);
+                    }
+                }
                 Command::Mode { mode } => {
                     if let Some(m) = Mode::from_key(&mode) {
                         self.mode = m;
@@ -226,7 +231,13 @@ impl App {
                 QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine }
             })
             .collect();
-        let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon);
+        let n = self.shell.len();
+        let budget = if self.mode == Mode::Queue {
+            n
+        } else {
+            (self.public_share * n as f64).round() as usize
+        };
+        let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon, budget);
         for (res, &i) in results.iter().zip(&order) {
             let r = &mut sh.requests[i];
             r.assigned_now = res.assigned as u32;
@@ -358,6 +369,7 @@ impl App {
             "playing": self.playing,
             "rate": self.rate,
             "mode": self.mode.key(),
+            "public_share": if self.mode == Mode::Queue { 1.0 } else { self.public_share },
             "mode_label": self.mode.label(),
             "shell": {
                 "n": n, "planes": sp.effective_planes(), "planes_setting": sp.planes, "phasing": sp.phasing,
@@ -434,8 +446,11 @@ impl App {
         ui.label(
             RichText::new(format!("{} open requests · {} completed", open.len(), done)).small(),
         );
-        if self.mode != Mode::Queue && !open.is_empty() {
-            ui.label(RichText::new("Requests are served only in Queue mode.").small().weak());
+        if self.mode == Mode::Queue {
+            ui.label(RichText::new("Queue mode: every telescope serves the request queue.").small().weak());
+        } else {
+            ui.add(egui::Slider::new(&mut self.public_share, 0.0..=1.0).text("public time share"))
+                .on_hover_text("Fraction of the constellation that serves public requests while the director runs another mode.");
         }
         for &i in open.iter().take(8) {
             let r = &mut sh.requests[i];

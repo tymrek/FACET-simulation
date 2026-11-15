@@ -86,8 +86,11 @@ Keep the director port on localhost, or behind an SSH tunnel or a TLS reverse
 proxy (nginx, caddy). It's plain HTTP, so the token is sent unencrypted.
 To disable ports: `--no-control`, `--no-public`, `--no-web`.
 
-**Requests are served in Queue mode.** Approved requests are scheduled by priority
-(ties go to the oldest). Each takes up to its requested number of telescopes from
+**The public queue runs in every mode.** In Queue mode every telescope serves
+it. In the other modes the director's programme runs and the queue may take
+over up to the **public time share** of the shell: default 25 %, adjustable
+on the director page, in the app panel, or with `--public-share 0.4`. Approved
+requests are scheduled by priority (ties go to the oldest). Each takes up to its requested number of telescopes from
 the satellites that have a clear line of sight. It then accumulates telescope-seconds
 until it reaches telescopes × exposure. Requests inside the Sun or Moon keep-out
 wait, and show why. The allocator is a deliberately simple greedy baseline for
@@ -108,6 +111,7 @@ with header `X-Facet-Token` or `?token=`. Example commands:
 {"cmd":"time","rate":600,"playing":true}
 {"cmd":"request","id":7,"action":"approve","priority":5,"telescopes":200}
 {"cmd":"auto_approve","on":true}
+{"cmd":"public_share","share":0.25}
 ```
 
 ## Simulated observation results
