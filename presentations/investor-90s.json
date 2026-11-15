@@ -1,0 +1,314 @@
+{
+ "id": "investor-90s",
+ "title": "FACET · investor, 90-second cut",
+ "audience": "Investors (short)",
+ "note": "",
+ "chapters": [
+  {
+   "id": "open",
+   "title": "Infrastructure for the sky",
+   "duration_s": 18,
+   "narration": [
+    "This is FACET: a fleet of mass-produced space telescopes, laser-linked into one observatory that never closes, and that gets cheaper as it grows. From ten satellites to ten thousand, every one is the same design."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "target"
+    },
+    {
+     "t": 0,
+     "do": "now"
+    },
+    {
+     "t": 0,
+     "do": "play"
+    },
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 2
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "programme",
+     "on": true,
+     "load": 1.5
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "links",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "traffic",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "restore"
+    },
+    {
+     "t": 0,
+     "do": "end_defence"
+    },
+    {
+     "t": 0,
+     "do": "stop_stares"
+    },
+    {
+     "t": 0,
+     "do": "mode",
+     "mode": "queue"
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 22000,
+     "pitch_deg": 20,
+     "yaw_deg": 30,
+     "secs": 0.1
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 3
+    },
+    {
+     "t": 5,
+     "do": "fleet",
+     "n": 10
+    },
+    {
+     "t": 8,
+     "do": "fleet",
+     "n": 100
+    },
+    {
+     "t": 11,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 14,
+     "do": "fleet",
+     "n": 10000
+    },
+    {
+     "t": 12,
+     "do": "card",
+     "title": "FACET",
+     "lines": [
+      "Mass-produced space telescopes"
+     ],
+     "secs": 6
+    }
+   ]
+  },
+  {
+   "id": "product",
+   "title": "Time on the sky",
+   "duration_s": 18,
+   "narration": [
+    "It sells time on the sky: any target, within seconds, around the clock, with each telescope doing the work of several on the ground. In this simulation it runs busy all day, meeting nearly every deadline."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 1800
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 24000,
+     "pitch_deg": 20,
+     "secs": 4
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 4
+    },
+    {
+     "t": 3,
+     "do": "card",
+     "title": "Time on the sky",
+     "lines": [
+      "{duty} utilisation",
+      "{on_time} delivered on time",
+      "≈ {ground_equiv} ground telescopes per satellite"
+     ],
+     "secs": 14
+    }
+   ]
+  },
+  {
+   "id": "defence",
+   "title": "Planetary defence",
+   "duration_s": 30,
+   "narration": [
+    "It also sees what the ground cannot. A fifty-metre asteroid approaching from the direction of the Sun is invisible to ground surveys. FACET finds it, locks on with thirty telescopes and confirms the impact with hours to spare. In this exercise, ground telescopes never see it at all. Governments already fund that capability."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "stop_stares"
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "split"
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "rays",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "defence",
+     "preset": 1
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60000
+    },
+    {
+     "t": 0,
+     "do": "sky_look",
+     "target": "Sun",
+     "fov_deg": 110
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 0
+    },
+    {
+     "t": 2,
+     "do": "card",
+     "title": "Exercise: {pd_name}",
+     "lines": [
+      "{pd_size} asteroid · {pd_energy}",
+      "Approaching from the Sun's direction",
+      "Impact in {pd_left}"
+     ],
+     "secs": 18
+    },
+    {
+     "t": 0,
+     "do": "when",
+     "event": "defence_discovered",
+     "then": [
+      {
+       "do": "rate",
+       "x": 4000
+      },
+      {
+       "do": "card",
+       "title": "Found by FACET",
+       "lines": [
+        "{pd_warning} before impact",
+        "Ground network: {pd_warning_ground}"
+       ],
+       "secs": 14
+      },
+      {
+       "do": "sky_look",
+       "target": "defence",
+       "fov_deg": 70
+      }
+     ]
+    },
+    {
+     "t": 0,
+     "do": "when",
+     "event": "defence_certain",
+     "then": [
+      {
+       "do": "card",
+       "title": "Impact certain",
+       "lines": [
+        "Impact probability {pd_ip}, {pd_certain} before impact",
+        "Ground network: {pd_warning_ground}"
+       ],
+       "secs": 25
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "ask",
+   "title": "The ask",
+   "duration_s": 14,
+   "narration": [
+    "The cost model shows what each funding tranche buys, launch by launch. FACET is a simulation today; your investment makes it real. We are raising [amount] to [next milestone]."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "end_defence"
+    },
+    {
+     "t": 0,
+     "do": "cost_preset",
+     "name": "baseline"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 38000,
+     "pitch_deg": 20,
+     "secs": 10
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 2
+    },
+    {
+     "t": 1,
+     "do": "card",
+     "title": "FACET",
+     "lines": [
+      "$500M (baseline): {tranche_500m}",
+      "Raising [amount] · [contact]"
+     ],
+     "secs": 40
+    }
+   ]
+  }
+ ]
+}

@@ -113,6 +113,11 @@ pub struct App {
     /// Satellite failures, replacement, health record; space-vs-ground comparison.
     pub resil: crate::resilience::Resilience,
     pub cost_window_open: bool,
+    /// Presentation mode requests from the controls / command line.
+    pub present_open: bool,
+    /// Presentation mode is running: views hide their headers and legends.
+    pub presenting: bool,
+    pub present_deck: Option<String>,
     pub cost_msg: Option<String>,
     pub science: crate::programme::Science,
     /// Campaign targets given on the command line, started once web is up.
@@ -210,6 +215,9 @@ impl App {
             cost_model: crate::costs::Model::baseline(),
             resil: Default::default(),
             cost_window_open: false,
+            present_open: false,
+            presenting: false,
+            present_deck: None,
             cost_msg: None,
             traffic: crate::traffic::Traffic::new(Default::default(), jd0_for_traffic(), 550.0),
             science: crate::programme::Science::default(),
@@ -285,6 +293,7 @@ impl App {
                 "--click-target" => self.click_target = true,
                 "--no-programme" => self.gen.on = false,
                 "--costs" => self.cost_window_open = true,
+                "--present" => self.present_deck = Some(val()),
                 "--fail-rate" => self.resil.rate_pct_yr = val().parse().unwrap_or(0.0),
                 "--replace-days" => self.resil.replace_days = val().parse().unwrap_or(0.0),
                 "--fail-at" => {
@@ -758,6 +767,9 @@ impl App {
         self.stats(ui);
         ui.separator();
 
+        if ui.button("Presentation mode…").on_hover_text("Narrated, scripted tours for an audience (full screen)").clicked() {
+            self.present_open = true;
+        }
         if ui
             .button(if self.cost_window_open { "Cost model window (open)" } else { "Open cost model window" })
             .on_hover_text("Programme costs in a separate window: edit prices and trends live")
@@ -923,7 +935,13 @@ impl App {
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
             });
+        self.draw_views(ctx);
+        self.cost_window(ctx);
+    }
 
+    /// The orbit / sky views in the central area (also used full-screen by
+    /// presentation mode).
+    pub fn draw_views(&mut self, ctx: &egui::Context) {
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(Color32::from_rgb(2, 3, 8)))
             .show(ctx, |ui| {
@@ -945,13 +963,13 @@ impl App {
                     }
                 }
             });
-        self.cost_window(ctx);
     }
 }
 
 /// eframe front end: the simulation lives on its own thread behind a mutex;
 /// the window locks it briefly to draw and to apply control changes.
 pub struct Gui {
+    presenter: crate::present::Presenter,
     core: std::sync::Arc<std::sync::Mutex<App>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -976,13 +994,38 @@ impl Gui {
                 }
             })
             .expect("spawn simulation thread");
-        Gui { core, stop, worker: Some(worker) }
+        Gui { presenter: crate::present::Presenter::new(), core, stop, worker: Some(worker) }
     }
 }
 
 impl eframe::App for Gui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.core.lock().unwrap().ui(ctx);
+        let mut app = self.core.lock().unwrap();
+        let p = &mut self.presenter;
+        if std::mem::take(&mut app.present_open) {
+            p.reload();
+            p.picker = true;
+        }
+        if let Some(id) = app.present_deck.take() {
+            if let Some(k) = p.decks.iter().position(|d| d.id == id) {
+                p.start(&mut app, k);
+            } else {
+                p.picker = true;
+            }
+        }
+        if p.active {
+            p.update(&mut app, ctx);
+        }
+        if p.active {
+            app.draw_views(ctx);
+            p.overlay(ctx, &app);
+        } else {
+            app.ui(ctx);
+            if p.picker {
+                p.picker_ui(ctx, &mut app);
+            }
+        }
+        drop(app);
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

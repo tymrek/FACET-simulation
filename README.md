@@ -399,6 +399,53 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## Presentation mode
+
+Scripted, narrated walkthroughs of the simulation for pitching. Open it from
+**Presentation mode…** in the controls, or start straight into a deck with
+`--present <deck-id>`.
+
+Four decks ship in `presentations/`:
+
+| Deck id | Audience | Length |
+|---|---|---|
+| `science-7min` | science funders, agencies, observatories | ~7:00 |
+| `investor-7min` | investors, commercial partners | ~6:55 |
+| `science-90s` | science funders, short cut | ~1:23 |
+| `investor-90s` | investors, short cut | ~1:20 |
+
+Each deck is a list of chapters. A chapter has narration, a target duration
+and timed cues that drive the live simulation: fleet size, time rate, camera,
+sky pointing, STARE campaigns, the planetary-defence scenario, failures and
+cost presets. Cards and narration can contain live values such as
+`{completed_per_day}`, `{equivalent_ground}`, `{cost_total}` or `{pd_lead}`, which
+are filled in from the running sim. The numbers on screen are therefore the
+simulation's numbers, not hard-coded ones. `presentations/SCRIPTS.md` is a
+readable copy of all four scripts, with per-chapter word counts and file names.
+Text in [square brackets] is for you to fill in (the ask, the amount, contact
+details).
+
+**Narration audio.** Record one file per chapter as
+`presentations/audio/<deck-id>/<chapter-id>.wav` (or `.ogg`, `.flac`, `.mp3`).
+When a chapter has audio, the audio clock drives its timeline: cues fire
+against playback position, so the visuals stay in sync with the recording.
+Chapters without audio run on their target duration and show captions.
+Captions are timed sentence by sentence, in proportion to word count.
+
+**Recording against the timeline.** Tick *Teleprompter* in the picker, or press
+`T` while a deck runs. Each chapter gets a 3-second lead-in. After that the
+current sentence is shown large, with the following lines below it, along with
+elapsed and remaining time. The scene plays underneath, so you read in time
+with what the audience will see.
+
+Keys: `Space` pause · `Left`/`Right` previous/next chapter · `Home` restart ·
+`C` captions · `T` teleprompter · `Esc` exit. View headers, legends and hints are
+hidden while presenting.
+
+Audio playback uses rodio (the `audio` feature, on by default). On Linux it
+needs ALSA headers (`sudo apt install libasound2-dev`). To build without audio,
+use `cargo build --release --no-default-features`; decks then run on captions.
+
 ## Resilience
 
 Desktop *Resilience* panel:

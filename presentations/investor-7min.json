@@ -1,0 +1,607 @@
+{
+ "id": "investor-7min",
+ "title": "FACET · for investors (7 min)",
+ "audience": "Investors",
+ "note": "Square brackets mark text to fill in before recording. Business-model statements are proposals, not results.",
+ "chapters": [
+  {
+   "id": "open",
+   "title": "Infrastructure for the sky",
+   "duration_s": 35,
+   "narration": [
+    "This is the Earth, and this is one small telescope in orbit. Twenty centimetres across. Now we add more. Ten. A hundred. A thousand. Ten thousand. This is FACET: a fleet of small, mass-produced space telescopes, linked by laser, operating as a single observatory that never closes. Every one of them is the same design, built on a production line, so the fleet gets cheaper as it grows."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "target"
+    },
+    {
+     "t": 0,
+     "do": "now"
+    },
+    {
+     "t": 0,
+     "do": "play"
+    },
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 2
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "programme",
+     "on": true,
+     "load": 1.5
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "links",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "traffic",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "restore"
+    },
+    {
+     "t": 0,
+     "do": "end_defence"
+    },
+    {
+     "t": 0,
+     "do": "stop_stares"
+    },
+    {
+     "t": 0,
+     "do": "mode",
+     "mode": "queue"
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 22000,
+     "pitch_deg": 20,
+     "yaw_deg": 30,
+     "secs": 0.1
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 3
+    },
+    {
+     "t": 5,
+     "do": "fleet",
+     "n": 10
+    },
+    {
+     "t": 8,
+     "do": "fleet",
+     "n": 100
+    },
+    {
+     "t": 11,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 14,
+     "do": "fleet",
+     "n": 10000
+    },
+    {
+     "t": 16,
+     "do": "camera",
+     "dist_km": 40000,
+     "secs": 8
+    },
+    {
+     "t": 24,
+     "do": "card",
+     "title": "FACET",
+     "lines": [
+      "Mass-produced space telescopes",
+      "{fleet} satellites, one observatory"
+     ],
+     "secs": 11
+    }
+   ]
+  },
+  {
+   "id": "problem",
+   "title": "The gap",
+   "duration_s": 45,
+   "narration": [
+    "Demand for time on telescopes far outstrips supply. The world's major observatories turn down most of the proposals they receive, ground telescopes lose most of the day to sunlight and much of the night to weather, and nobody is watching most of the sky at any given moment.",
+    "At the same time, governments now treat asteroid warning and awareness of what is in orbit as priorities. FACET answers both with one piece of infrastructure: a fleet that observes around the clock, can be pointed anywhere in seconds, and grows in capacity with every launch."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 120
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "links",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 26000,
+     "pitch_deg": 25,
+     "secs": 4
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 2
+    },
+    {
+     "t": 20,
+     "do": "show",
+     "what": "rays",
+     "on": true
+    },
+    {
+     "t": 28,
+     "do": "card",
+     "title": "Around the clock",
+     "lines": [
+      "Observing {duty} of the time",
+      "Ground telescopes: {ground_duty}"
+     ],
+     "secs": 16
+    }
+   ]
+  },
+  {
+   "id": "product",
+   "title": "The product",
+   "duration_s": 60,
+   "narration": [
+    "Using it is simple. A user asks for a target, here the Orion Nebula, with ten telescopes for five minutes each. The scheduler assigns the satellites best placed to take it, they slew, settle and lock on within seconds, and the stacked image comes back with a full record of how it was made. That is the core product: telescope time on demand, delivered through a web interface and an API.",
+    "A second product is continuous monitoring. Here a rotating group of telescopes keeps Jupiter under watch without a break, handing over from one satellite to the next as they pass behind the Earth. The unit we would sell is time on the sky, not hardware."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "view",
+     "view": "split"
+    },
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 10
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "rays",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 0
+    },
+    {
+     "t": 0,
+     "do": "sky_look",
+     "target": "Orion Nebula",
+     "fov_deg": 70
+    },
+    {
+     "t": 1,
+     "do": "request",
+     "target": "M42",
+     "telescopes": 10,
+     "exposure_s": 300
+    },
+    {
+     "t": 28,
+     "do": "stare",
+     "target": "Jupiter",
+     "eyes": 10
+    },
+    {
+     "t": 30,
+     "do": "sky_look",
+     "target": "Jupiter",
+     "fov_deg": 60
+    },
+    {
+     "t": 33,
+     "do": "rate",
+     "x": 120
+    },
+    {
+     "t": 40,
+     "do": "card",
+     "title": "Continuous monitoring",
+     "lines": [
+      "Sustained Tracking And Rotating Eyes",
+      "Hours of watch, sold by the hour"
+     ],
+     "secs": 18
+    }
+   ]
+  },
+  {
+   "id": "utilisation",
+   "title": "Utilisation",
+   "duration_s": 50,
+   "narration": [
+    "An observatory is only as valuable as its utilisation. In this simulation, more than a hundred customers and research teams load FACET with work around the clock, and the scheduler keeps the fleet busy almost all of the time while meeting nearly every deadline. Because these telescopes never wait for night or clear skies, each one delivers the work of several identical telescopes on the ground. The numbers on screen are live, generated by the simulation running behind me, and every assumption behind them can be inspected and changed."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 1800
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 24000,
+     "pitch_deg": 20,
+     "secs": 4
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 4
+    },
+    {
+     "t": 12,
+     "do": "card",
+     "title": "Utilisation (simulated)",
+     "lines": [
+      "{completed_per_day} observations completed per day",
+      "{on_time} delivered before their deadline",
+      "{teams} customers and teams served"
+     ],
+     "secs": 18
+    },
+    {
+     "t": 32,
+     "do": "card",
+     "title": "Versus the ground",
+     "lines": [
+      "One FACET telescope ≈ {ground_equiv} identical ground telescopes"
+     ],
+     "secs": 16
+    }
+   ]
+  },
+  {
+   "id": "defence",
+   "title": "Planetary defence",
+   "duration_s": 85,
+   "narration": [
+    "One capability is especially valuable. This is an exercise: a fifty-metre asteroid, the size of the one that flattened two thousand square kilometres of Siberian forest in 1908, on a collision course with the Earth, approaching from the direction of the Sun. Ground-based surveys cannot see it; they observe at night, away from the Sun. FACET can look much closer to the Sun, and part of the fleet is always searching.",
+    "A searching telescope catches it as it brightens, the fleet confirms the detection automatically, and thirty telescopes lock on to track it. The impact probability goes from a possibility to a certainty, with hours to spare, while the ground network never sees it at all. Planetary defence, space situational awareness and rapid response to astronomical alerts are areas that governments already fund. FACET is designed to serve them from the first launch."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "stop_stares"
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "split"
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "rays",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "defence",
+     "preset": 1
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 26000
+    },
+    {
+     "t": 0,
+     "do": "sky_look",
+     "target": "Sun",
+     "fov_deg": 110
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 0
+    },
+    {
+     "t": 3,
+     "do": "card",
+     "title": "Exercise: {pd_name}",
+     "lines": [
+      "{pd_size} asteroid · {pd_energy}",
+      "Approaching from the Sun's direction",
+      "Impact in {pd_left}"
+     ],
+     "secs": 18
+    },
+    {
+     "t": 0,
+     "do": "when",
+     "event": "defence_discovered",
+     "then": [
+      {
+       "do": "rate",
+       "x": 1500
+      },
+      {
+       "do": "card",
+       "title": "Found by FACET",
+       "lines": [
+        "{pd_warning} before impact",
+        "Ground network: {pd_warning_ground}"
+       ],
+       "secs": 14
+      },
+      {
+       "do": "sky_look",
+       "target": "defence",
+       "fov_deg": 70
+      }
+     ]
+    },
+    {
+     "t": 0,
+     "do": "when",
+     "event": "defence_certain",
+     "then": [
+      {
+       "do": "card",
+       "title": "Impact certain",
+       "lines": [
+        "Impact probability {pd_ip}, {pd_certain} before impact",
+        "Ground network: {pd_warning_ground}"
+       ],
+       "secs": 25
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "resilience",
+   "title": "Robust by design",
+   "duration_s": 45,
+   "narration": [
+    "The architecture is robust by design. There is no single point of failure: here, thirty percent of the fleet is switched off at once, and the system keeps working, shedding its least urgent tasks first. Satellites are replaced on the next launch, not repaired.",
+    "Operations scale with software rather than people: scheduling, collision screening, streak avoidance around other constellations and data relay are all automated, and the cost of operating the fleet grows far more slowly than the fleet itself."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "end_defence"
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 3600
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "traffic",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "replace_days",
+     "days": 1.0
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 24000,
+     "pitch_deg": 15,
+     "secs": 3
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 3
+    },
+    {
+     "t": 3,
+     "do": "fail",
+     "fraction": 0.3
+    },
+    {
+     "t": 15,
+     "do": "card",
+     "title": "Lose 30 % of the fleet",
+     "lines": [
+      "Fleet alive: {alive}",
+      "Science output: {output}",
+      "Completed observations: {observations}"
+     ],
+     "secs": 16
+    },
+    {
+     "t": 32,
+     "do": "card",
+     "title": "Sharing the sky",
+     "lines": [
+      "Streak avoidance costs {streak_cost} of observing time",
+      "Alerts reach the ground in about {relay_latency}"
+     ],
+     "secs": 12
+    }
+   ]
+  },
+  {
+   "id": "cost",
+   "title": "Unit economics",
+   "duration_s": 75,
+   "narration": [
+    "Here is the cost model, running live beside the simulation. Every line item, from satellites and launch to operations and data, has a current price and a trend, and can be changed as the market moves. Launch dominates, and that is where the leverage is. One dedicated rocket per orbital plane is the expensive way to build FACET; sharing launches between planes, and producing satellites by the hundred on a learning curve, cut the total to well under half.",
+    "Just as important, FACET can be funded in stages. Each tranche buys a fleet that is already producing data, and every launch after the first adds capacity. The cost per telescope-hour falls as the fleet grows, because fixed costs are spread over more telescopes. None of these numbers are hidden: every one is an assumption we can show you and defend."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "restore"
+    },
+    {
+     "t": 0,
+     "do": "replace_days",
+     "days": 0
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 600
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "traffic",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 3
+    },
+    {
+     "t": 0,
+     "do": "cost_preset",
+     "name": "baseline"
+    },
+    {
+     "t": 6,
+     "do": "card",
+     "title": "Baseline cost model",
+     "lines": [
+      "{cost_total} over {cost_years} years for {cost_fleet} telescopes",
+      "First science {cost_first_science} · full fleet {cost_full_fleet}",
+      "{cost_per_tel_h} per telescope-hour"
+     ],
+     "secs": 26
+    },
+    {
+     "t": 37,
+     "do": "cost_preset",
+     "name": "optimistic"
+    },
+    {
+     "t": 38,
+     "do": "card",
+     "title": "Optimistic: shared launches, steeper learning curve",
+     "lines": [
+      "{cost_total} over {cost_years} years for {cost_fleet} telescopes",
+      "First science {cost_first_science} · full fleet {cost_full_fleet}",
+      "{cost_per_tel_h} per telescope-hour"
+     ],
+     "secs": 26
+    },
+    {
+     "t": 66,
+     "do": "card",
+     "title": "What funding buys (baseline)",
+     "lines": [
+      "$250M: {tranche_250m}",
+      "$500M: {tranche_500m}",
+      "$1B: {tranche_1b}"
+     ],
+     "secs": 10
+    }
+   ]
+  },
+  {
+   "id": "ask",
+   "title": "The ask",
+   "duration_s": 20,
+   "narration": [
+    "FACET is a simulation today; the next step makes it real. We are raising [amount] to [use of funds, for example a design study and a two-satellite pathfinder], with [milestones]. A sky that is watched all the time, built on a production line, and open to the world. Thank you."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "cost_preset",
+     "name": "baseline"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 38000,
+     "pitch_deg": 20,
+     "secs": 10
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 2
+    },
+    {
+     "t": 1,
+     "do": "card",
+     "title": "FACET",
+     "lines": [
+      "Raising [amount] for [next milestone]",
+      "[name · contact · website]"
+     ],
+     "secs": 40
+    }
+   ]
+  }
+ ]
+}

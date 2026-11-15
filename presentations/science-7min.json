@@ -1,0 +1,600 @@
+{
+ "id": "science-7min",
+ "title": "FACET · for science funders (7 min)",
+ "audience": "Science agencies and foundations",
+ "note": "Square brackets mark text to fill in before recording.",
+ "chapters": [
+  {
+   "id": "open",
+   "title": "An open sky",
+   "duration_s": 35,
+   "narration": [
+    "This is the Earth, and this is one small telescope in orbit around it. Twenty centimetres across: about the size of a good amateur instrument. Now we add more. Ten. A hundred. A thousand. Ten thousand. This is FACET, an open astronomical survey shell: an observatory made of many small eyes, linked by laser, and open to everyone."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "target"
+    },
+    {
+     "t": 0,
+     "do": "now"
+    },
+    {
+     "t": 0,
+     "do": "play"
+    },
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 2
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "programme",
+     "on": true,
+     "load": 1.5
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "links",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "traffic",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "restore"
+    },
+    {
+     "t": 0,
+     "do": "end_defence"
+    },
+    {
+     "t": 0,
+     "do": "stop_stares"
+    },
+    {
+     "t": 0,
+     "do": "mode",
+     "mode": "queue"
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 22000,
+     "pitch_deg": 20,
+     "yaw_deg": 30,
+     "secs": 0.1
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 3
+    },
+    {
+     "t": 5,
+     "do": "fleet",
+     "n": 10
+    },
+    {
+     "t": 8,
+     "do": "fleet",
+     "n": 100
+    },
+    {
+     "t": 11,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 14,
+     "do": "fleet",
+     "n": 10000
+    },
+    {
+     "t": 16,
+     "do": "camera",
+     "dist_km": 40000,
+     "secs": 8
+    },
+    {
+     "t": 24,
+     "do": "card",
+     "title": "FACET",
+     "lines": [
+      "An open astronomical survey shell",
+      "{fleet} small telescopes in low Earth orbit"
+     ],
+     "secs": 11
+    }
+   ]
+  },
+  {
+   "id": "idea",
+   "title": "Many small eyes",
+   "duration_s": 45,
+   "narration": [
+    "The world's great telescopes are extraordinary, and almost impossible to get time on. Most proposals are turned down, and at any moment most of the sky is not being watched at all.",
+    "FACET takes the opposite approach. Instead of one large mirror, a thousand small ones in a shell around the planet, each able to point anywhere it can see. They hand work to one another over optical links, so the fleet behaves as a single instrument. And because there are so many of them, a share of their time is set aside for the public: anyone can ask FACET to look at something, and get the picture back."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 120
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "links",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 26000,
+     "pitch_deg": 25,
+     "secs": 4
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 2
+    },
+    {
+     "t": 20,
+     "do": "show",
+     "what": "rays",
+     "on": true
+    },
+    {
+     "t": 28,
+     "do": "card",
+     "title": "Open by design",
+     "lines": [
+      "{fleet} telescopes, one laser-linked instrument",
+      "{public_share} of observing time reserved for the public"
+     ],
+     "secs": 16
+    }
+   ]
+  },
+  {
+   "id": "how",
+   "title": "How it works",
+   "duration_s": 60,
+   "narration": [
+    "Here is what that looks like. A member of the public asks to see the Orion Nebula, with ten telescopes for five minutes each. The scheduler finds satellites that can see it and are least busy. Each one turns, a hundred-and-fifty-kilogram spacecraft swinging on its reaction wheels, then settles, finds its guide stars and locks on. Within seconds the request is being observed, and the stacked image comes back with a full account of how it was made.",
+    "FACET can also stare. Here a rotating group of telescopes keeps Jupiter under continuous watch. As each satellite sinks toward the Earth's limb, the next has already taken over, so the target is never left alone."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "view",
+     "view": "split"
+    },
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 10
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "rays",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 0
+    },
+    {
+     "t": 0,
+     "do": "sky_look",
+     "target": "Orion Nebula",
+     "fov_deg": 70
+    },
+    {
+     "t": 1,
+     "do": "request",
+     "target": "M42",
+     "telescopes": 10,
+     "exposure_s": 300
+    },
+    {
+     "t": 28,
+     "do": "stare",
+     "target": "Jupiter",
+     "eyes": 10
+    },
+    {
+     "t": 30,
+     "do": "sky_look",
+     "target": "Jupiter",
+     "fov_deg": 60
+    },
+    {
+     "t": 33,
+     "do": "rate",
+     "x": 120
+    },
+    {
+     "t": 40,
+     "do": "card",
+     "title": "STARE",
+     "lines": [
+      "Sustained Tracking And Rotating Eyes",
+      "A target under continuous watch"
+     ],
+     "secs": 18
+    }
+   ]
+  },
+  {
+   "id": "busy",
+   "title": "A busy observatory",
+   "duration_s": 60,
+   "narration": [
+    "Most of the time, FACET is simply busy. In this simulation more than a hundred research teams are sending it work: following up new supernovae, timing exoplanet transits, monitoring variable stars, and chasing gamma-ray-burst afterglows within seconds of an alert. Every request carries a priority and a deadline, and the scheduler packs them into the fleet as it flies.",
+    "The scorecard shows what comes back: thousands of completed observations a day, nearly all of them in time to be useful. And because these telescopes never wait for nightfall or clear skies, each one does the work of several identical telescopes on the ground. Those numbers are live: they come from the simulation running behind me."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 1800
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 24000,
+     "pitch_deg": 20,
+     "secs": 4
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 4
+    },
+    {
+     "t": 16,
+     "do": "card",
+     "title": "A busy observatory (simulated)",
+     "lines": [
+      "{completed_per_day} observations completed per day",
+      "{on_time} finished before their deadline",
+      "{teams} research teams served"
+     ],
+     "secs": 20
+    },
+    {
+     "t": 38,
+     "do": "card",
+     "title": "Space versus ground",
+     "lines": [
+      "Observing {duty} of the time, against {ground_duty} on the ground",
+      "One FACET telescope ≈ {ground_equiv} identical ground telescopes"
+     ],
+     "secs": 20
+    }
+   ]
+  },
+  {
+   "id": "defence",
+   "title": "Planetary defence",
+   "duration_s": 90,
+   "narration": [
+    "Now, the reason this matters beyond astronomy. This is an exercise: a fifty-metre asteroid, about the size of the one that flattened two thousand square kilometres of Siberian forest in 1908, on a collision course with the Earth. It is coming from the direction of the Sun.",
+    "Telescopes on the ground cannot see it. They look at night, away from the Sun, so it approaches through their blind spot. FACET can look much closer to the Sun, and part of the fleet is always searching.",
+    "As the asteroid brightens, a searching telescope catches it, and the fleet confirms the detection by itself within minutes, passing it to neighbouring satellites. Thirty telescopes lock on and follow it, measuring its position every minute. The orbit tightens, and the impact probability climbs from a possibility to a certainty, with hours to spare. In this scenario, the ground network never sees it at all.",
+    "Hours of warning are not enough to deflect an asteroid. They are enough to know where it will fall, and to move people out of the way."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "stop_stares"
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "split"
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "rays",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "defence",
+     "preset": 1
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 26000
+    },
+    {
+     "t": 0,
+     "do": "sky_look",
+     "target": "Sun",
+     "fov_deg": 110
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 0
+    },
+    {
+     "t": 3,
+     "do": "card",
+     "title": "Exercise: {pd_name}",
+     "lines": [
+      "{pd_size} asteroid · {pd_energy}",
+      "Approaching from the Sun's direction",
+      "Impact in {pd_left}"
+     ],
+     "secs": 18
+    },
+    {
+     "t": 0,
+     "do": "when",
+     "event": "defence_discovered",
+     "then": [
+      {
+       "do": "rate",
+       "x": 1500
+      },
+      {
+       "do": "card",
+       "title": "Found by FACET",
+       "lines": [
+        "{pd_warning} before impact",
+        "Ground network: {pd_warning_ground}"
+       ],
+       "secs": 14
+      },
+      {
+       "do": "sky_look",
+       "target": "defence",
+       "fov_deg": 70
+      }
+     ]
+    },
+    {
+     "t": 0,
+     "do": "when",
+     "event": "defence_certain",
+     "then": [
+      {
+       "do": "card",
+       "title": "Impact certain",
+       "lines": [
+        "Impact probability {pd_ip}, {pd_certain} before impact",
+        "Ground network: {pd_warning_ground}"
+       ],
+       "secs": 25
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "resilience",
+   "title": "Built to last",
+   "duration_s": 45,
+   "narration": [
+    "A fleet of small satellites fails gracefully. Here, thirty percent of FACET is switched off at once. Telescope-hours fall with it, but completed observations fall by much less, because the scheduler drops the least urgent work first, and alerts and planetary defence carry on. Replacements are small and cheap, and go up on the next launch.",
+    "FACET also shares the sky responsibly: it pauses for the few seconds another satellite crosses its view, screens every satellite for close approaches, and can relay its data through optical links instead of waiting for a ground station."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "end_defence"
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 3600
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "traffic",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "replace_days",
+     "days": 1.0
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 24000,
+     "pitch_deg": 15,
+     "secs": 3
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 3
+    },
+    {
+     "t": 3,
+     "do": "fail",
+     "fraction": 0.3
+    },
+    {
+     "t": 15,
+     "do": "card",
+     "title": "Lose 30 % of the fleet",
+     "lines": [
+      "Fleet alive: {alive}",
+      "Science output: {output}",
+      "Completed observations: {observations}"
+     ],
+     "secs": 16
+    },
+    {
+     "t": 32,
+     "do": "card",
+     "title": "Sharing the sky",
+     "lines": [
+      "Streak avoidance costs {streak_cost} of observing time",
+      "Alerts reach the ground in about {relay_latency}"
+     ],
+     "secs": 12
+    }
+   ]
+  },
+  {
+   "id": "cost",
+   "title": "What it costs",
+   "duration_s": 60,
+   "narration": [
+    "What does it cost? A cost model runs alongside the simulation, with every price adjustable as markets move, and every assumption written down. Launch dominates. One dedicated rocket for every orbital plane is expensive; sharing launches between planes, and building satellites by the hundred rather than one at a time, bring the price down sharply.",
+    "On screen is the baseline, then an optimistic case with shared launches and a steeper learning curve, which costs well under half as much. And FACET does not have to be built all at once: the first launch already delivers science, and every launch after it adds capacity. That makes it something that can be funded in stages, each with its own milestone."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "restore"
+    },
+    {
+     "t": 0,
+     "do": "replace_days",
+     "days": 0
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 600
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "traffic",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 3
+    },
+    {
+     "t": 0,
+     "do": "cost_preset",
+     "name": "baseline"
+    },
+    {
+     "t": 6,
+     "do": "card",
+     "title": "Baseline cost model",
+     "lines": [
+      "{cost_total} over {cost_years} years for {cost_fleet} telescopes",
+      "First science {cost_first_science} · full fleet {cost_full_fleet}",
+      "{cost_per_tel_h} per telescope-hour"
+     ],
+     "secs": 22
+    },
+    {
+     "t": 32,
+     "do": "cost_preset",
+     "name": "optimistic"
+    },
+    {
+     "t": 33,
+     "do": "card",
+     "title": "Optimistic: shared launches, steeper learning curve",
+     "lines": [
+      "{cost_total} over {cost_years} years for {cost_fleet} telescopes",
+      "First science {cost_first_science} · full fleet {cost_full_fleet}",
+      "{cost_per_tel_h} per telescope-hour"
+     ],
+     "secs": 22
+    }
+   ]
+  },
+  {
+   "id": "ask",
+   "title": "The ask",
+   "duration_s": 25,
+   "narration": [
+    "FACET is a simulation today, and its numbers are estimates we are ready to test and improve. What we are asking for is [the next step, for example a design study and a pathfinder pair of satellites]. A sky that is watched all the time, by an observatory that belongs to everyone. Thank you."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "cost_preset",
+     "name": "baseline"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 38000,
+     "pitch_deg": 20,
+     "secs": 10
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 2
+    },
+    {
+     "t": 1,
+     "do": "card",
+     "title": "FACET",
+     "lines": [
+      "An open astronomical survey shell",
+      "[name · contact · website]"
+     ],
+     "secs": 40
+    }
+   ]
+  }
+ ]
+}

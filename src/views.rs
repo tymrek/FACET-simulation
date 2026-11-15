@@ -236,6 +236,8 @@ impl App {
         let sun_tip = guide(&mut b, sun, rgba(255, 210, 90, 0.8));
         let tgt = self.target_dir();
         let tgt_tip = tgt.and_then(|t| guide(&mut b, t, rgba(90, 255, 150, 0.8)));
+        let pd_dir = self.defence_marker();
+        let pd_tip = pd_dir.as_ref().and_then(|(d, _)| guide(&mut b, *d, rgba(255, 80, 80, 0.9)));
 
         // Satellites, links, rays
         let n = self.shell.len();
@@ -316,6 +318,9 @@ impl App {
         if let Some(p) = tgt_tip {
             text(&painter, p, Align2::LEFT_BOTTOM, format!("  {}", self.target_name()), 12.0, c3(C_ACTIVE, 1.0));
         }
+        if let (Some(p), Some((_, label))) = (pd_tip, &pd_dir) {
+            text(&painter, p, Align2::LEFT_BOTTOM, format!("  {label}"), 13.0, Color32::from_rgb(255, 110, 110));
+        }
         if unified && self.click_target && resp.clicked() {
             if let Some(mp) = resp.interact_pointer_pos() {
                 let unproj = |p: Pos2| -> V3 {
@@ -325,6 +330,9 @@ impl App {
                 };
                 self.target = Some(self.pick(mp, &proj_dir, &unproj));
             }
+        }
+        if self.presenting {
+            return;
         }
         let sp = &self.shell_params;
         text(
@@ -417,6 +425,9 @@ impl App {
         }
 
         // HUD
+        if self.presenting {
+            return;
+        }
         text(
             &painter,
             rect.left_top() + egui::vec2(10.0, 8.0),
@@ -677,6 +688,19 @@ impl App {
             }
         }
 
+        // Planetary-defence object (once discovered)
+        if let Some((d, label)) = self.defence_marker() {
+            if let Some(p) = proj(d) {
+                let col = Color32::from_rgb(255, 80, 80);
+                let r = 11.0;
+                painter.add(egui::Shape::closed_line(
+                    vec![p + egui::vec2(0.0, -r), p + egui::vec2(r, r * 0.8), p + egui::vec2(-r, r * 0.8)],
+                    Stroke::new(2.0_f32, col),
+                ));
+                text(&painter, p + egui::vec2(14.0, -12.0), Align2::LEFT_BOTTOM, label, 13.0, col);
+            }
+        }
+
         // Target marker
         if let Some(t) = self.target_dir() {
             if let Some(p) = proj(t) {
@@ -785,4 +809,24 @@ fn nearest(mp: Pos2, cands: Vec<(Option<Pos2>, Target)>) -> Option<Target> {
         .filter(|(d, _)| *d < 14.0)
         .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(_, t)| t)
+}
+
+impl App {
+    /// Direction and label of the planetary-defence object, once operators know of it.
+    pub fn defence_marker(&self) -> Option<(V3, String)> {
+        let d = self.defence.as_ref()?;
+        if !d.discovered() || d.impacted {
+            return None;
+        }
+        let dir = V3::from_radec(d.now.ra_deg.to_radians(), d.now.dec_deg.to_radians());
+        let ip = d.systems()[0].ip;
+        Some((
+            dir,
+            format!(
+                "{} · IP {}",
+                d.designation.split(" (").next().unwrap_or(""),
+                ip.map(|p| if p > 0.9999 { "certain".to_string() } else { format!("{:.2} %", 100.0 * p) }).unwrap_or("?".into())
+            ),
+        ))
+    }
 }

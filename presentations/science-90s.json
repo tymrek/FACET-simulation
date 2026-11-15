@@ -1,0 +1,313 @@
+{
+ "id": "science-90s",
+ "title": "FACET · science, 90-second cut",
+ "audience": "Science agencies and foundations (short)",
+ "note": "",
+ "chapters": [
+  {
+   "id": "open",
+   "title": "An open sky",
+   "duration_s": 18,
+   "narration": [
+    "This is FACET: a shell of small telescopes around the Earth, linked by laser and open to everyone. From two satellites to ten thousand, every one of them can point anywhere it can see within seconds."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "target"
+    },
+    {
+     "t": 0,
+     "do": "now"
+    },
+    {
+     "t": 0,
+     "do": "play"
+    },
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 2
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "programme",
+     "on": true,
+     "load": 1.5
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "links",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "traffic",
+     "on": false
+    },
+    {
+     "t": 0,
+     "do": "restore"
+    },
+    {
+     "t": 0,
+     "do": "end_defence"
+    },
+    {
+     "t": 0,
+     "do": "stop_stares"
+    },
+    {
+     "t": 0,
+     "do": "mode",
+     "mode": "queue"
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 22000,
+     "pitch_deg": 20,
+     "yaw_deg": 30,
+     "secs": 0.1
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 3
+    },
+    {
+     "t": 5,
+     "do": "fleet",
+     "n": 10
+    },
+    {
+     "t": 8,
+     "do": "fleet",
+     "n": 100
+    },
+    {
+     "t": 11,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 14,
+     "do": "fleet",
+     "n": 10000
+    },
+    {
+     "t": 12,
+     "do": "card",
+     "title": "FACET",
+     "lines": [
+      "An open astronomical survey shell"
+     ],
+     "secs": 6
+    }
+   ]
+  },
+  {
+   "id": "work",
+   "title": "Always observing",
+   "duration_s": 18,
+   "narration": [
+    "They never wait for night or clear skies, so each one does the work of several telescopes on the ground. In this simulation, more than a hundred research teams keep the fleet busy around the clock."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "fleet",
+     "n": 1000
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "orbit"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 1800
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 24000,
+     "pitch_deg": 20,
+     "secs": 4
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 4
+    },
+    {
+     "t": 3,
+     "do": "card",
+     "title": "Always observing",
+     "lines": [
+      "{duty} of the time, against {ground_duty} on the ground",
+      "{completed_per_day} observations a day"
+     ],
+     "secs": 14
+    }
+   ]
+  },
+  {
+   "id": "defence",
+   "title": "Planetary defence",
+   "duration_s": 30,
+   "narration": [
+    "And they can look where ground telescopes cannot. Here, a fifty-metre asteroid approaches from the direction of the Sun, invisible from the ground. FACET's search finds it, thirty telescopes lock on, and within the hour we know it will hit, and where, with hours to spare. Hours of warning cannot stop an asteroid; they can save lives."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "stop_stares"
+    },
+    {
+     "t": 0,
+     "do": "view",
+     "view": "split"
+    },
+    {
+     "t": 0,
+     "do": "show",
+     "what": "rays",
+     "on": true
+    },
+    {
+     "t": 0,
+     "do": "defence",
+     "preset": 1
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60000
+    },
+    {
+     "t": 0,
+     "do": "sky_look",
+     "target": "Sun",
+     "fov_deg": 110
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 0
+    },
+    {
+     "t": 2,
+     "do": "card",
+     "title": "Exercise: {pd_name}",
+     "lines": [
+      "{pd_size} asteroid · {pd_energy}",
+      "Approaching from the Sun's direction",
+      "Impact in {pd_left}"
+     ],
+     "secs": 18
+    },
+    {
+     "t": 0,
+     "do": "when",
+     "event": "defence_discovered",
+     "then": [
+      {
+       "do": "rate",
+       "x": 4000
+      },
+      {
+       "do": "card",
+       "title": "Found by FACET",
+       "lines": [
+        "{pd_warning} before impact",
+        "Ground network: {pd_warning_ground}"
+       ],
+       "secs": 14
+      },
+      {
+       "do": "sky_look",
+       "target": "defence",
+       "fov_deg": 70
+      }
+     ]
+    },
+    {
+     "t": 0,
+     "do": "when",
+     "event": "defence_certain",
+     "then": [
+      {
+       "do": "card",
+       "title": "Impact certain",
+       "lines": [
+        "Impact probability {pd_ip}, {pd_certain} before impact",
+        "Ground network: {pd_warning_ground}"
+       ],
+       "secs": 25
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "close",
+   "title": "Built in stages",
+   "duration_s": 17,
+   "narration": [
+    "A thousand telescopes cost less than you might think, and FACET can be built in stages, with science from the first launch. It is a simulation today. With your help, it can be real."
+   ],
+   "cues": [
+    {
+     "t": 0,
+     "do": "end_defence"
+    },
+    {
+     "t": 0,
+     "do": "cost_preset",
+     "name": "baseline"
+    },
+    {
+     "t": 0,
+     "do": "rate",
+     "x": 60
+    },
+    {
+     "t": 0,
+     "do": "camera",
+     "dist_km": 38000,
+     "pitch_deg": 20,
+     "secs": 10
+    },
+    {
+     "t": 0,
+     "do": "spin",
+     "deg_s": 2
+    },
+    {
+     "t": 1,
+     "do": "card",
+     "title": "FACET",
+     "lines": [
+      "{cost_per_tel_h} per telescope-hour (baseline)",
+      "[name · contact · website]"
+     ],
+     "secs": 40
+    }
+   ]
+  }
+ ]
+}
