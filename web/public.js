@@ -53,6 +53,32 @@ function renderWhy(s) {
     t("ground telescopes to match one FACET telescope", `≈ ${g.equivalent_ground_telescopes.toFixed(0)}`));
 }
 
+function fmtSpan(s) {
+  if (s < 90) return `${Math.round(s)} s`;
+  if (s < 5400) return `${Math.round(s / 60)} min`;
+  if (s < 2 * 86400) return `${(s / 3600).toFixed(1)} h`;
+  return `${(s / 86400).toFixed(1)} days`;
+}
+function renderAllSky(s) {
+  const a = s.allsky, c = $("allsky_card"); c.hidden = !a; if (!a) return;
+  const n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
+  const [p60, p300, p3600] = a.passes;
+  $("as_time").textContent = fmtSpan(p60.seconds);
+  $("as_head").textContent = `for FACET's ${n(a.eyes)} telescopes to photograph every part of the sky that isn't hidden by the Sun or Moon right now: ${n(a.available_deg2)} square degrees, ${n(a.fields)} overlapping fields, one minute each, down to magnitude ${p60.depth_v.toFixed(1)}.`;
+  $("as_tiles").replaceChildren(
+    t("complete passes of the sky per day", n(a.per_day_60s)),
+    t(`to go deeper: 5 minutes per field (to mag ${p300.depth_v.toFixed(1)})`, fmtSpan(p300.seconds)),
+    t(`an hour per field (to mag ${p3600.depth_v.toFixed(1)})`, fmtSpan(p3600.seconds)),
+    t("of raw images per one-minute pass", `${a.tb_per_pass_60s.toFixed(1)} TB`));
+  $("as_stages").replaceChildren(...a.stages.map(r => el("tr", r.n === s.shell.n ? { class: "me" } : {},
+    el("td", {}, `${n(r.n)}${r.n === s.shell.n ? " (now)" : ""}`),
+    el("td", { class: "num" }, fmtSpan(r.s60)),
+    el("td", { class: "num" }, fmtSpan(r.s300)),
+    el("td", { class: "num" }, fmtSpan(r.s3600)))));
+  $("as_note").textContent = `How this is worked out: fields × (exposure + ${a.overhead_s.toFixed(0)} s to slew and settle) ÷ (telescopes × the share of time they actually spend observing, ${Math.round(100 * a.duty)} %${a.duty_measured ? " as measured in this run, after slews, the South Atlantic Anomaly and Earthshine" : ", assumed until this run has measured it"}). It assumes the whole fleet is given to the job; with a typical ${Math.round(100 * a.survey_share)} % of telescopes surveying and the rest doing requested science, a one-minute pass takes ${fmtSpan(a.survey_share_60s)}. The part of the sky behind the Sun comes into view as the Earth orbits: the entire celestial sphere is covered within about ${Math.round(a.whole_sphere_days)} days. The Earth blocks each telescope's view but never the fleet's: every patch of sky is above the horizon for many satellites at once.`;
+}
+
 function renderScience(s) {
   const sc = s.science; if (!sc) return;
   const d = sc.per_day, n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -89,6 +115,7 @@ function render(s) {
   renderScience(s);
   renderDefence(s);
   renderWhy(s);
+  renderAllSky(s);
   const q = $("queue"); q.replaceChildren();
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
   const recent = s.requests.filter(r => r.state === "done").slice(0, 10);

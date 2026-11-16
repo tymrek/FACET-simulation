@@ -1011,6 +1011,7 @@ impl App {
             "costs": costs_json,
             "resilience": self.resilience_json(),
             "environment": self.env.json(self.shell.params.alt_km),
+            "allsky": self.allsky_json(),
             "ground": self.resil.ground,
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,

@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 #![recursion_limit = "256"]
 
+mod allsky;
 mod app;
 mod astro;
 mod attitude;

@@ -399,6 +399,26 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## All-sky survey speed
+
+The public site and the presentation variables (`{allsky_time}`,
+`{allsky_time_1k}`, `{allsky_time_10k}`, `{allsky_deep_time}`,
+`{allsky_hour_time}`, `{allsky_per_day}`, `{allsky_deg2}`, `{allsky_depth}`)
+report how long the fleet would take to photograph the whole sky not hidden
+by the Sun or Moon. It is a throughput estimate (`src/allsky.rs`), not a
+scheduled run:
+
+    pass time = fields × (exposure + overhead) / (working telescopes × duty)
+
+with fields = observable area ÷ field area × 1.1 (tile overlap) and duty the
+dark-sky-equivalent observing share measured in the run (after slews, the
+South Atlantic Anomaly and Earthshine). The Earth blocks each telescope's view
+but never the fleet's. Typical results with 1° fields, 60 s per field, 15 s
+overhead and ~72 % duty: about 66 min at 1,000 telescopes and about 7 min at
+10,000 (to V ≈ 20.3), ~4.6 TB raw per pass. The card also shows 5-minute and
+1-hour passes for each build-out stage, and the time with a typical 20 % of
+the fleet surveying.
+
 ## Space environment: South Atlantic Anomaly, Earthshine, orbital lifetime
 
 Three effects that anyone who has operated a LEO telescope will ask about.

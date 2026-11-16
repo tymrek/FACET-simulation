@@ -153,3 +153,8 @@ h2 select.tiny { width: auto; display: inline-block; padding: 2px 6px; }
 .gceq { font-size: 16px; font-weight: 600; color: #9fd0ff; margin: 10px 0 4px; }
 .bignums { grid-template-columns: repeat(4, 1fr); }
 .alerts li.bad { border-color: #ff5a5a; color: #ffb0b0; } .log li.bad { color: #ffb0b0; }
+
+.allsky .bighead { display: flex; align-items: baseline; gap: 14px; margin: 4px 0 12px; flex-wrap: wrap; }
+.allsky .bignum { font-size: 44px; font-weight: 700; color: #7fd0ff; line-height: 1; white-space: nowrap; }
+.allsky .bigtxt { flex: 1 1 280px; font-size: 14px; }
+.allsky tr.me td { color: #7fd0ff; font-weight: 600; }

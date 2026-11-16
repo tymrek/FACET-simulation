@@ -915,6 +915,23 @@ impl App {
         let duty = s.duty().unwrap_or(0.9);
         v.push(("duty", format!("{:.0} %", 100.0 * duty)));
         {
+            let a = self.allsky();
+            use crate::allsky::fmt_span;
+            v.push(("allsky_time", fmt_span(a.passes[0].seconds)));
+            v.push(("allsky_deep_time", fmt_span(a.passes[1].seconds)));
+            v.push(("allsky_hour_time", fmt_span(a.passes[2].seconds)));
+            v.push(("allsky_per_day", format!("{:.0}", a.per_day_60s)));
+            for &(n, s60, _, _) in &a.stages {
+                match n {
+                    1000 => v.push(("allsky_time_1k", fmt_span(s60))),
+                    10_000 => v.push(("allsky_time_10k", fmt_span(s60))),
+                    _ => {}
+                }
+            }
+            v.push(("allsky_deg2", format!("{:.0}", a.available_deg2)));
+            v.push(("allsky_depth", format!("{:.1}", a.passes[0].depth_v)));
+        }
+        {
             let e = &self.env;
             let alt = self.shell.params.alt_km;
             if let Some(r) = e.trade.iter().find(|r| (r.alt_km - alt).abs() < 1.0) {
