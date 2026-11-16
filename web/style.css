@@ -34,7 +34,7 @@ button.sel { border-color: var(--accent); color: var(--accent); }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 th { color: var(--muted); font-weight: 500; }
-td.num { font-variant-numeric: tabular-nums; text-align: right; }
+td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; }
 .state { font-size: 11px; padding: 2px 7px; border-radius: 10px; border: 1px solid var(--line); white-space: nowrap; }
 .state.pending { color: #ffd166; } .state.approved { color: var(--link); } .state.observing { color: var(--accent); }
 .state.done { color: #9aa5b8; } .state.rejected, .state.cancelled { color: var(--warn); }
