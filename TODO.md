@@ -20,5 +20,7 @@
 
 ## Build and platform
 - GitHub CI (build + tests).
-- Browser (WASM) build.
 - Wayland: test on a real compositor; nicer client-side title bar on GNOME.
+
+## Last
+- Browser (WASM) build.
