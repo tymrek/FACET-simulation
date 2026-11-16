@@ -328,6 +328,10 @@ pub struct Science {
     pub overhead_s: f64,
     pub idle_s: f64,
     pub hold_s: f64,
+    /// Detectors safed in the South Atlantic Anomaly.
+    pub saa_s: f64,
+    /// Exposure lost to Earthshine (raw − dark-sky-equivalent), included in integrating_s.
+    pub earthshine_s: f64,
     /// Integrating satellite-seconds by use.
     pub by_use: UseSplit,
     /// Σ A·Ω·t over all science integration, m²·deg²·s.
@@ -362,6 +366,15 @@ impl Science {
                 .map(|c| CaseStats { key: c.key, label: c.label, deadline_h: c.deadline_h, ..Default::default() })
                 .collect(),
             ..Default::default()
+        }
+    }
+    /// Dark-sky-equivalent integration per working satellite-second.
+    pub fn duty(&self) -> Option<f64> {
+        let d = self.sat_s - self.hold_s;
+        if d > 0.0 {
+            Some((self.integrating_s - self.earthshine_s) / d)
+        } else {
+            None
         }
     }
     pub fn inv(&mut self, i: usize) -> (&mut f64, &mut u32) {
@@ -405,6 +418,8 @@ impl Science {
                 "overhead_pct": pct(self.overhead_s),
                 "idle_pct": pct(self.idle_s),
                 "hold_pct": pct(self.hold_s),
+                "saa_pct": pct(self.saa_s),
+                "earthshine_pct": pct(self.earthshine_s),
                 "pointed_science_pct": pct(sci),
                 "survey_pct": pct(u.survey + u.neo_sweep),
             },

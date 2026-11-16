@@ -399,6 +399,74 @@ nodal regression, Earth-cone geometry, stacking maths and TLE format.
   to ground astronomy.
 - Optical-link budget and real link scheduling.
 
+## Space environment: South Atlantic Anomaly, Earthshine, orbital lifetime
+
+Three effects that anyone who has operated a LEO telescope will ask about.
+They are deliberately simple engineering models; the numbers below come from
+`src/environment.rs` and the **Space environment** panels (native and director
+console).
+
+**South Atlantic Anomaly (SAA).** Earth's magnetic dipole is offset from the
+geocentre and tilted, so the inner proton belt dips into LEO over South
+America and the South Atlantic. Satellites crossing it take a heavy flux of
+energetic protons: bright hits and tracks on the detector, extra noise,
+electronics upsets and cumulative detector damage.
+
+* Model: >10 MeV trapped-proton flux as two lobes (the main anomaly and the
+  weaker south-west-African lobe it is slowly separating into), drifting west
+  ~0.3°/yr, peak flux rising with altitude (e-folding ~60 km). **Assumed**
+  calibration: inside the 10 p/cm²/s contour a Hubble-like orbit (540 km,
+  28.5°) spends ~11 % of its time, an ISS-like orbit ~5 %, FACET at
+  550 km / 53° ~9 %.
+* Policy (`--saa pause|flag|off`): *safe detectors* (default, what Hubble
+  does: no science exposure inside), *keep exposing* (frames flagged, hits
+  must be rejected) or *ignore* (for comparison).
+* The orbit view draws the safe-mode contour at shell altitude, with its
+  footprint on the ground, and colours satellites inside it magenta.
+* Time inside appears as its own slice of the science-return time bar and is
+  taken out of the duty cycle used for the ground comparison.
+* **Why it favours a fleet:** a single telescope loses whole minutes at a time;
+  across the shell only ~9 % of satellites are inside at any moment and the
+  rest keep working.
+* **False transients:** particle hits (an **assumed** 2 p/cm²/s of cosmic rays
+  outside the anomaly, plus the anomaly flux inside) on the 8.6 cm² sensor, of
+  which an **assumed** 1 % look star-like in a single frame. That is tens of
+  millions of single-frame false transients a day across the fleet; requiring
+  the same event in two telescopes on the same field cuts chance matches to
+  hundreds a day, and in three to effectively none. Multi-telescope
+  confirmation is how FACET separates real fast flashes from radiation.
+* Proton fluence per satellite per year is reported as the detector-damage
+  budget.
+
+**Earthshine.** Sunlight scattered off the Earth's limb raises the background
+for pointings near the limb. **Assumed** V ≈ 19.0 mag/arcsec² at 10° above a
+fully sunlit limb, fading 6 mag per decade of limb angle (≈ 20.8 at 20°, 21.9
+at 30°), scaled by how sunlit the limb point is (`--no-earthshine` to switch
+off). The cost is charged as dark-sky-equivalent exposure time: requests take
+longer to reach their depth, and the lost share is reported (typically 5–10 %
+of exposure time in a busy queue). The duty cycle shown against the ground uses
+dark-sky-equivalent time.
+
+**Orbital lifetime and disposal.** Circular-orbit drag decay with the CIRA-72
+exponential atmosphere (mean solar activity) and an **assumed** solar-cycle
+swing (×1 at 150 km rising to ×3.5 above 600 km between mean and max), cycle
+maximum 2024.8, period 11 yr. Spacecraft: **assumed** 150 kg, 1.2 m² mean
+tumbling cross-section, C_D 2.2 (all adjustable).
+
+* At 550 km a dead satellite re-enters in ~6.7 yr at mean solar activity
+  (~2.3 yr at solar maximum, ~19 yr at minimum; ~8 yr following the cycle from
+  late 2026). That does **not** meet a 5-year post-mission disposal rule
+  passively, so the design needs an ~84 m/s disposal burn to a 250 km perigee
+  while the satellite still works.
+* The **altitude trade** table (400–800 km) shows the tension: higher shells
+  live longer and spend more time in the anomaly; lower shells clean themselves
+  up but need more station-keeping. 500 km meets a 5-year rule passively in
+  all but solar-minimum conditions, at the cost of ~7 % SAA time instead of ~9 %
+  — in FACET's favour on both counts, against slightly more drag make-up.
+
+Not modelled: the outer-belt electron "horns" at high latitude, solar particle
+events, detector annealing, and drag make-up propellant for station-keeping.
+
 ## Presentation mode
 
 Scripted, narrated walkthroughs of the simulation for pitching. Open it from

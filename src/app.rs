@@ -47,6 +47,7 @@ pub struct Show {
     pub coast: bool,
     pub footprints: bool,
     pub orbit_stars: bool,
+    pub saa: bool,
 }
 
 pub struct App {
@@ -112,6 +113,7 @@ pub struct App {
     pub cost_model: crate::costs::Model,
     /// Satellite failures, replacement, health record; space-vs-ground comparison.
     pub resil: crate::resilience::Resilience,
+    pub env: crate::environment::Environment,
     pub cost_window_open: bool,
     /// Presentation mode requests from the controls / command line.
     pub present_open: bool,
@@ -187,6 +189,7 @@ impl App {
                 coast: true,
                 footprints: true,
                 orbit_stars: true,
+                saa: true,
             },
             grid: obs::SkyGrid::new(4.0),
             cov: Vec::new(),
@@ -214,6 +217,7 @@ impl App {
             search_share: 0.10,
             cost_model: crate::costs::Model::baseline(),
             resil: Default::default(),
+            env: Default::default(),
             cost_window_open: false,
             present_open: false,
             presenting: false,
@@ -309,6 +313,15 @@ impl App {
                 "--no-oneweb" => self.traffic.cfg.oneweb = false,
                 "--other-objects" => self.traffic.cfg.other_n = val().parse().unwrap_or(1_500),
                 "--no-relay" => self.traffic.cfg.relay = false,
+                "--saa" => {
+                    use crate::environment::SaaPolicy;
+                    self.env.cfg.saa_policy = match val().as_str() {
+                        "flag" => SaaPolicy::Flag,
+                        "off" => SaaPolicy::Off,
+                        _ => SaaPolicy::Pause,
+                    }
+                }
+                "--no-earthshine" => self.env.cfg.earthshine = false,
                 "--no-streak-avoidance" => self.traffic.cfg.streak_avoidance = false,
                 "--product" => {
                     use crate::traffic::Product;
@@ -484,6 +497,8 @@ impl App {
         let ag = crate::attitude::Agility::from_obs(&self.obs_params);
         obs::advance_attitudes(&mut self.obs, &ag, dt_sim, target);
         prof("advance_attitudes");
+        self.environment_step(dt_sim);
+        prof("environment_step");
         self.queue_credit();
         prof("queue_credit");
         self.science_account(dt_sim);
@@ -783,6 +798,8 @@ impl App {
         self.resilience_panel(ui);
         ui.separator();
         self.traffic_panel(ui);
+        ui.separator();
+        self.environment_panel(ui);
         ui.separator();
         self.science_panel(ui);
         ui.separator();

@@ -61,7 +61,7 @@ function renderScience(s) {
   $("sci_tiles").replaceChildren(
     tile("observations completed per day", n(d.completed)),
     tile("finished in time to be useful", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`),
-    tile("of the time working telescopes are observing", `${(100 * sc.efficiency.integrating_pct / Math.max(1, 100 - sc.efficiency.hold_pct)).toFixed(0)} %`),
+    tile("of the time working telescopes are observing", `${(100 * (sc.efficiency.integrating_pct - (sc.efficiency.earthshine_pct || 0)) / Math.max(1, 100 - sc.efficiency.hold_pct)).toFixed(0)} %`),
     tile("research teams served", `${sc.investigators_served}`));
   $("sci_cases").replaceChildren(...sc.cases.map(c => {
     const fin = c.completed + c.expired;

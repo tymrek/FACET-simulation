@@ -15,6 +15,7 @@ const C_LIT: (u8, u8, u8) = (255, 236, 205);
 const C_ECLIPSED: (u8, u8, u8) = (95, 115, 180);
 const C_SLEWING: (u8, u8, u8) = (255, 150, 40);
 const C_SETTLING: (u8, u8, u8) = (255, 225, 80);
+const C_SAA: (u8, u8, u8) = (255, 90, 200);
 const BODY_COLORS: [(u8, u8, u8); 9] = [
     (255, 225, 120),
     (215, 215, 205),
@@ -219,6 +220,25 @@ impl App {
             }
         }
 
+        // South Atlantic Anomaly: the safe-mode contour at shell altitude,
+        // with a fainter footprint on the ground beneath it.
+        if self.show.saa && self.env.contour.len() > 2 {
+            let rs = re + self.shell.params.alt_km;
+            let col = rgba(255, 90, 200, 0.75);
+            for w in self.env.contour.windows(2) {
+                let a = astro::ecef_to_eci(w[0].1, w[0].0, rs, gm);
+                let bb = astro::ecef_to_eci(w[1].1, w[1].0, rs, gm);
+                if !occluded(a) && !occluded(bb) {
+                    if let (Some(pa), Some(pb)) = (proj(a), proj(bb)) {
+                        b.line(pa, pb, 1.6, col);
+                    }
+                }
+                let a = astro::ecef_to_eci(w[0].1, w[0].0, re, gm);
+                let bb = astro::ecef_to_eci(w[1].1, w[1].0, re, gm);
+                seg(&mut b, a, bb, rgba(255, 90, 200, 0.35), rgba(255, 90, 200, 0.25), 1.0);
+            }
+        }
+
         // Sun / target direction guides from Earth
         let guide = |b: &mut Batch, d: V3, col: Color32| -> Option<Pos2> {
             let a = d * (re * 1.03);
@@ -300,7 +320,11 @@ impl App {
         for i in 0..n {
             if let Some(p) = vis[i] {
                 let phase = self.obs.att.get(i).map(|a| a.phase()).unwrap_or(Phase::Idle);
+                let saa = self.show.saa
+                    && self.env.cfg.saa_policy != crate::environment::SaaPolicy::Off
+                    && self.env.in_saa.get(i).copied().unwrap_or(false);
                 let col = match phase {
+                    _ if saa => C_SAA,
                     Phase::Locked => C_ACTIVE,
                     Phase::Slewing => C_SLEWING,
                     Phase::Settling | Phase::Acquiring => C_SETTLING,
@@ -792,6 +816,7 @@ fn legend(p: &egui::Painter, rect: Rect) {
         (C_ECLIPSED, "idle, eclipsed"),
         ((80, 200, 255), "laser link"),
         ((255, 70, 60), "link through atmosphere"),
+        (C_SAA, "in the South Atlantic Anomaly"),
     ];
     let mut y = rect.top() + 30.0;
     for (col, s) in items {

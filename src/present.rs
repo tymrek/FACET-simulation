@@ -912,8 +912,23 @@ impl App {
         v.push(("on_time", sci["on_time_pct"].as_f64().map(|p| format!("{p:.0} %")).unwrap_or("–".into())));
         v.push(("teams", format!("{}", sci["investigators_served"])));
         let s = &self.science;
-        let duty = if s.sat_s - s.hold_s > 0.0 { s.integrating_s / (s.sat_s - s.hold_s) } else { 0.9 };
+        let duty = s.duty().unwrap_or(0.9);
         v.push(("duty", format!("{:.0} %", 100.0 * duty)));
+        {
+            let e = &self.env;
+            let alt = self.shell.params.alt_km;
+            if let Some(r) = e.trade.iter().find(|r| (r.alt_km - alt).abs() < 1.0) {
+                v.push(("saa_pct", format!("{:.0} %", 100.0 * r.saa_frac)));
+                v.push(("disposal_dv", format!("{:.0} m/s", r.disposal_dv)));
+            }
+            if let Some((m, _, _, cy)) = e.life {
+                v.push(("lifetime", crate::environment::fmt_years(m)));
+                v.push(("lifetime_cycle", crate::environment::fmt_years(cy)));
+            }
+            if e.exposed_s > 0.0 {
+                v.push(("earthshine_lost", format!("{:.0} %", 100.0 * e.earthshine_lost_s / e.exposed_s)));
+            }
+        }
         let raw = s.bytes / 1e12 / (s.elapsed_s / 86_400.0).max(1e-9);
         v.push(("raw_tb_day", format!("{raw:.0} TB")));
         if let Some(g) = &self.resil.ground {

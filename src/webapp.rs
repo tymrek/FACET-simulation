@@ -535,6 +535,7 @@ impl App {
         let Some(web) = self.web.clone() else { return };
         if self.science.since_utc.is_empty() {
             self.science = crate::programme::Science::new(astro::format_utc(self.jd));
+            self.env.reset_stats();
         }
         if dt_sim <= 0.0 {
             return;
@@ -649,6 +650,8 @@ impl App {
             1.0
         };
         let s = &mut self.science;
+        let env = &self.env;
+        let safed = env.cfg.saa_policy == crate::environment::SaaPolicy::Pause;
         s.elapsed_s += dt;
         let n = self.obs.att.len();
         s.sat_s += n as f64 * dt;
@@ -657,14 +660,22 @@ impl App {
                 s.hold_s += dt;
                 continue;
             }
+            if safed && env.in_saa.get(i).copied().unwrap_or(false) {
+                s.saa_s += dt;
+                continue;
+            }
             let j = self.obs.job[i];
             if j == 0 {
                 s.idle_s += dt;
                 continue;
             }
+            // obs_dt is dark-sky-equivalent time; recover the raw exposure.
+            let shine = env.shine.get(i).copied().unwrap_or(1.0).max(1e-3) as f64;
             let got = self.obs.obs_dt[i].clamp(0.0, dt) * gate;
-            s.integrating_s += got;
-            s.overhead_s += dt - got;
+            let raw = (got / shine).min(dt);
+            s.integrating_s += raw;
+            s.earthshine_s += raw - got;
+            s.overhead_s += dt - raw;
             if got <= 0.0 {
                 continue;
             }
@@ -678,8 +689,8 @@ impl App {
                 _ => u.survey += got,
             }
             s.etendue_s += area_m2 * omega * got;
-            s.frames += got / sub;
-            s.bytes += got / sub * frame_bytes;
+            s.frames += raw / sub;
+            s.bytes += raw / sub * frame_bytes;
         }
     }
 
@@ -999,6 +1010,7 @@ impl App {
         let status = serde_json::json!({
             "costs": costs_json,
             "resilience": self.resilience_json(),
+            "environment": self.env.json(self.shell.params.alt_km),
             "ground": self.resil.ground,
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,

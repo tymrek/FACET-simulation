@@ -13,6 +13,7 @@ mod costs;
 mod costs_ui;
 mod defence;
 mod draw;
+mod environment;
 mod ground;
 mod imaging;
 mod math;

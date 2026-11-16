@@ -341,6 +341,40 @@ function drawIpChart(c, d) {
   g.fillStyle = "#ffb44a"; g.fillText("Ground only", L + 110 * dpr, T + 12 * dpr);
 }
 
+// ---------------------------------------------------------------- space environment
+function fmtYears(y) {
+  if (y == null) return "–";
+  if (y >= 299) return "> 300 yr";
+  if (y >= 20) return `${y.toFixed(0)} yr`;
+  if (y >= 1) return `${y.toFixed(1)} yr`;
+  return `${Math.round(y * 365.25)} days`;
+}
+function renderEnvironment(s) {
+  const e = s.environment; if (!e) return;
+  const pol = { pause: "detectors safed inside", flag: "exposing through it (flagged)", off: "ignored" }[e.policy];
+  $("en_head").textContent = `· ${s.shell.alt_km} km, ${s.shell.inc_deg}° shell`;
+  $("en_saa").replaceChildren(
+    tile("in the anomaly now", `${e.in_saa_now.toLocaleString()}`, `${pol} · threshold ${e.threshold} p/cm²/s (>10 MeV)`),
+    tile("orbit average", e.orbit_saa_pct == null ? "–" : `${e.orbit_saa_pct.toFixed(1)} %`, "share of each satellite's time inside"),
+    tile("fleet time lost", `${e.saa_lost_pct.toFixed(1)} %`, "exposure time lost to safed detectors this run"),
+    tile("false transients", `${Math.round(e.candidates_per_day).toLocaleString()}/day`, `single-frame particle hits that look star-like; ${e.coincidences_per_day.toFixed(0)}/day pass a 2-telescope check, ${e.coincidences3_per_day.toExponential(1)}/day a 3-telescope check`),
+    tile("proton fluence", `${e.fluence_per_sat_yr.toExponential(1)}`, "p/cm² per satellite per year (detector damage budget)"),
+  );
+  const L = e.lifetime || {};
+  $("en_life").replaceChildren(
+    tile("Earthshine loss", e.earthshine_on ? `${e.earthshine_lost_pct.toFixed(1)} %` : "off", `of exposure time (dark-sky equivalent) · ${e.earthshine_now} telescopes badly affected now`),
+    tile("passive lifetime", fmtYears(L.mean_yr), `mean sun · ${fmtYears(L.solar_max_yr)} at solar max, ${fmtYears(L.solar_min_yr)} at solar min`),
+    tile("following the cycle", fmtYears(L.cycle_yr), L.cycle_yr != null && L.cycle_yr <= 5 ? "meets a 5-year disposal rule passively" : `needs a ${e.disposal_dv_ms == null ? "–" : e.disposal_dv_ms.toFixed(0)} m/s disposal burn for a 5-year rule`),
+    tile("ballistic coefficient", `${e.ballistic_m2_kg.toFixed(4)}`, "C_D·A/m, m²/kg"),
+  );
+  $("en_trade").replaceChildren(...e.trade.map(r => el("tr", {},
+    el("td", {}, `${r.alt_km.toFixed(0)}`),
+    el("td", { class: "num" }, `${(100 * r.saa_frac).toFixed(1)} %`),
+    el("td", { class: "num" }, fmtYears(r.life_mean_yr)),
+    el("td", { class: "num" }, `${fmtYears(r.life_min_yr)} – ${fmtYears(r.life_max_yr)}`),
+    el("td", { class: "num" }, `${r.disposal_dv.toFixed(0)} m/s`))));
+}
+
 // ---------------------------------------------------------------- resilience & ground comparison
 function renderResilience(s) {
   const r = s.resilience, g = s.ground; if (!r) return;
@@ -461,10 +495,11 @@ function renderScience(s) {
   );
   const tot = 100;
   const segs = USE.map(([k, , c]) => [sc.use_h[k] * 3600 / Math.max(1, sc.elapsed_s * (s.shell.n || 1)) * 100, c]);
-  segs.push([e.overhead_pct, "#3a4256"], [e.idle_pct + e.hold_pct, "#1a2130"]);
+  segs.push([e.overhead_pct, "#3a4256"], [e.saa_pct || 0, "#ff5ac8"], [e.idle_pct + e.hold_pct, "#1a2130"]);
   $("sci_use").replaceChildren(...segs.map(([p, c]) => el("div", { style: `width:${Math.max(0, p / tot * 100)}%;background:${c}` })));
   $("sci_legend").replaceChildren(...USE.map(([k, l, c]) => el("span", {}, el("i", { style: `background:${c}` }), `${l} ${fmtNum(sc.use_h[k])} h`)),
     el("span", {}, el("i", { style: "background:#3a4256" }), `slew/settle/acquire ${e.overhead_pct.toFixed(1)} %`),
+    el("span", {}, el("i", { style: "background:#ff5ac8" }), `South Atlantic Anomaly ${(e.saa_pct || 0).toFixed(1)} %`),
     el("span", {}, el("i", { style: "background:#1a2130" }), `idle/hold ${(e.idle_pct + e.hold_pct).toFixed(1)} %`));
   $("sci_cases").replaceChildren(...sc.cases.map(c => {
     const fin = c.completed + c.expired;
@@ -576,6 +611,7 @@ function render(s) {
   renderDefence(s);
   renderTraffic(s);
   renderResilience(s);
+  renderEnvironment(s);
   for (const c of (s.campaigns || []).filter(c => c.active)) {
     if (c.paused) alerts.push(["info", `STARE ${c.target_name} paused: ${String(c.blocked).toLowerCase()}`]);
     else if (c.eligible_s > 0 && c.locked_now === 0 && !c.blocked) alerts.push(["warn", `STARE #${c.id} on ${c.target_name}: no eyes locked`]);
