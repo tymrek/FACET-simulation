@@ -31,6 +31,18 @@ impl Batch {
         }
     }
 
+    /// Axis-aligned filled square of half-side `h`.
+    pub fn square(&mut self, p: Pos2, h: f32, c: Color32) {
+        let m = &mut self.mesh;
+        let i = m.vertices.len() as u32;
+        m.colored_vertex(p + Vec2::new(-h, -h), c);
+        m.colored_vertex(p + Vec2::new(h, -h), c);
+        m.colored_vertex(p + Vec2::new(h, h), c);
+        m.colored_vertex(p + Vec2::new(-h, h), c);
+        m.add_triangle(i, i + 1, i + 2);
+        m.add_triangle(i, i + 2, i + 3);
+    }
+
     /// Soft glow: bright core plus a transparent halo.
     pub fn glow_point(&mut self, p: Pos2, r: f32, c: Color32) {
         if r > 2.2 {

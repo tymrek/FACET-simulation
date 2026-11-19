@@ -427,6 +427,28 @@ overhead and ~72 % duty: about 66 min at 1,000 telescopes and about 7 min at
 1-hour passes for each build-out stage, and the time with a typical 20 % of
 the fleet surveying.
 
+### All-sky survey mode (measured)
+
+`--mode allsky`, or **All-sky survey → Dedicate the fleet** in the controls,
+makes the fleet actually tile the sky (`src/survey.rs`). The sphere is cut
+into ~45,500 fixed 1° tiles (rings of declination, ~10 % overlap). Each free
+telescope takes the nearest undone tile it can see within 75° of its zenith
+and 32° of its current pointing, slews, settles and integrates through the
+attitude model; only locked, dark-sky-equivalent integration counts, so
+slews, the South Atlantic Anomaly, Earthshine and sunward stray light all
+cost what they cost. Telescopes in the anomaly hand their tiles back; a
+closer free telescope may take over a tile whose claimant is still slewing.
+A pass is complete when every tile is done or inside a keep-out. The sky
+view shows coverage filling in; the panel, status API and public site report
+each pass's time and the time to 95 %.
+
+Measured with defaults: **1,000 telescopes: ~75 min per full pass, 95 % in
+~67 min; 10,000 telescopes: ~13–15 min per full pass, 95 % in ~8 min**, at
+~79 s of telescope time per field (60 s exposure + ~19 s overhead). The
+last few percent are tiles hugging the Sun and Moon keep-out edges. The
+option *free telescopes tile during Science operations* runs the same
+survey on idle telescopes instead of the zenith stare.
+
 ## Space environment: South Atlantic Anomaly, Earthshine, orbital lifetime
 
 Three effects that anyone who has operated a LEO telescope will ask about.

@@ -76,7 +76,11 @@ function renderAllSky(s) {
     el("td", { class: "num" }, fmtSpan(r.s60)),
     el("td", { class: "num" }, fmtSpan(r.s300)),
     el("td", { class: "num" }, fmtSpan(r.s3600)))));
-  $("as_note").textContent = `How this is worked out: fields × (exposure + ${a.overhead_s.toFixed(0)} s to slew and settle) ÷ (telescopes × the share of time they actually spend observing, ${Math.round(100 * a.duty)} %${a.duty_measured ? " as measured in this run, after slews, the South Atlantic Anomaly and Earthshine" : ", assumed until this run has measured it"}). It assumes the whole fleet is given to the job; with a typical ${Math.round(100 * a.survey_share)} % of telescopes surveying and the rest doing requested science, a one-minute pass takes ${fmtSpan(a.survey_share_60s)}. The part of the sky behind the Sun comes into view as the Earth orbits: the entire celestial sphere is covered within about ${Math.round(a.whole_sphere_days)} days. The Earth blocks each telescope's view but never the fleet's: every patch of sky is above the horizon for many satellites at once.`;
+  const sv = s.survey, m = $("as_meas");
+  const last = sv && sv.history && sv.history.length ? sv.history[sv.history.length - 1] : null;
+  m.hidden = !last;
+  if (last) m.textContent = `Measured in this simulation, not estimated: the fleet's last complete pass of the sky took ${fmtSpan(last.seconds)} (95 % of it in ${fmtSpan(last.t95)}), with ${Math.round(last.eyes_mean).toLocaleString()} telescopes working on average${sv.overhead_per_tile_s != null ? ` and ${Math.round(sv.overhead_per_tile_s)} s of slewing, settling and losses per field` : ""}.`;
+  $("as_note").textContent = `How the estimate is worked out: fields × (exposure + ${a.overhead_s.toFixed(0)} s to slew and settle) ÷ (telescopes × the share of time they actually spend observing, ${Math.round(100 * a.duty)} %${a.duty_measured ? " as measured in this run, after slews, the South Atlantic Anomaly and Earthshine" : ", assumed until this run has measured it"}). It assumes the whole fleet is given to the job; with a typical ${Math.round(100 * a.survey_share)} % of telescopes surveying and the rest doing requested science, a one-minute pass takes ${fmtSpan(a.survey_share_60s)}. The part of the sky behind the Sun comes into view as the Earth orbits: the entire celestial sphere is covered within about ${Math.round(a.whole_sphere_days)} days. The Earth blocks each telescope's view but never the fleet's: every patch of sky is above the horizon for many satellites at once.`;
 }
 
 function renderScience(s) {

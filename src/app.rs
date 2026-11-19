@@ -114,6 +114,7 @@ pub struct App {
     /// Satellite failures, replacement, health record; space-vs-ground comparison.
     pub resil: crate::resilience::Resilience,
     pub env: crate::environment::Environment,
+    pub survey: crate::survey::Survey,
     pub cost_window_open: bool,
     /// Presentation mode requests from the controls / command line.
     pub present_open: bool,
@@ -218,6 +219,7 @@ impl App {
             cost_model: crate::costs::Model::baseline(),
             resil: Default::default(),
             env: Default::default(),
+            survey: crate::survey::Survey { show: true, ..Default::default() },
             cost_window_open: false,
             present_open: false,
             presenting: false,
@@ -272,6 +274,7 @@ impl App {
                         "survey" => Mode::Survey,
                         "mosaic" => Mode::Mosaic,
                         "neo" => Mode::NeoSweep,
+                        "allsky" => Mode::AllSky,
                         _ => Mode::Stack,
                     }
                 }
@@ -494,11 +497,14 @@ impl App {
         prof("stare_assign");
         self.queue_assign();
         prof("queue_assign");
+        self.survey_assign();
+        prof("survey_assign");
         let ag = crate::attitude::Agility::from_obs(&self.obs_params);
         obs::advance_attitudes(&mut self.obs, &ag, dt_sim, target);
         prof("advance_attitudes");
         self.environment_step(dt_sim);
         prof("environment_step");
+        self.survey_credit(dt_sim);
         self.queue_credit();
         prof("queue_credit");
         self.science_account(dt_sim);
@@ -798,6 +804,8 @@ impl App {
         self.resilience_panel(ui);
         ui.separator();
         self.traffic_panel(ui);
+        ui.separator();
+        self.survey_panel(ui);
         ui.separator();
         self.environment_panel(ui);
         ui.separator();

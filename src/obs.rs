@@ -21,10 +21,12 @@ pub enum Mode {
     NeoSweep,
     /// Serve the observation-request queue (public / director requests).
     Queue,
+    /// Tile the whole observable sky and time each complete pass.
+    AllSky,
 }
 
 impl Mode {
-    pub const ALL: [Mode; 5] = [Mode::Survey, Mode::Stack, Mode::Mosaic, Mode::NeoSweep, Mode::Queue];
+    pub const ALL: [Mode; 6] = [Mode::Survey, Mode::Stack, Mode::Mosaic, Mode::NeoSweep, Mode::Queue, Mode::AllSky];
     pub fn key(self) -> &'static str {
         match self {
             Mode::Survey => "survey",
@@ -32,6 +34,7 @@ impl Mode {
             Mode::Mosaic => "mosaic",
             Mode::NeoSweep => "neo",
             Mode::Queue => "queue",
+            Mode::AllSky => "allsky",
         }
     }
     pub fn from_key(k: &str) -> Option<Mode> {
@@ -44,6 +47,7 @@ impl Mode {
             Mode::Mosaic => "Target: mosaic",
             Mode::NeoSweep => "NEO sweep (solar elongation ring)",
             Mode::Queue => "Science operations (request queue)",
+            Mode::AllSky => "All-sky survey (tile the whole sky)",
         }
     }
 }
@@ -210,6 +214,8 @@ pub const TAG_NEO: u64 = 4;
 pub const TAG_QUEUE: u64 = 5;
 /// STARE campaign (Sustained Tracking And Rotating Eyes).
 pub const TAG_STARE: u64 = 6;
+/// All-sky survey tile.
+pub const TAG_ALLSKY: u64 = 7;
 pub fn job(tag: u64, v: u64) -> u64 {
     (tag << 56) | (v & ((1 << 56) - 1))
 }
@@ -481,11 +487,12 @@ pub fn update(
             }
         }
         Mode::Queue => {} // pointing assigned by `assign_queue`; idle eyes survey
+        Mode::AllSky => {} // tiles assigned by `App::survey_assign` from the free pool
     }
     // Stack/Mosaic/Queue: telescopes with nothing else to do (over the target
     // cap, no line of sight, no queued work they can see) run the zenith survey.
     // Queue work and STARE campaigns override this below.
-    if matches!(mode, Mode::Stack | Mode::Mosaic | Mode::Queue) {
+    if matches!(mode, Mode::Stack | Mode::Mosaic | Mode::Queue | Mode::AllSky) {
         for i in 0..n {
             let z = st.rhat[i];
             if st.pointing[i].is_none() && !st.hold[i] && ok(z) {
@@ -597,7 +604,7 @@ pub fn assign_queue(
                 }
                 let mine = st_ref.prev_job[i] == me;
                 let pt = job_tag(st_ref.prev_job[i]);
-                let busy = pt != 0 && pt != TAG_SURVEY && !mine;
+                let busy = pt != 0 && pt != TAG_SURVEY && pt != TAG_ALLSKY && !mine;
                 // 1 − cos: same ordering as the slew angle, without acos.
                 Some((i, mine, 1.0 - st_ref.att[i].dir.dot(it.dir) + if busy { 10.0 } else { 0.0 }))
             };

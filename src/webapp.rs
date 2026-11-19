@@ -331,9 +331,9 @@ impl App {
             ),
             (
                 all.iter().copied().filter(|&i| sh.requests[i].programme.is_some()).take((n / 2).max(400)).collect(),
-                if matches!(self.mode, Mode::Survey | Mode::NeoSweep) { 0 } else { usize::MAX },
+                if matches!(self.mode, Mode::Survey | Mode::NeoSweep | Mode::AllSky) { 0 } else { usize::MAX },
                 false,
-                if matches!(self.mode, Mode::Survey | Mode::NeoSweep) {
+                if matches!(self.mode, Mode::Survey | Mode::NeoSweep | Mode::AllSky) {
                     "paused: fleet dedicated to the director's sweep"
                 } else {
                     "waiting: every telescope that can see it is busy"
@@ -697,7 +697,7 @@ impl App {
     /// Planetary-defence exercise: advance it, task follow-up eyes, log events.
     pub fn defence_step(&mut self, dt: f64) {
         let Some(sc) = self.defence.as_mut() else { return };
-        let search = self.obs.job.iter().filter(|&&j| matches!(obs::job_tag(j), obs::TAG_SURVEY | obs::TAG_NEO)).count();
+        let search = self.obs.job.iter().filter(|&&j| matches!(obs::job_tag(j), obs::TAG_SURVEY | obs::TAG_NEO | obs::TAG_ALLSKY)).count();
         let mut locked = 0;
         if let (Some(id), Some(w)) = (sc.campaign, &self.web) {
             if let Some(c) = w.lock().unwrap().campaigns.iter().find(|c| c.id == id && c.active) {
@@ -912,8 +912,8 @@ impl App {
         if ui.add(egui::Slider::new(&mut ninv, 1..=500).logarithmic(true).text("investigator teams")).changed() {
             self.gen.set_investigators(ninv);
         }
-        if matches!(self.mode, Mode::Survey | Mode::NeoSweep) {
-            ui.label(RichText::new("Paused: Survey / NEO-sweep modes dedicate the fleet. Use Science operations.").small().color(egui::Color32::from_rgb(255, 180, 60)));
+        if matches!(self.mode, Mode::Survey | Mode::NeoSweep | Mode::AllSky) {
+            ui.label(RichText::new("Paused: Survey, NEO-sweep and all-sky modes dedicate the fleet. Use Science operations.").small().color(egui::Color32::from_rgb(255, 180, 60)));
         }
         let s = self.science.summary(&self.gen.investigators);
         let e = &s["efficiency"];
@@ -1012,6 +1012,7 @@ impl App {
             "resilience": self.resilience_json(),
             "environment": self.env.json(self.shell.params.alt_km),
             "allsky": self.allsky_json(),
+            "survey": self.survey_json(),
             "ground": self.resil.ground,
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,
@@ -1024,7 +1025,7 @@ impl App {
             "programme": {
                 "search_share": self.search_share,
                 "on": self.gen.on, "load": self.gen.load, "investigators": self.gen.investigators.len(),
-                "active": self.gen.on && !matches!(self.mode, Mode::Survey | Mode::NeoSweep),
+                "active": self.gen.on && !matches!(self.mode, Mode::Survey | Mode::NeoSweep | Mode::AllSky),
             },
             "science": science,
             "mode_label": self.mode.label(),
@@ -1172,6 +1173,7 @@ impl App {
         let task = match obs::job_tag(j) {
             0 => if hold { "none (safe hold)".to_string() } else { "unassigned".to_string() },
             obs::TAG_SURVEY => "Programme: survey (zenith stare)".into(),
+            obs::TAG_ALLSKY => format!("All-sky survey: tile {}", obs::job_val(j)),
             obs::TAG_STACK => format!("Programme: stack on {}", self.target_name()),
             obs::TAG_MOSAIC => format!("Programme: mosaic of {}, tile {}", self.target_name(), obs::job_val(j) >> 20),
             obs::TAG_NEO => "Programme: NEO sweep".into(),

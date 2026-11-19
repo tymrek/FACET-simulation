@@ -592,6 +592,23 @@ impl App {
                 }
             }
         };
+        // All-sky survey coverage: tiles done this pass, and tiles being worked.
+        if self.survey.show && self.survey_active() && self.survey.tiles() > 0 {
+            let s = &self.survey;
+            let done_c = Color32::from_rgba_unmultiplied(90, 200, 255, 46);
+            let work_c = Color32::from_rgba_unmultiplied(160, 230, 255, 150);
+            let half = (0.5 * rad(self.obs_params.fov_deg)) as f64;
+            for (k, d) in s.tiling.dirs.iter().enumerate() {
+                let working = s.claimed_by[k] != u32::MAX;
+                if !s.done[k] && !working {
+                    continue;
+                }
+                if let Some(p) = proj(*d) {
+                    let h = ((half * px_per_rad(*d)) as f32).max(0.8);
+                    b.square(p, h, if working { work_c } else { done_c });
+                }
+            }
+        }
         keepout(&mut b, sun, self.obs_params.sun_excl_deg, (255, 170, 40), false);
         keepout(&mut b, moon, self.obs_params.moon_excl_deg, (180, 180, 200), false);
         if self.mode == Mode::NeoSweep {

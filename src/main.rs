@@ -24,6 +24,7 @@ mod present;
 mod programme;
 mod resilience;
 mod server;
+mod survey;
 mod webapp;
 mod tle;
 mod traffic;

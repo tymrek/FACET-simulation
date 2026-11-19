@@ -2,10 +2,9 @@
 
 ## Done since 0.5.0
 - Sunward stray-light model and Sun keep-out trade table.
+- All-sky survey mode: the fleet tiles the sky; passes measured live.
 
 ## Simulation
-- All-sky survey mode: actually tile the observable sky and time each pass
-  live (the public site currently shows a throughput estimate).
 - Real catalogues (fuller star/deep-sky catalogue, real NEO orbits).
 - Public engagement metrics (requests, unique users, returns).
 - Optics rework (delivered FWHM ~2.7″ is worse than ground seeing).
