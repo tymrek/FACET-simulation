@@ -276,7 +276,7 @@ impl App {
             if let Some(&(_, seg, t0)) = p.open.get(&r.id) {
                 match r.state {
                     ReqState::Done => closed.push((r.id, seg, Some((jd - t0) * 86_400.0), false)),
-                    ReqState::Rejected | ReqState::Cancelled | ReqState::Expired => closed.push((r.id, seg, None, true)),
+                    ReqState::Rejected | ReqState::Cancelled | ReqState::Expired | ReqState::Failed => closed.push((r.id, seg, None, true)),
                     _ if jd - t0 > patience => {
                         r.state = ReqState::Expired;
                         r.assigned_now = 0;
@@ -396,6 +396,7 @@ impl App {
                         slews: 0,
                         slew_deg_sum: 0.0,
                         agility: None,
+                        sched: Default::default(),
                         programme: None,
                         deadline_s: None,
                         submit_jd: jd,

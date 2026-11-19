@@ -39,6 +39,8 @@ pub enum ReqState {
     Cancelled,
     /// Science programme request whose deadline passed before completion.
     Expired,
+    /// Observed, but the schedule broke its science requirement (see `Need`).
+    Failed,
 }
 
 impl ReqState {
@@ -111,6 +113,49 @@ pub struct ObsRequest {
     pub slew_deg_sum: f64,
     #[serde(skip)]
     pub agility: Option<crate::attitude::Agility>,
+    /// Scheduling requirement and its bookkeeping (programme cases).
+    #[serde(skip)]
+    pub sched: Sched,
+}
+
+/// Per-request state for science requirements beyond telescope-seconds.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Sched {
+    pub need: crate::programme::Need,
+    /// Event window (JD start, end) for `Need::Window`.
+    pub win: Option<(f64, f64)>,
+    pub cover_s: f64,
+    pub gap_s: f64,
+    pub gap_max_s: f64,
+    pub last_jd: f64,
+    pub visits_done: u32,
+    pub next_visit_jd: f64,
+    pub visit_s: f64,
+    /// Host-star V magnitude for transit photometry (0: not applicable).
+    pub host_v: f64,
+    /// First moment the window was covered (JD), for the late-start metric.
+    pub first_cover_jd: Option<f64>,
+}
+
+impl Sched {
+    /// Is the request schedulable at `jd`? (`prep_s`: lead before a window
+    /// opens, to slew and settle in.) Returns why not, for display.
+    pub fn waiting(&self, jd: f64, prep_s: f64) -> Option<String> {
+        if let Some((a, _)) = self.win {
+            let t = (a - jd) * 86_400.0 - prep_s;
+            if t > 0.0 {
+                return Some(format!("event window opens in {}", crate::allsky::fmt_span(t + prep_s)));
+            }
+        }
+        if self.next_visit_jd > jd {
+            return Some(format!("visit {} in {}", self.visits_done + 1, crate::allsky::fmt_span((self.next_visit_jd - jd) * 86_400.0)));
+        }
+        None
+    }
+    /// Inside an event window that needs unbroken coverage.
+    pub fn continuous(&self, jd: f64, prep_s: f64) -> bool {
+        self.win.map_or(false, |(a, b)| jd >= a - prep_s / 86_400.0 && jd <= b)
+    }
 }
 
 impl ObsRequest {
@@ -924,6 +969,7 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         slews: 0,
         slew_deg_sum: 0.0,
         agility: None,
+        sched: Default::default(),
         programme: None,
         deadline_s: None,
         submit_jd: sh.jd_now,

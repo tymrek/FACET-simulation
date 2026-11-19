@@ -319,14 +319,35 @@ impl App {
     }
 
     /// Allocate telescopes to approved requests (pointing commands only).
+    /// Lead before an event window opens (and before a member sets) for a
+    /// replacement to slew 90°, settle and acquire, plus a minute's margin.
+    pub fn window_prep_s(&self) -> f64 {
+        crate::attitude::Agility::from_obs(&self.obs_params).repoint_time(std::f64::consts::FRAC_PI_2) + 60.0
+    }
+
     pub fn queue_assign(&mut self) {
         let Some(web) = self.web.clone() else { return };
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
         let mut sh = web.lock().unwrap();
-        let mut all: Vec<usize> = (0..sh.requests.len())
-            .filter(|&i| sh.requests[i].state.is_schedulable())
-            .collect();
-        all.sort_by_key(|&i| (std::cmp::Reverse(sh.requests[i].priority), sh.requests[i].id));
+        let (jd, prep) = (self.jd, self.window_prep_s());
+        let mut all: Vec<usize> = Vec::new();
+        for i in 0..sh.requests.len() {
+            let r = &mut sh.requests[i];
+            if !r.state.is_schedulable() {
+                continue;
+            }
+            match r.sched.waiting(jd, prep) {
+                Some(why) => {
+                    r.assigned_now = 0;
+                    r.blocked = Some(why);
+                }
+                None => all.push(i),
+            }
+        }
+        // Time-critical first: an open event window outranks everything but
+        // planetary defence, because it cannot be observed later.
+        let eff = |r: &crate::server::ObsRequest| if self.handover && r.sched.continuous(jd, prep) { r.priority.max(9) } else { r.priority };
+        all.sort_by_key(|&i| (std::cmp::Reverse(eff(&sh.requests[i])), sh.requests[i].id));
         let n = self.shell.len();
         // Pool 1: public / director requests on the public time share (they
         // may pre-empt director tasks outside Science operations, as before).
@@ -376,11 +397,12 @@ impl App {
                     r.dec_deg = deg(dec);
                 }
                 let fine = r.body.is_some() || crate::imaging::guide_star_available(r.dir, o.fov_deg, o.guide_mag);
-                QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine }
+                let continuous = self.handover && r.sched.continuous(jd, prep);
+                QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine, continuous }
             })
             .collect();
         let ta = std::time::Instant::now();
-        let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon, budget, steal, pool);
+        let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon, budget, steal, pool, &self.shell, prep);
         if std::env::var_os("FACET_PROFILE").is_some() {
             eprintln!("    queue: build {:.1} ms, assign {:.1} ms ({} items)", (ta - tb).as_secs_f64() * 1e3, ta.elapsed().as_secs_f64() * 1e3, items.len());
         }
@@ -388,6 +410,9 @@ impl App {
             let r = &mut sh.requests[i];
             r.assigned_now = res.assigned as u32;
             r.blocked = res.blocked.map(String::from);
+            if res.blocked.is_none() && r.sched.win.map_or(false, |(a, _)| jd < a) {
+                r.blocked = Some("settling in before the event window".into());
+            }
             if res.assigned > 0 && r.hw.is_none() {
                 r.hw = Some(crate::imaging::Hardware::from_obs(&self.obs_params));
                 r.agility = Some(crate::attitude::Agility::from_obs(&self.obs_params));
@@ -456,7 +481,7 @@ impl App {
                     // Integration began `longest` seconds before the end of the step.
                     let start = jd - longest.get(&r.id).copied().unwrap_or(0.0) / 86_400.0;
                     r.first_light_jd = Some(r.approved_jd.map_or(start, |a| start.max(a)));
-                    if let Some(c) = r.case_idx {
+                    if let (Some(c), false) = (r.case_idx, r.sched.win.is_some()) {
                         if let Some(t) = r.response_s() {
                             crate::programme::Science::push_capped(&mut self.science.cases[c].resp, t);
                         }
@@ -476,10 +501,28 @@ impl App {
                     }
                 }
                 r.obs_jd = jd;
+                let mut got = got;
+                if let crate::programme::Need::Cadence { visits, spacing_s } = r.sched.need {
+                    // Credit only up to this visit's share; then wait.
+                    let per = r.required_s() / visits as f64;
+                    got = got.min(per - r.sched.visit_s).max(0.0);
+                    r.sched.visit_s += got;
+                    if r.sched.visit_s >= per - 1e-6 && r.sched.visits_done + 1 < visits {
+                        r.sched.visits_done += 1;
+                        r.sched.visit_s = 0.0;
+                        r.sched.next_visit_jd = jd + spacing_s / 86_400.0;
+                    }
+                }
+                if let Some((a, _)) = r.sched.win {
+                    if jd < a {
+                        got = 0.0; // settling in: nothing useful before the event
+                    }
+                }
                 r.progress_s += got;
                 r.jit2_s += jit2;
                 r.fine_s += fine_s;
-                if r.progress_s >= r.required_s() {
+                let windowed = r.sched.win.is_some();
+                if !windowed && r.progress_s >= r.required_s() - 1e-3 {
                     r.progress_s = r.required_s();
                     r.state = ReqState::Done;
                     r.assigned_now = 0;
@@ -505,6 +548,69 @@ impl App {
                         events.push((
                             "good",
                             format!("Request #{} complete: {} — {:.0} telescope-seconds, {} repoints", r.id, r.target_name, r.progress_s, r.slews),
+                        ));
+                    }
+                    continue;
+                }
+            }
+            if let (Some((a, b)), crate::programme::Need::Window { min_cover, max_gap_s, .. }) = (r.sched.win, r.sched.need) {
+                let t0 = r.sched.last_jd.max(a);
+                let t1 = jd.min(b);
+                if t1 > t0 {
+                    let span = (t1 - t0) * 86_400.0;
+                    if locked >= r.telescopes && got > 0.0 {
+                        r.sched.first_cover_jd.get_or_insert(t0);
+                        r.sched.cover_s += span;
+                        r.sched.gap_s = 0.0;
+                    } else {
+                        r.sched.gap_s += span;
+                        r.sched.gap_max_s = r.sched.gap_max_s.max(r.sched.gap_s);
+                    }
+                }
+                r.sched.last_jd = jd;
+                let len = (b - a) * 86_400.0;
+                r.progress_s = r.progress_s.min(r.required_s());
+                if jd >= b {
+                    let cover = r.sched.cover_s / len;
+                    let ok = cover >= min_cover && r.sched.gap_max_s <= max_gap_s;
+                    r.assigned_now = 0;
+                    r.locked_now = 0;
+                    r.completed_utc = Some(utc.clone());
+                    if let Some(c) = r.case_idx {
+                        let cs = &mut self.science.cases[c];
+                        // Response for an event window: how late coverage began.
+                        let late = r.sched.first_cover_jd.map_or(len, |f| (f - a) * 86_400.0);
+                        crate::programme::Science::push_capped(&mut cs.resp, late);
+                        if ok {
+                            cs.completed += 1;
+                            cs.on_time += 1;
+                            if let Some(hw) = &r.hw {
+                                let sub = r.exposure_s.min(hw.sub_max_s);
+                                let sky = crate::imaging::sky_sb(r.dir, self.bodies[0].dir, &self.obs_params);
+                                let lim = crate::imaging::point_lim_mag(hw, r.progress_s, sub, sky);
+                                crate::programme::Science::push_capped(&mut cs.depth, lim);
+                                if r.sched.host_v > 0.0 {
+                                    // Short sub-frames for bright hosts, so the peak pixel stays unsaturated.
+                                    let sub = crate::imaging::unsaturated_sub(hw, r.sched.host_v, 10.0);
+                                    let p = crate::imaging::precision(hw, r.sched.host_v, 3600.0, sub, sky, r.telescopes as usize);
+                                    crate::programme::Science::push_capped(&mut cs.prec, p.total_ppm);
+                                }
+                            }
+                            if let Some(v) = r.inv_idx {
+                                *self.science.inv(v).1 += 1;
+                            }
+                        } else {
+                            cs.failed += 1;
+                        }
+                    }
+                    if ok {
+                        r.state = ReqState::Done;
+                    } else {
+                        r.state = ReqState::Failed;
+                        r.blocked = Some(format!(
+                            "requirement not met: {:.1} % of the window covered, longest gap {}",
+                            100.0 * cover,
+                            crate::allsky::fmt_span(r.sched.gap_max_s)
                         ));
                     }
                     continue;
@@ -601,6 +707,21 @@ impl App {
                 sh.log("warn", format!("ToO request #{id} from {inv}: {} — {} × {:.0} s, priority {}", d.target_name, d.telescopes, d.exposure_s, d.priority));
             }
             self.science.cases[d.case].submitted += 1;
+            let mut sched = crate::server::Sched { need: c.need, ..Default::default() };
+            let mut deadline_s = c.deadline_h * 3600.0;
+            if let crate::programme::Need::Window { lead_h: (lo, hi), .. } = c.need {
+                // Predicted event time: uniform in the case's lead range.
+                let u = (id.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11) as f64 / (1u64 << 53) as f64;
+                let a = t0 + (lo + u * (hi - lo)) / 24.0;
+                let b = a + d.exposure_s / 86_400.0;
+                sched.win = Some((a, b));
+                if c.key == "transit" {
+                    // ASSUMED host brightness: V 8–13, typical of ground follow-up targets.
+                    let u2 = (id.wrapping_mul(0xD1B5_4A32_D192_ED03) >> 11) as f64 / (1u64 << 53) as f64;
+                    sched.host_v = 8.0 + 5.0 * u2;
+                }
+                deadline_s = (b - t0) * 86_400.0 + 600.0;
+            }
             sh.requests.push(crate::server::ObsRequest {
                 id,
                 submitter: inv,
@@ -631,8 +752,9 @@ impl App {
                 slews: 0,
                 slew_deg_sum: 0.0,
                 agility: None,
+                sched,
                 programme: Some(c.key),
-                deadline_s: Some(c.deadline_h * 3600.0),
+                deadline_s: Some(deadline_s),
                 submit_jd: t0,
                 case_idx: Some(d.case),
                 inv_idx: Some(d.inv),
@@ -1031,6 +1153,8 @@ impl App {
             "interferometry": self.ii_json(),
             "fuel": self.fuel_budget(),
             "provenance": crate::provenance::json(),
+            "photometry": crate::imaging::precision_json(&self.obs_params),
+            "fleet_optics": crate::optics::fleet_spread(&self.obs_params),
             "optics": {
                 "budget": crate::optics::blur_budget(&self.obs_params, self.obs_params.exp_s.min(self.obs_params.sub_max_s)),
                 "focal_mm": self.obs_params.focal_mm,

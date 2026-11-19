@@ -494,7 +494,7 @@ function renderScience(s) {
   $("sci_since").textContent = `since ${sc.since_utc.slice(0, 16)} UTC · ${fmtDur(sc.elapsed_s)} simulated` + (s.programme ? ` · demand ${s.programme.load.toFixed(2)}× capacity · ${s.programme.investigators} teams` : "");
   $("sci_tiles").replaceChildren(
     tile("requests completed / day", fmtNum(d.completed), "Programme requests finished per simulated day", "science"),
-    tile("on time", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`, "Completed before the science case's deadline, of all completed + expired", "science"),
+    tile("on time", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`, "Met the science case's deadline and scheduling requirement, of all completed + expired + failed", "science"),
     tile("open-shutter efficiency", `${e.integrating_pct.toFixed(1)} %`, "Satellite time spent integrating (any use)", "duty"),
     tile("pointed science", `${e.pointed_science_pct.toFixed(1)} %`, "Satellite time integrating on requests, STARE and director targets", "duty"),
     tile("telescope-hours / day", fmtNum(d.tel_h), "Integration delivered per day, all uses", "science"),
@@ -511,13 +511,14 @@ function renderScience(s) {
     el("span", {}, el("i", { style: "background:#ff5ac8" }), `South Atlantic Anomaly ${(e.saa_pct || 0).toFixed(1)} %`),
     el("span", {}, el("i", { style: "background:#1a2130" }), `idle/hold ${(e.idle_pct + e.hold_pct).toFixed(1)} %`));
   $("sci_cases").replaceChildren(...sc.cases.map(c => {
-    const fin = c.completed + c.expired;
-    return el("tr", {}, el("td", {}, c.label), el("td", { class: "num" }, fmtDur(c.deadline_h * 3600)),
+    const fin = c.completed + c.expired + (c.failed || 0);
+    return el("tr", {}, el("td", { title: `Requirement: ${c.requirement}` }, c.label, el("div", { class: "small muted" }, c.requirement)), el("td", { class: "num" }, fmtDur(c.deadline_h * 3600)),
       el("td", { class: "num" }, fmtNum(c.submitted)), el("td", { class: "num" }, fmtNum(c.open)),
       el("td", { class: "num" }, fmtNum(c.completed)), el("td", { class: "num" + (c.expired ? " warn" : "") }, fmtNum(c.expired)),
+      el("td", { class: "num" + (c.failed ? " warn" : "") }, fmtNum(c.failed || 0)),
       el("td", { class: "num" }, fin ? `${(100 * c.on_time / fin).toFixed(1)} %` : "–"),
       el("td", { class: "num" }, c.median_response_s === null ? "–" : fmtDur(c.median_response_s)),
-      el("td", { class: "num" }, c.median_depth_mag === null ? "–" : `V ${c.median_depth_mag.toFixed(1)}`),
+      el("td", { class: "num" }, c.median_precision_ppm != null ? `σ ${Math.round(c.median_precision_ppm)} ppm/h` : c.median_depth_mag === null ? "–" : `V ${c.median_depth_mag.toFixed(1)}`),
       el("td", { class: "num" }, fmtNum(c.tel_s / 3600)));
   }));
   $("sci_top").replaceChildren(...(sc.top.length ? sc.top.map(t => el("tr", {}, el("td", {}, t.name, el("div", { class: "small muted" }, t.case)),

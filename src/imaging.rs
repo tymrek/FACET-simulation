@@ -54,6 +54,11 @@ pub struct Hardware {
     pub spider_mm: f64,
     pub focal_mm: f64,
     pub sensor_py: f64,
+    /// Systematic photometric floor per telescope over one hour, ppm (ASSUMED).
+    pub sys_floor_ppm: f64,
+    /// 0: the nominal Zernike mix. Otherwise a per-telescope random mix
+    /// (see `optics::fleet_spread`).
+    pub aberration_seed: u64,
 }
 
 impl Hardware {
@@ -78,6 +83,8 @@ impl Hardware {
             spider_mm: o.spider_mm,
             focal_mm: o.focal_mm,
             sensor_py: o.sensor_py,
+            sys_floor_ppm: o.sys_floor_ppm,
+            aberration_seed: 0,
         }
     }
     pub fn area_cm2(&self) -> f64 {
@@ -130,11 +137,16 @@ impl Hardware {
 /// 5σ point-source limiting magnitude for `total_s` telescope-seconds split in
 /// sub-frames of `sub_s`, against sky surface brightness `sky_sb` (mag/arcsec²).
 pub fn point_lim_mag(hw: &Hardware, total_s: f64, sub_s: f64, sky_sb: f64) -> f64 {
+    let psf = hw.psf(sub_s);
+    point_lim_mag_with(hw, &psf, total_s, sub_s, sky_sb)
+}
+
+/// As `point_lim_mag`, with a PSF supplied (fleet sampling).
+pub fn point_lim_mag_with(hw: &Hardware, psf: &crate::optics::Psf, total_s: f64, sub_s: f64, sky_sb: f64) -> f64 {
     if total_s <= 0.0 {
         return f64::NAN;
     }
     let ps = hw.pixel_scale();
-    let psf = hw.psf(sub_s);
     // Photometric aperture: the EE50 radius scaled up a little (≈ optimal for
     // background-limited point sources), at least one pixel; encircled energy
     // measured from the real PSF.
@@ -148,6 +160,77 @@ pub fn point_lim_mag(hw: &Hardware, total_s: f64, sub_s: f64, sky_sb: f64) -> f6
     let s_tot = (25.0 + (625.0 + 100.0 * b).sqrt()) / 2.0; // electrons in aperture at SNR 5
     let rate = s_tot / a;
     -2.5 * (rate / hw.zp_e_s()).log10()
+}
+
+/// Relative photometric precision for a point source of V = `mag`.
+///
+/// Separates what the detection limit hides: a star can be detected at
+/// 5σ long before it can be measured to the ppm level a transit needs.
+/// Noise terms (photon, sky, dark, read) average down with time and with
+/// the number of stacked telescopes; the systematic floor (`sys_floor_ppm`
+/// per telescope per hour: flat-field and intrapixel response under
+/// pointing jitter, PSF changes, thermal drifts; ASSUMED) only averages
+/// down across telescopes, if their errors are independent, and not with
+/// time within the bin.
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct Precision {
+    /// Random noise in the bin, ppm.
+    pub noise_ppm: f64,
+    /// Systematic floor in the bin, ppm.
+    pub sys_ppm: f64,
+    /// Quadrature sum, ppm.
+    pub total_ppm: f64,
+    /// Electrons per telescope per second in the aperture (saturation check).
+    pub e_s: f64,
+    /// Sub-frames saturate at the peak pixel.
+    pub saturated: bool,
+}
+
+pub fn precision(hw: &Hardware, mag: f64, bin_s: f64, sub_s: f64, sky_sb: f64, n_tel: usize) -> Precision {
+    let ps = hw.pixel_scale();
+    let psf = hw.psf(sub_s);
+    let r_as = (2.0 * psf.ee50_r).max(1.5 * ps); // wider aperture for bright-star photometry
+    let ee = psf.ee_at(r_as);
+    let r = r_as / ps;
+    let npix = (PI * r * r).max(1.0);
+    let n = n_tel.max(1) as f64;
+    let e_s = hw.zp_e_s() * 10f64.powf(-0.4 * mag) * ee;
+    let nframes = (bin_s / sub_s.max(1e-3)).max(1.0);
+    let sig = e_s * bin_s * n;
+    let var = sig + n * npix * (hw.bg_e_s(sky_sb) * bin_s + nframes * hw.read_noise_e.powi(2));
+    let noise_ppm = 1e6 * var.sqrt() / sig.max(1e-30);
+    let sys_ppm = hw.sys_floor_ppm * (3600.0 / bin_s.max(1.0)).sqrt().max(1.0) / n.sqrt();
+    let peak = e_s / ee * psf.peak_frac_per_pixel(ps) * sub_s;
+    Precision { noise_ppm, sys_ppm, total_ppm: noise_ppm.hypot(sys_ppm), e_s, saturated: peak > hw.full_well_e }
+}
+
+/// Longest sub-frame (≤ `max_s`, ≥ 0.1 s) that keeps a V = `mag` star's
+/// peak pixel under 80 % of full well.
+pub fn unsaturated_sub(hw: &Hardware, mag: f64, max_s: f64) -> f64 {
+    let psf = hw.psf(max_s);
+    let peak_e_s = hw.zp_e_s() * 10f64.powf(-0.4 * mag) * psf.peak_frac_per_pixel(hw.pixel_scale());
+    (0.8 * hw.full_well_e / peak_e_s.max(1e-30)).clamp(0.1, max_s)
+}
+
+/// Precision table and transit sensitivity for the status and panels.
+pub fn precision_json(o: &crate::obs::ObsParams) -> serde_json::Value {
+    let hw = Hardware::from_obs(o);
+    let rows: Vec<serde_json::Value> = [8.0, 10.0, 12.0, 14.0]
+        .iter()
+        .map(|&v| {
+            let sub = unsaturated_sub(&hw, v, 10.0);
+            let one = precision(&hw, v, 3600.0, sub, 22.0, 1);
+            let four = precision(&hw, v, 3600.0, sub, 22.0, 4);
+            // 5σ depth for a 2-hour transit with 4 telescopes: in-transit mean
+            // against an equal out-of-transit baseline (√2 for the difference).
+            // The systematic floor does not average down past an hour.
+            let depth = 5.0 * 2f64.sqrt() * precision(&hw, v, 7200.0, sub, 22.0, 4).total_ppm;
+            serde_json::json!({ "v": v, "sub_s": sub, "one_ppm": one.total_ppm, "one_noise_ppm": one.noise_ppm,
+                "four_ppm": four.total_ppm, "four_noise_ppm": four.noise_ppm, "sys_ppm_one": one.sys_ppm,
+                "transit_5sigma_ppm": depth })
+        })
+        .collect();
+    serde_json::json!({ "sys_floor_ppm": o.sys_floor_ppm, "rows": rows })
 }
 
 /// 1σ surface-brightness limit (mag/arcsec²) over a 1″×1″ box.
@@ -1198,5 +1281,20 @@ mod gallery {
             println!("{}", serde_json::to_string(&out.report["exposure"]).unwrap());
             println!("{}", serde_json::to_string(&out.report["sky"]).unwrap());
         }
+    }
+
+    #[test]
+    fn precision_floor_and_noise() {
+        let h = super::Hardware::from_obs(&crate::obs::ObsParams::default());
+        use super::{precision, unsaturated_sub};
+        let bright = precision(&h, 8.0, 3600.0, unsaturated_sub(&h, 8.0, 10.0), 22.0, 1);
+        let faint = precision(&h, 14.0, 3600.0, 10.0, 22.0, 1);
+        let four = precision(&h, 8.0, 3600.0, unsaturated_sub(&h, 8.0, 10.0), 22.0, 4);
+        eprintln!("V8 1 tel {:.0} ppm (noise {:.0}, sys {:.0}); 4 tel {:.0}; V14 {:.0} (noise {:.0})",
+            bright.total_ppm, bright.noise_ppm, bright.sys_ppm, four.total_ppm, faint.total_ppm, faint.noise_ppm);
+        assert!(bright.sys_ppm > bright.noise_ppm, "bright stars are floor-limited");
+        assert!(faint.noise_ppm > faint.sys_ppm, "faint stars are noise-limited");
+        assert!((four.sys_ppm * 2.0 - bright.sys_ppm).abs() < 1.0, "floor averages as 1/√N across telescopes");
+        assert!(!precision(&h, 8.0, 3600.0, unsaturated_sub(&h, 8.0, 10.0), 22.0, 1).saturated);
     }
 }

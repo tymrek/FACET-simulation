@@ -37,7 +37,7 @@ th { color: var(--muted); font-weight: 500; }
 td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; }
 .state { font-size: 11px; padding: 2px 7px; border-radius: 10px; border: 1px solid var(--line); white-space: nowrap; }
 .state.pending { color: #ffd166; } .state.approved { color: var(--link); } .state.observing { color: var(--accent); }
-.state.done { color: #9aa5b8; } .state.rejected, .state.cancelled { color: var(--warn); }
+.state.done { color: #9aa5b8; } .state.rejected, .state.cancelled, .state.failed, .state.expired { color: var(--warn); }
 .bar { height: 6px; background: #1a2130; border-radius: 3px; overflow: hidden; min-width: 60px; }
 .bar > div { height: 100%; background: var(--accent); }
 .muted { color: var(--muted); } .small { font-size: 12px; } .warn { color: var(--warn); }

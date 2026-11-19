@@ -118,6 +118,12 @@ pub struct ObsParams {
     pub stray_slope: f64,
     /// Model sunward stray light at all (off = perfect baffle).
     pub stray_on: bool,
+    /// Systematic photometric floor per telescope over one hour, ppm (ASSUMED).
+    pub sys_floor_ppm: f64,
+    /// Fleet optical variation (ASSUMED): lognormal σ of each telescope's
+    /// wavefront error about the nominal, and 1σ throughput scatter.
+    pub wfe_spread: f64,
+    pub throughput_spread: f64,
     /// Telescope focal length, mm (design input: with the sensor it sets the
     /// plate scale and field of view).
     pub focal_mm: f64,
@@ -266,6 +272,9 @@ impl Default for ObsParams {
             stray_sb45: 21.0,
             stray_slope: 7.5,
             stray_on: true,
+            sys_floor_ppm: 500.0,
+            wfe_spread: 0.30,
+            throughput_spread: 0.04,
             focal_mm: 1600.0,
             sensor_py: 6388.0,
             corrected_field_deg: 1.6,
@@ -624,6 +633,9 @@ pub struct QueueItem {
     pub want: usize,
     /// Fine guidance possible (bright body target, or a guide star in the field).
     pub fine: bool,
+    /// Needs unbroken coverage now (an open event window): staff it like a
+    /// STARE campaign, recruiting replacements before members lose the target.
+    pub continuous: bool,
 }
 
 pub struct QueueResult {
@@ -654,6 +666,8 @@ pub fn assign_queue(
     budget: usize,
     steal: bool,
     pool: &'static str,
+    shell: &crate::constellation::Shell,
+    lead: f64,
 ) -> Vec<QueueResult> {
     let n = st.rhat.len();
     let mut out = Vec::with_capacity(items.len());
@@ -687,21 +701,30 @@ pub fn assign_queue(
         let mut cands: Vec<(f64, usize)> = Vec::new();
         // Fast path: keep current members; if that fully staffs the request,
         // no fleet-wide scan is needed.
+        // For continuous items, `healthy` counts members that keep the target
+        // longer than `lead`; outgoing members stay on until they lose it.
+        let mut healthy = 0;
+        let mut assigned = 0;
         if let Some(members) = by_job.get(&me) {
             for &i in members {
-                if got < it.want && used < budget && !taken[i] && !st.hold[i] && job_tag(st.job[i]) != TAG_STARE && it.dir.dot(st.rhat[i]) > st.cos_lim {
+                if healthy < it.want && used < budget && !taken[i] && !st.hold[i] && job_tag(st.job[i]) != TAG_STARE && it.dir.dot(st.rhat[i]) > st.cos_lim {
                     taken[i] = true;
                     st.pointing[i] = Some(it.dir);
                     st.job[i] = me;
                     st.fine[i] = it.fine;
-                    got += 1;
+                    assigned += 1;
                     used += 1;
                     free -= 1;
+                    if !it.continuous || shell.time_to_set(i, it.dir, st.cos_lim).map_or(false, |t| t > lead) {
+                        healthy += 1;
+                    }
                 }
             }
         }
+        got += healthy;
+        let outgoing = assigned - healthy;
         if got >= it.want || used >= budget {
-            out.push(QueueResult { id: it.id, assigned: got, blocked: None });
+            out.push(QueueResult { id: it.id, assigned, blocked: None });
             continue;
         }
         // Eligibility and slew cost over the free telescopes only.
@@ -718,8 +741,17 @@ pub fn assign_queue(
                 let mine = st_ref.prev_job[i] == me;
                 let pt = job_tag(st_ref.prev_job[i]);
                 let busy = pt != 0 && pt != TAG_SURVEY && pt != TAG_ALLSKY && !mine;
+                // Continuous items skip telescopes about to lose the target.
+                let mut extra = 0.0;
+                if it.continuous {
+                    match shell.time_to_set(i, it.dir, st_ref.cos_lim) {
+                        Some(t) if t > 3.0 * lead => {}
+                        Some(t) if t > 1.5 * lead => extra = 1.0,
+                        _ => return None,
+                    }
+                }
                 // 1 − cos: same ordering as the slew angle, without acos.
-                Some((i, mine, 1.0 - st_ref.att[i].dir.dot(it.dir) + if busy { 10.0 } else { 0.0 }))
+                Some((i, mine, 1.0 - st_ref.att[i].dir.dot(it.dir) + extra + if busy { 10.0 } else { 0.0 }))
             };
             if pool_idx.len() > 4096 {
                 pool_idx.par_iter().filter_map(f).collect()
@@ -767,7 +799,7 @@ pub fn assign_queue(
         } else {
             None
         };
-        out.push(QueueResult { id: it.id, assigned: got, blocked });
+        out.push(QueueResult { id: it.id, assigned: got + outgoing, blocked });
     }
     st.n_active = st.pointing.iter().filter(|p| p.is_some()).count();
     out

@@ -894,6 +894,7 @@ impl App {
             slews: 0,
             slew_deg_sum: 0.0,
             agility: None,
+            sched: Default::default(),
             programme: None,
             deadline_s: None,
             submit_jd: self.jd,

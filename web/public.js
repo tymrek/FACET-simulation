@@ -137,11 +137,11 @@ function renderScience(s) {
     tileB("of the time working telescopes are observing", `${(100 * (sc.efficiency.integrating_pct - (sc.efficiency.earthshine_pct || 0)) / Math.max(1, 100 - sc.efficiency.hold_pct)).toFixed(0)} %`, "duty"),
     tileB("research teams served", `${sc.investigators_served}`, "science"));
   $("sci_cases").replaceChildren(...sc.cases.map(c => {
-    const fin = c.completed + c.expired;
-    return el("tr", {}, el("td", {}, c.label), el("td", { class: "num" }, n(c.completed)),
+    const fin = c.completed + c.expired + (c.failed || 0);
+    return el("tr", {}, el("td", {}, c.label, el("div", { class: "small muted" }, c.requirement)), el("td", { class: "num" }, n(c.completed)),
       el("td", { class: "num" }, fin ? `${(100 * c.on_time / fin).toFixed(0)} %` : "–"),
       el("td", { class: "num" }, c.median_response_s === null ? "–" : fmtDur(c.median_response_s)),
-      el("td", { class: "num" }, c.median_depth_mag === null ? "–" : `mag ${c.median_depth_mag.toFixed(1)}`));
+      el("td", { class: "num" }, c.median_precision_ppm != null ? `${Math.round(c.median_precision_ppm)} ppm per hour` : c.median_depth_mag === null ? "–" : `mag ${c.median_depth_mag.toFixed(1)}`));
   }));
 }
 

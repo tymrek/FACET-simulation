@@ -126,6 +126,9 @@ pub struct App {
     pub present_open: bool,
     /// Presentation mode is running: views hide their headers and legends.
     pub presenting: bool,
+    /// Handover-aware scheduling for event windows (off: plain greedy queue,
+    /// for comparison).
+    pub handover: bool,
     pub present_deck: Option<String>,
     pub cost_msg: Option<String>,
     pub science: crate::programme::Science,
@@ -234,6 +237,7 @@ impl App {
             cost_window_open: false,
             present_open: false,
             presenting: false,
+            handover: true,
             present_deck: None,
             cost_msg: None,
             traffic: crate::traffic::Traffic::new(Default::default(), jd0_for_traffic(), 550.0),
@@ -342,6 +346,7 @@ impl App {
                     }
                 }
                 "--no-public-demand" => self.public.cfg.on = false,
+                "--no-handover" => self.handover = false,
                 "--public-users" => self.public.cfg.population = val().parse().unwrap_or(20_000),
                 "--no-programme" => self.gen.on = false,
                 "--costs" => self.cost_window_open = true,
@@ -811,6 +816,51 @@ impl App {
                 .small()
                 .weak(),
             );
+            // Fleet optical variation: each telescope its own aberrations.
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Across the fleet").small().strong());
+                crate::provenance::chip(ui, "fleet_optics");
+            });
+            ui.add(egui::Slider::new(&mut o.wfe_spread, 0.0..=0.8).text("WFE scatter (lognormal σ)"))
+                .on_hover_text("ASSUMPTION: telescope-to-telescope scatter of wavefront-error RMS about the nominal figure; each also gets its own random Zernike pattern.");
+            ui.add(egui::Slider::new(&mut o.throughput_spread, 0.0..=0.2).text("throughput scatter (1σ)"))
+                .on_hover_text("ASSUMPTION: coating, contamination and QE scatter.");
+            match crate::optics::fleet_spread(o) {
+                Some(f) => {
+                    crate::provenance::line(ui, "fleet_optics", format!(
+                        "{} sampled telescopes: FWHM {:.2}/{:.2}/{:.2}″, Strehl {:.2}/{:.2}/{:.2}, 60 s depth V {:.2}/{:.2}/{:.2} (10th/50th/90th percentile; nominal {:.2}″, V {:.2})",
+                        f.samples, f.fwhm.0, f.fwhm.1, f.fwhm.2, f.strehl.2, f.strehl.1, f.strehl.0,
+                        f.depth_v60.0, f.depth_v60.1, f.depth_v60.2, f.nominal_fwhm, f.nominal_depth_v60
+                    ));
+                }
+                None => {
+                    ui.label(RichText::new("Sampling the fleet…").small().weak());
+                }
+            }
+            // Photometric precision: what the detection limit hides.
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Photometric precision").small().strong());
+                crate::provenance::chip(ui, "photometry");
+            });
+            ui.add(egui::Slider::new(&mut o.sys_floor_ppm, 20.0..=5000.0).logarithmic(true).text("systematic floor ppm/h per telescope"))
+                .on_hover_text("ASSUMPTION: flat-field and intrapixel response under jitter, PSF and thermal drifts. Dedicated photometry missions reach ~20–100 ppm/h; a 20 cm body-pointed telescope without a dedicated design is more likely hundreds.");
+            let pj = crate::imaging::precision_json(o);
+            egui::Grid::new("prec").striped(true).show(ui, |ui| {
+                for h in ["V", "sub-frame", "1 tel. ppm/h", "4 tel. ppm/h", "2 h transit, 5σ"] {
+                    ui.label(RichText::new(h).small().strong());
+                }
+                ui.end_row();
+                for r in pj["rows"].as_array().into_iter().flatten() {
+                    let f = |k: &str| r[k].as_f64().unwrap_or(0.0);
+                    ui.label(RichText::new(format!("{:.0}", f("v"))).small());
+                    ui.label(RichText::new(format!("{:.2} s", f("sub_s"))).small());
+                    ui.label(RichText::new(format!("{:.0}", f("one_ppm"))).small());
+                    ui.label(RichText::new(format!("{:.0}", f("four_ppm"))).small());
+                    ui.label(RichText::new(format!("{:.0} ppm", f("transit_5sigma_ppm"))).small());
+                    ui.end_row();
+                }
+            });
+            ui.label(RichText::new("Earth-size transit of a Sun-like star ≈ 84 ppm; Neptune ≈ 1,300 ppm; hot Jupiter ≈ 10,000 ppm.").small().weak());
         }
         ui.add(egui::Slider::new(&mut o.overhead_s, 0.0..=120.0).text("slew+settle overhead s"))
             .on_hover_text("ASSUMPTION: dead time per pointing (slew, settle, readout).");

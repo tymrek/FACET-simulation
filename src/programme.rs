@@ -25,7 +25,39 @@ pub enum Sky {
     Planet,
 }
 
+/// What a science case needs from the schedule, beyond telescope-seconds.
+/// The ASSUMED thresholds are typical of the science, not from a user study.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Need {
+    /// Any mix of telescopes and pieces adds up (deep stacks, monitoring).
+    #[default]
+    Pooled,
+    /// A fixed event window `exposure_s` long that opens `lead_h` after
+    /// submission (a predicted transit or occultation). The requested number
+    /// of telescopes must be locked on for at least `min_cover` of the
+    /// window, with no gap longer than `max_gap_s`. Otherwise the
+    /// measurement fails: no partial credit.
+    Window { lead_h: (f64, f64), min_cover: f64, max_gap_s: f64 },
+    /// `visits` separate visits, each a 1/visits share of the integration,
+    /// at least `spacing_s` apart (end of one to start of the next), so the
+    /// motion of a moving target can be measured.
+    Cadence { visits: u32, spacing_s: f64 },
+}
+
+impl Need {
+    pub fn describe(&self) -> String {
+        match *self {
+            Need::Pooled => "telescope-seconds pool".into(),
+            Need::Window { min_cover, max_gap_s, .. } => {
+                format!("fixed window, ≥ {:.0} % covered, no gap > {}", 100.0 * min_cover, crate::allsky::fmt_span(max_gap_s))
+            }
+            Need::Cadence { visits, spacing_s } => format!("{visits} visits ≥ {} apart", crate::allsky::fmt_span(spacing_s)),
+        }
+    }
+}
+
 pub struct Case {
+    pub need: Need,
     pub key: &'static str,
     pub label: &'static str,
     team: &'static str,
@@ -65,16 +97,16 @@ pub fn real_lists() -> &'static RealLists {
 }
 
 pub const CASES: [Case; 10] = [
-    Case { key: "neo", label: "NEO follow-up astrometry", team: "NEO", weight: 18.0, tel: (1, 3), exp_s: (120.0, 600.0), prio: (6, 8), deadline_h: 24.0, sky: Sky::Ecliptic(60.0, 175.0) },
-    Case { key: "transient", label: "Supernova / transient follow-up", team: "transient", weight: 10.0, tel: (4, 16), exp_s: (600.0, 1800.0), prio: (7, 8), deadline_h: 48.0, sky: Sky::HighLat },
-    Case { key: "grb", label: "GRB afterglow (target of opportunity)", team: "GRB", weight: 1.0, tel: (10, 40), exp_s: (600.0, 1200.0), prio: (10, 10), deadline_h: 2.0, sky: Sky::Any },
-    Case { key: "occult", label: "Stellar occultation timing", team: "occultation", weight: 3.0, tel: (4, 12), exp_s: (120.0, 300.0), prio: (9, 9), deadline_h: 2.0, sky: Sky::Ecliptic(90.0, 180.0) },
-    Case { key: "transit", label: "Exoplanet transit photometry", team: "exoplanet", weight: 14.0, tel: (2, 6), exp_s: (1800.0, 7200.0), prio: (4, 5), deadline_h: 12.0, sky: Sky::Any },
-    Case { key: "variable", label: "Variable-star monitoring", team: "variable-star", weight: 16.0, tel: (1, 2), exp_s: (300.0, 900.0), prio: (3, 4), deadline_h: 72.0, sky: Sky::Plane },
-    Case { key: "comet", label: "Comet monitoring", team: "comet", weight: 5.0, tel: (2, 4), exp_s: (300.0, 900.0), prio: (5, 6), deadline_h: 48.0, sky: Sky::Ecliptic(50.0, 110.0) },
-    Case { key: "planet", label: "Planetary atmospheres", team: "planetary", weight: 6.0, tel: (2, 8), exp_s: (300.0, 1200.0), prio: (4, 6), deadline_h: 24.0, sky: Sky::Planet },
-    Case { key: "cluster", label: "Clusters & nearby galaxies", team: "stellar-pops", weight: 8.0, tel: (4, 12), exp_s: (900.0, 2400.0), prio: (2, 3), deadline_h: 168.0, sky: Sky::Any },
-    Case { key: "deep", label: "Deep fields", team: "deep-field", weight: 3.0, tel: (20, 80), exp_s: (1800.0, 5400.0), prio: (1, 2), deadline_h: 336.0, sky: Sky::HighLat },
+    Case { need: Need::Cadence { visits: 3, spacing_s: 1200.0 }, key: "neo", label: "NEO follow-up astrometry", team: "NEO", weight: 18.0, tel: (1, 3), exp_s: (120.0, 600.0), prio: (6, 8), deadline_h: 24.0, sky: Sky::Ecliptic(60.0, 175.0) },
+    Case { need: Need::Pooled, key: "transient", label: "Supernova / transient follow-up", team: "transient", weight: 10.0, tel: (4, 16), exp_s: (600.0, 1800.0), prio: (7, 8), deadline_h: 48.0, sky: Sky::HighLat },
+    Case { need: Need::Pooled, key: "grb", label: "GRB afterglow (target of opportunity)", team: "GRB", weight: 1.0, tel: (10, 40), exp_s: (600.0, 1200.0), prio: (10, 10), deadline_h: 2.0, sky: Sky::Any },
+    Case { need: Need::Window { lead_h: (0.5, 1.5), min_cover: 0.99, max_gap_s: 5.0 }, key: "occult", label: "Stellar occultation timing", team: "occultation", weight: 3.0, tel: (4, 12), exp_s: (120.0, 300.0), prio: (9, 9), deadline_h: 2.0, sky: Sky::Ecliptic(90.0, 180.0) },
+    Case { need: Need::Window { lead_h: (1.0, 8.0), min_cover: 0.95, max_gap_s: 300.0 }, key: "transit", label: "Exoplanet transit photometry", team: "exoplanet", weight: 14.0, tel: (2, 6), exp_s: (1800.0, 7200.0), prio: (4, 5), deadline_h: 12.0, sky: Sky::Any },
+    Case { need: Need::Pooled, key: "variable", label: "Variable-star monitoring", team: "variable-star", weight: 16.0, tel: (1, 2), exp_s: (300.0, 900.0), prio: (3, 4), deadline_h: 72.0, sky: Sky::Plane },
+    Case { need: Need::Pooled, key: "comet", label: "Comet monitoring", team: "comet", weight: 5.0, tel: (2, 4), exp_s: (300.0, 900.0), prio: (5, 6), deadline_h: 48.0, sky: Sky::Ecliptic(50.0, 110.0) },
+    Case { need: Need::Pooled, key: "planet", label: "Planetary atmospheres", team: "planetary", weight: 6.0, tel: (2, 8), exp_s: (300.0, 1200.0), prio: (4, 6), deadline_h: 24.0, sky: Sky::Planet },
+    Case { need: Need::Pooled, key: "cluster", label: "Clusters & nearby galaxies", team: "stellar-pops", weight: 8.0, tel: (4, 12), exp_s: (900.0, 2400.0), prio: (2, 3), deadline_h: 168.0, sky: Sky::Any },
+    Case { need: Need::Pooled, key: "deep", label: "Deep fields", team: "deep-field", weight: 3.0, tel: (20, 80), exp_s: (1800.0, 5400.0), prio: (1, 2), deadline_h: 336.0, sky: Sky::HighLat },
 ];
 
 const ADJ: [&str; 25] = [
@@ -388,6 +420,10 @@ pub struct CaseStats {
     pub completed: u32,
     pub on_time: u32,
     pub expired: u32,
+    /// Finished, but the schedule broke the science requirement (gaps,
+    /// short coverage): no partial credit.
+    pub failed: u32,
+    pub requirement: String,
     pub open: u32,
     /// Telescope-seconds integrated.
     pub tel_s: f64,
@@ -395,8 +431,12 @@ pub struct CaseStats {
     pub resp: Vec<f32>,
     #[serde(skip)]
     pub depth: Vec<f32>,
+    /// Achieved photometric precision per hour (transits), ppm.
+    #[serde(skip)]
+    pub prec: Vec<f32>,
     pub median_response_s: Option<f64>,
     pub median_depth_mag: Option<f64>,
+    pub median_precision_ppm: Option<f64>,
 }
 
 /// What the fleet did with its time, and what it delivered.
@@ -446,7 +486,7 @@ impl Science {
             since_utc: utc,
             cases: CASES
                 .iter()
-                .map(|c| CaseStats { key: c.key, label: c.label, deadline_h: c.deadline_h, ..Default::default() })
+                .map(|c| CaseStats { key: c.key, label: c.label, deadline_h: c.deadline_h, requirement: c.need.describe(), ..Default::default() })
                 .collect(),
             ..Default::default()
         }
@@ -485,10 +525,11 @@ impl Science {
         for c in &mut cases {
             c.median_response_s = median(&c.resp);
             c.median_depth_mag = median(&c.depth);
+            c.median_precision_ppm = median(&c.prec);
         }
         let done: u32 = cases.iter().map(|c| c.completed).sum();
         let on_time: u32 = cases.iter().map(|c| c.on_time).sum();
-        let expired: u32 = cases.iter().map(|c| c.expired).sum();
+        let expired: u32 = cases.iter().map(|c| c.expired + c.failed).sum();
         let mut top: Vec<(usize, f64)> = self.inv_tel_s.iter().copied().enumerate().filter(|x| x.1 > 0.0).collect();
         top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         let served = self.inv_done.iter().filter(|&&d| d > 0).count();

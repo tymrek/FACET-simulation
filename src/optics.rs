@@ -46,6 +46,11 @@ pub struct Psf {
 
 impl Psf {
     /// Encircled energy within radius r (arcsec).
+    /// Fraction of the flux in the brightest pixel of side `ps` arcsec, centred.
+    pub fn peak_frac_per_pixel(&self, ps: f64) -> f64 {
+        self.ee_at(ps / PI.sqrt())
+    }
+
     pub fn ee_at(&self, r: f64) -> f64 {
         let k = (r / self.scale - 0.5).max(0.0);
         let i = k.floor() as usize;
@@ -136,6 +141,7 @@ struct Key {
     vanes: u32,
     wfe_pm: u64,
     jitter_mas: u64,
+    seed: u64,
 }
 
 static CACHE: OnceLock<Mutex<HashMap<Key, Arc<Psf>>>> = OnceLock::new();
@@ -149,6 +155,7 @@ pub fn psf(hw: &Hardware, jitter_arcsec: f64) -> Arc<Psf> {
         vanes: hw.spider_vanes,
         wfe_pm: (hw.wfe_nm * 1e3).round() as u64,
         jitter_mas: (jitter_arcsec * 1e3).round() as u64,
+        seed: hw.aberration_seed,
     };
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(p) = cache.lock().unwrap().get(&key) {
@@ -163,8 +170,40 @@ pub fn psf(hw: &Hardware, jitter_arcsec: f64) -> Arc<Psf> {
     p
 }
 
-/// Zernike mix (Noll 4–11) standing in for small-telescope figure/alignment error.
-fn wavefront(rho: f64, th: f64) -> f64 {
+/// Nominal Zernike mix (Noll 4–11) standing in for small-telescope
+/// figure/alignment error.
+const NOMINAL_MIX: [f64; 8] = [0.30, 0.45, 0.25, 0.35, 0.20, 0.15, 0.10, 0.30];
+
+/// Zernike coefficients for an aberration seed: the nominal mix for 0,
+/// otherwise independent Gaussian draws (each telescope its own pattern; the
+/// overall RMS is set separately).
+fn mix(seed: u64) -> [f64; 8] {
+    if seed == 0 {
+        return NOMINAL_MIX;
+    }
+    let mut st = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03;
+    let mut c = [0.0; 8];
+    for v in c.iter_mut() {
+        *v = gauss(&mut st);
+    }
+    c
+}
+
+fn splitmix(st: &mut u64) -> f64 {
+    *st = st.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *st;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    ((z ^ (z >> 31)) >> 11) as f64 / (1u64 << 53) as f64
+}
+
+fn gauss(st: &mut u64) -> f64 {
+    let u = splitmix(st).max(1e-300);
+    let v = splitmix(st);
+    (-2.0 * u.ln()).sqrt() * (2.0 * PI * v).cos()
+}
+
+fn wavefront(rho: f64, th: f64, c: &[f64; 8]) -> f64 {
     let z4 = 3f64.sqrt() * (2.0 * rho * rho - 1.0);
     let z5 = 6f64.sqrt() * rho * rho * (2.0 * th).sin();
     let z6 = 6f64.sqrt() * rho * rho * (2.0 * th).cos();
@@ -173,7 +212,92 @@ fn wavefront(rho: f64, th: f64) -> f64 {
     let z9 = 8f64.sqrt() * rho.powi(3) * (3.0 * th).sin();
     let z10 = 8f64.sqrt() * rho.powi(3) * (3.0 * th).cos();
     let z11 = 5f64.sqrt() * (6.0 * rho.powi(4) - 6.0 * rho * rho + 1.0);
-    0.30 * z4 + 0.45 * z5 + 0.25 * z6 + 0.35 * z7 + 0.20 * z8 + 0.15 * z9 + 0.10 * z10 + 0.30 * z11
+    c[0] * z4 + c[1] * z5 + c[2] * z6 + c[3] * z7 + c[4] * z8 + c[5] * z9 + c[6] * z10 + c[7] * z11
+}
+
+/// The spread of image quality and depth across the fleet.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct FleetSpread {
+    pub samples: usize,
+    /// (10th, 50th, 90th percentile)
+    pub fwhm: (f64, f64, f64),
+    pub strehl: (f64, f64, f64),
+    /// 5σ point-source depth, one telescope, 60 s, dark sky (V).
+    pub depth_v60: (f64, f64, f64),
+    pub nominal_fwhm: f64,
+    pub nominal_depth_v60: f64,
+    pub wfe_spread: f64,
+    pub throughput_spread: f64,
+}
+
+/// Sample `n` telescopes, each with its own random Zernike pattern, a
+/// lognormal wavefront-error RMS (median = the nominal figure) and a
+/// throughput scatter, and report percentiles. ASSUMED distributions:
+/// no flight or production data behind them.
+pub fn fleet_spread_sample(hw0: &Hardware, wfe_spread: f64, tput_spread: f64, jitter: f64, n: usize) -> FleetSpread {
+    use rayon::prelude::*;
+    let sub = 60.0;
+    let rows: Vec<(f64, f64, f64)> = (0..n as u64)
+        .into_par_iter()
+        .map(|k| {
+            let mut st = 0xFACE_7000 + k;
+            let mut h = hw0.clone();
+            h.aberration_seed = k + 1;
+            h.wfe_nm = hw0.wfe_nm * (wfe_spread * gauss(&mut st)).exp();
+            h.throughput = (hw0.throughput * (1.0 + tput_spread * gauss(&mut st))).clamp(0.05, 1.0);
+            let p = Arc::new(compute(&h, jitter));
+            let depth = crate::imaging::point_lim_mag_with(&h, &p, 60.0, sub, 22.0);
+            (p.fwhm, p.strehl, depth)
+        })
+        .collect();
+    let pct = |f: &dyn Fn(&(f64, f64, f64)) -> f64| {
+        let mut v: Vec<f64> = rows.iter().map(f).collect();
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let q = |p: f64| v[((v.len() - 1) as f64 * p).round() as usize];
+        (q(0.1), q(0.5), q(0.9))
+    };
+    let nom = psf(hw0, jitter);
+    FleetSpread {
+        samples: n,
+        fwhm: pct(&|r| r.0),
+        strehl: pct(&|r| r.1),
+        depth_v60: pct(&|r| r.2),
+        nominal_fwhm: nom.fwhm,
+        nominal_depth_v60: crate::imaging::point_lim_mag(hw0, 60.0, sub, 22.0),
+        wfe_spread,
+        throughput_spread: tput_spread,
+    }
+}
+
+/// Cached, computed in the background: None until the first sample is ready.
+pub fn fleet_spread(o: &crate::obs::ObsParams) -> Option<FleetSpread> {
+    static SLOT: OnceLock<Mutex<(String, Option<FleetSpread>, bool)>> = OnceLock::new();
+    let hw = Hardware::from_obs(o);
+    let key = format!(
+        "{:?}|{}|{}|{}",
+        (hw.aperture_cm, hw.obstruction, hw.spider_mm, hw.spider_vanes, hw.wfe_nm, hw.throughput, hw.pixel_um, hw.focal_mm, hw.qe, hw.read_noise_e),
+        o.wfe_spread,
+        o.throughput_spread,
+        hw.jitter_arcsec
+    );
+    let slot = SLOT.get_or_init(|| Mutex::new((String::new(), None, false)));
+    let mut g = slot.lock().unwrap();
+    if g.0 == key {
+        return g.1.clone();
+    }
+    if !g.2 {
+        g.2 = true;
+        let (ws, ts, jit) = (o.wfe_spread, o.throughput_spread, hw.jitter_arcsec);
+        std::thread::Builder::new()
+            .name("facet-fleet-optics".into())
+            .spawn(move || {
+                let r = fleet_spread_sample(&hw, ws, ts, jit, 48);
+                let mut g = slot.lock().unwrap();
+                *g = (key, Some(r), false);
+            })
+            .ok();
+    }
+    g.1.clone()
 }
 
 fn in_spider(x: f64, y: f64, vanes: u32, half_w: f64) -> bool {
@@ -197,6 +321,7 @@ fn compute(hw: &Hardware, jitter: f64) -> Psf {
     let eps = hw.obstruction.clamp(0.0, 0.9);
     // Spider half-width in units of the pupil radius
     let half_w = (hw.spider_mm / 1000.0) / d_m;
+    let coeffs = mix(hw.aberration_seed);
     // Pupil amplitude and unit-RMS wavefront shape over the clear aperture.
     let mut amp = vec![0.0f64; NP * NP];
     let mut wshape = vec![0.0f64; NP * NP];
@@ -223,7 +348,7 @@ fn compute(hw: &Hardware, jitter: f64) -> Psf {
                 let y = (j as f64 + 0.5) / NP as f64 * 2.0 - 1.0;
                 let rho = x.hypot(y).min(1.0);
                 amp[j * NP + i] = t;
-                let w = wavefront(rho, y.atan2(x));
+                let w = wavefront(rho, y.atan2(x), &coeffs);
                 wshape[j * NP + i] = w;
                 s1 += w * t;
                 s2 += w * w * t;
@@ -661,5 +786,17 @@ mod budget_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn fleet_spread_brackets_nominal() {
+        let o = ObsParams::default();
+        let h = Hardware::from_obs(&o);
+        let f = fleet_spread_sample(&h, o.wfe_spread, o.throughput_spread, h.jitter_arcsec, 24);
+        eprintln!("fleet FWHM {:?} Strehl {:?} V60 {:?} nominal {:.2} V{:.2}", f.fwhm, f.strehl, f.depth_v60, f.nominal_fwhm, f.nominal_depth_v60);
+        assert!(f.fwhm.0 < f.fwhm.2 && f.depth_v60.0 < f.depth_v60.2);
+        assert!((f.fwhm.1 - f.nominal_fwhm).abs() < 0.25 * f.nominal_fwhm);
+        let none = fleet_spread_sample(&h, 0.0, 0.0, h.jitter_arcsec, 8);
+        assert!(none.fwhm.2 - none.fwhm.0 < f.fwhm.2 - f.fwhm.0, "random patterns alone spread less than with RMS scatter");
     }
 }

@@ -185,6 +185,14 @@ What's modelled (`src/imaging.rs`). Every input is a labelled assumption:
     frame to centroid and read-noise-limited stacking, none of which is
     modelled.
 
+  - **Fleet variation** (assumed distributions): each telescope gets its
+    own random Zernike pattern, a lognormal wavefront-error RMS scatter
+    (σ = 0.30 about the nominal) and a 4 % throughput scatter. The telescope
+    panel and `/api/status` (`fleet_optics`) report 10th/50th/90th
+    percentiles over 48 sampled telescopes: at the defaults FWHM
+    1.47/1.59/1.81″ and 60 s depth V 20.53/20.71/20.83, against 1.52″ and
+    V 20.73 nominal. Requests still use the nominal telescope.
+
   The ideal scene (stars as points, galaxy profiles, shaded planets) is
   convolved with this PSF, integrated over the pixels. So images show Airy
   rings, diffraction spikes, aberrated cores and saturated halos. Limiting
@@ -1031,6 +1039,52 @@ times, priorities and deadlines are **assumptions** (see `src/programme.rs`).
 | Clusters & nearby galaxies | 4–12 | 15–40 min | 2–3 | 7 d | anywhere |
 | Deep fields | 20–80 | 30–90 min | 1–2 | 14 d | \|b\| > 30° |
 
+**Scheduling requirements.** Telescope-seconds are not interchangeable for
+every case. Three cases carry a requirement beyond the total (assumed
+thresholds, typical of the science):
+
+| Case | Requirement | Fails if |
+|---|---|---|
+| Exoplanet transit photometry | fixed event window (the integration length) opening 1–8 h after submission | under 95 % of the window covered by the requested telescopes, or any gap > 5 min |
+| Stellar occultation timing | fixed event window opening 0.5–1.5 h after submission | under 99 % covered, or any gap > 5 s |
+| NEO follow-up astrometry | 3 visits of a third of the integration each | visits less than 20 min apart are not counted as separate |
+
+A failed window counts against *on time* with no partial credit, even
+though the telescopes integrated. During an open window the scheduler staffs
+the request the way STARE does: members about to lose the target to the
+Earth are replaced before they set (lead = a 90° repoint plus a minute,
+using the drift-corrected set-time prediction), and the window outranks
+other work except planetary defence. `--no-handover` turns that off to
+compare with the plain greedy queue. Measured over 27.6 simulated hours,
+1,000 satellites, default load:
+
+| | Transits meeting the requirement | Occultations |
+|---|---|---|
+| Handover-aware scheduling | 94.3 % (1,628 of 1,727) | 98.5 % (267 of 271) |
+| Plain greedy queue (`--no-handover`) | 61.8 % (1,099 of 1,778) | 83.8 % (232 of 277) |
+
+Before this change both were credited as 100 %, because interrupted pieces
+added up to the same telescope-seconds. The remaining handover failures are
+South Atlantic Anomaly safing: with `--saa flag` (keep observing, flag the
+frames) a 14-hour run had none. Avoiding recruits about to enter the SAA
+would recover most of them. For event windows the *response*
+column is how late coverage began after the window opened.
+
+**Transit precision.** Detection depth is not photometric precision: a
+star can be detected at 5σ long before it can be measured to the parts per
+million a transit needs. `imaging::precision` adds photon, sky, dark and
+read noise (which average down with time and telescopes) to an **assumed**
+systematic floor per telescope (default 500 ppm per hour: flat-field and
+intrapixel response under jitter, PSF and thermal drifts) that averages
+down only across telescopes and not past an hour. Bright hosts use short
+sub-frames to stay below saturation. Transit hosts are assumed V 8–13.
+The telescope panel and `/api/status` (`photometry`) give the table; at
+the defaults, with 4 telescopes, a 2-hour transit is detectable at 5σ down
+to about 1,800 ppm at V 10 (the floor dominates: photon noise alone is
+~40 ppm/h). That covers hot Jupiters (~10,000 ppm), not Neptunes around
+Sun-like stars (~1,300 ppm) or Earth-size planets (≈ 84 ppm). The figure scales directly
+with the assumed floor; dedicated photometry missions reach 20–100 ppm/h.
+
 Proposers avoid targets inside the Sun and Moon keep-outs. **Demand** is
 metered in telescope-seconds: at 1.0× work arrives as fast as the whole
 fleet could integrate it; the default 1.5× makes the facility oversubscribed,
@@ -1053,13 +1107,15 @@ summary, desktop panel, `science` in `/api/status`):
 * *Time use*: integration hours by programme, public, STARE, director,
   survey and NEO sweep.
 * *Requests completed per day*, and *on time*: completed before the case's
-  deadline, as a share of completed + expired. Requests that miss their
+  deadline and meeting its scheduling requirement, as a share of completed
+  + expired + failed. Requests that miss their
   deadline expire, because late NEO astrometry or a late GRB afterglow is
   worth little.
 * *Median response* per case: submission to first locked integration
   (slew, settle and acquisition included).
 * *Median depth* per case: 5σ point-source limit reached by the stacked
-  integration against the zodiacal background at the target.
+  integration against the zodiacal background at the target. For transits,
+  the achieved precision per hour instead.
 * *Étendue × time*: Σ collecting area × field of view × integration time
   (m²·deg²·h), the standard survey-speed figure of merit; it lets FACET be
   compared with other facilities on one number.

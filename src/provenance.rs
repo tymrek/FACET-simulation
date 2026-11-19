@@ -58,8 +58,9 @@ use Basis::*;
 /// (key, basis, what the figure rests on)
 pub const HEADLINES: &[(&str, Basis, &str)] = &[
     // Imaging
-    ("depth", Modelled, "Fourier-optics PSF, sensor QE and read noise, zodiacal + Earthshine + stray-light background; noise-limited only, no photometric systematics; one nominal telescope, no fleet-to-fleet optical variation."),
+    ("depth", Modelled, "Fourier-optics PSF, sensor QE and read noise, zodiacal + Earthshine + stray-light background; noise-limited only, no photometric systematics; nominal telescope (see fleet spread for the variation)."),
     ("fwhm", Modelled, "Diffraction with obstruction, spiders and an imposed 60 nm RMS wavefront error, plus pointing jitter at the full RMS figure for every frame length."),
+    ("fleet_optics", Modelled, "Per-telescope random Zernike patterns, lognormal wavefront-error scatter and throughput scatter (all assumed distributions), each through the full Fourier-optics PSF."),
     ("photometry", Modelled, "Photon, sky, dark and read noise plus an assumed systematic floor (flat-field, intrapixel, pointing-jitter flux scatter); not validated against flight data."),
     // Duty and environment
     ("duty", Simulated, "Fraction of satellite time spent integrating after slews, settling, eclipses-by-target, SAA holds and Earthshine losses in this run."),

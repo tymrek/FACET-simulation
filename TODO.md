@@ -13,11 +13,15 @@
 - [x] Removed the sub-second lucky-imaging jitter cap.
 - [x] Provenance tags on every headline (simulated / modelled / assumed / data).
 - [x] STARE handover prediction includes J2 node drift; tested against the propagator.
-- [ ] Science-specific scheduling: minimum continuous windows (transits,
-      occultations), cadence (NEO follow-up), no partial credit where an
-      interruption ruins the measurement.
-- [ ] Fleet optical variation: per-telescope aberrations; report PSF and depth as a spread.
-- [ ] Photometric precision separate from detection depth, with a systematic floor.
+- [x] Science-specific scheduling: event windows (transits, occultations)
+      with coverage and gap limits, NEO visit cadence, no partial credit;
+      handover-aware staffing of open windows.
+- [x] Fleet optical variation: per-telescope aberrations; PSF and depth reported as a spread.
+- [x] Photometric precision separate from detection depth, with an assumed systematic floor.
+- [ ] SAA-aware handover: don't recruit telescopes about to enter the anomaly
+      (the remaining ~5 % of transit failures).
+- [ ] Requests use per-telescope hardware (currently the fleet spread is
+      reported but stacks use the nominal telescope).
 
 ## Validation work (engineering, not code)
 - Stray-light ray trace and baffle test.
