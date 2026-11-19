@@ -121,11 +121,13 @@ pub struct Generator {
     pending: Option<Draft>,
     serial: u64,
     primed: bool,
+    /// Real NEO follow-up targets (direction, name), refreshed by `App::neo_tick`.
+    pub neo_targets: Vec<(V3, String)>,
 }
 
 impl Generator {
     pub fn new(n_inv: usize, seed: u64) -> Generator {
-        let mut g = Generator { on: true, load: 1.5, investigators: Vec::new(), rng: seed | 1, credit: 0.0, pending: None, serial: 0, primed: false };
+        let mut g = Generator { on: true, load: 1.5, investigators: Vec::new(), rng: seed | 1, credit: 0.0, pending: None, serial: 0, primed: false, neo_targets: Vec::new() };
         g.set_investigators(n_inv);
         g
     }
@@ -253,6 +255,13 @@ impl Generator {
                 let idx: Vec<usize> = (0..v.len()).collect();
                 self.pick_from(&idx, |&k| v[k].dir, ok_dir)
                     .map(|k| (v[k].dir, format!("{} (V {:.1}–{:.1})", v[k].name, v[k].bright, v[k].faint)))
+            }
+            "neo" => {
+                let t = std::mem::take(&mut self.neo_targets);
+                let idx: Vec<usize> = (0..t.len()).collect();
+                let r = self.pick_from(&idx, |&k| t[k].0, ok_dir).map(|k| (t[k].0, t[k].1.clone()));
+                self.neo_targets = t;
+                r
             }
             "deep" => {
                 let f = &crate::catalog::DEEP_FIELDS;
@@ -443,9 +452,11 @@ impl Science {
         }
     }
     /// Dark-sky-equivalent integration per working satellite-second.
+    /// None until an hour has been simulated: the first minutes are
+    /// dominated by start-up slews and would understate the steady state.
     pub fn duty(&self) -> Option<f64> {
         let d = self.sat_s - self.hold_s;
-        if d > 0.0 {
+        if d > 0.0 && self.elapsed_s >= 3600.0 {
             Some((self.integrating_s - self.earthshine_s) / d)
         } else {
             None

@@ -916,7 +916,7 @@ impl App {
         v.push(("on_time", sci["on_time_pct"].as_f64().map(|p| format!("{p:.0} %")).unwrap_or("–".into())));
         v.push(("teams", format!("{}", sci["investigators_served"])));
         let s = &self.science;
-        let duty = s.duty().unwrap_or(0.9);
+        let duty = s.duty().unwrap_or(0.72);
         v.push(("duty", format!("{:.0} %", 100.0 * duty)));
         {
             let a = self.allsky();

@@ -18,6 +18,7 @@ mod environment;
 mod ground;
 mod imaging;
 mod math;
+mod neo;
 mod obs;
 mod optics;
 mod present;

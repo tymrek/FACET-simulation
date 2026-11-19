@@ -27,6 +27,14 @@ assets/dso.txt
   position angle, Messier number and first common name. Shared under
   CC BY-SA 4.0.
 
+assets/neo.bin, assets/neo_names.txt
+  Derived from the IAU Minor Planet Center's NEA orbit file (NEA.txt,
+  snapshot with osculating epoch 2026 Jun 9), https://minorplanetcenter.net
+  This research has made use of data and/or services provided by the
+  International Astronomical Union's Minor Planet Center.
+  Modifications: converted to binary (epoch, a, e, i, node, perihelion
+  argument, mean anomaly, H, G, flags) with readable designations.
+
 assets/coast.bin
   Derived from Natural Earth 1:110m coastlines, https://www.naturalearthdata.com
   Public domain.

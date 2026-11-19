@@ -4,10 +4,9 @@
 - Sunward stray-light model and Sun keep-out trade table.
 - All-sky survey mode: the fleet tiles the sky; passes measured live.
 - Real star, deep-sky and variable-star catalogues; programme on real targets.
+- Known near-Earth asteroids (MPC orbits): sky view, visibility, close approaches.
 
 ## Simulation
-- Real NEO orbits (needs the MPC or JPL file: not reachable from the build
-  sandbox).
 - Public engagement metrics (requests, unique users, returns).
 - Optics rework (delivered FWHM ~2.7″ is worse than ground seeing).
 - Interferometry tier.

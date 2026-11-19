@@ -762,7 +762,35 @@ impl App {
             }
         }
 
+        // Known near-Earth asteroids (MPC): brighter than a zoom-dependent
+        // limit; potentially hazardous ones in red.
+        let mut neo_labels: Vec<(Pos2, String, bool)> = Vec::new();
+        if self.neo.show && !self.neo.dir.is_empty() {
+            let vlim = (16.0 + 3.0 * (90.0 / fov_deg).log10()).clamp(15.0, 21.0) as f32;
+            let all = crate::neo::all();
+            for k in 0..self.neo.dir.len() {
+                let v = self.neo.vmag[k];
+                if v > vlim {
+                    continue;
+                }
+                let Some(p) = proj(self.neo.dir[k]) else { continue };
+                if !rect.contains(p) {
+                    continue;
+                }
+                let pha = all[k].pha();
+                let col = if pha { rgba(255, 90, 80, 0.9) } else { rgba(200, 160, 255, 0.85) };
+                let r = ((vlim + 1.0 - v) * 0.45).clamp(1.2, 3.5);
+                b.point(p, r, col);
+                if self.show.names && (fov_deg < 20.0 || v < 13.5) {
+                    neo_labels.push((p + egui::vec2(4.0, 3.0), all[k].name.to_string(), pha));
+                }
+            }
+        }
+
         painter.add(b.shape());
+        for (p, s, pha) in neo_labels.into_iter().take(200) {
+            text(&painter, p, Align2::LEFT_TOP, s, 10.0, if pha { Color32::from_rgb(255, 140, 120) } else { Color32::from_rgb(190, 170, 240) });
+        }
         for (p, s) in dso_labels.into_iter().take(400) {
             text(&painter, p, Align2::LEFT_BOTTOM, s, 10.5, Color32::from_rgb(200, 180, 150));
         }

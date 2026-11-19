@@ -83,6 +83,25 @@ function renderAllSky(s) {
   $("as_note").textContent = `How the estimate is worked out: fields × (exposure + ${a.overhead_s.toFixed(0)} s to slew and settle) ÷ (telescopes × the share of time they actually spend observing, ${Math.round(100 * a.duty)} %${a.duty_measured ? " as measured in this run, after slews, the South Atlantic Anomaly and Earthshine" : ", assumed until this run has measured it"}). It assumes the whole fleet is given to the job; with a typical ${Math.round(100 * a.survey_share)} % of telescopes surveying and the rest doing requested science, a one-minute pass takes ${fmtSpan(a.survey_share_60s)}. The part of the sky behind the Sun comes into view as the Earth orbits: the entire celestial sphere is covered within about ${Math.round(a.whole_sphere_days)} days. The Earth blocks each telescope's view but never the fleet's: every patch of sky is above the horizon for many satellites at once.`;
 }
 
+function renderNeos(s) {
+  const n = s.neos, c = $("neo_card"); c.hidden = !n; if (!n) return;
+  const f = (x) => Number(x).toLocaleString();
+  const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
+  $("neo_tiles").replaceChildren(
+    t("known near-Earth asteroids", f(n.known)),
+    t("potentially hazardous", f(n.pha)),
+    t(`observable by one FACET telescope right now (brighter than mag ${n.lim_1tel_60s.toFixed(1)} in one minute)`, f(n.visible_1tel)),
+    t(`observable with 16 telescopes stacked (to mag ${n.lim_16tel.toFixed(1)})`, f(n.visible_16tel)));
+  const size = (h) => Math.round(1329e3 / Math.sqrt(0.14) * Math.pow(10, -h / 5));
+  $("neo_ca").replaceChildren(...n.approaches.slice(0, 8).map(a => el("tr", {},
+    el("td", {}, a.name + (a.pha ? " (hazardous)" : "")),
+    el("td", {}, a.utc.slice(0, 16)),
+    el("td", { class: "num" }, `${a.dist_ld.toFixed(1)} lunar distances`),
+    el("td", { class: "num" }, `mag ${a.peak_v.toFixed(1)}`),
+    el("td", { class: "num" }, `~${size(a.h)} m`))));
+  $("neo_note").textContent = `Orbits: the IAU Minor Planet Center's list of known near-Earth asteroids. Positions are computed in this simulation from each orbit without the planets' pull, so close-approach dates and distances are approximate (typically within hours and 10–20 %); sizes assume a typical reflectivity. ${n.bright_but_in_keepout.toLocaleString()} more asteroids are bright enough right now but too close to the Sun or Moon to observe.`;
+}
+
 function renderScience(s) {
   const sc = s.science; if (!sc) return;
   const d = sc.per_day, n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -120,6 +139,7 @@ function render(s) {
   renderDefence(s);
   renderWhy(s);
   renderAllSky(s);
+  renderNeos(s);
   const q = $("queue"); q.replaceChildren();
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
   const recent = s.requests.filter(r => r.state === "done").slice(0, 10);

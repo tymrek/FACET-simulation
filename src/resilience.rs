@@ -289,7 +289,7 @@ impl App {
         }
         let s = &self.science;
         // Duty cycle of working telescopes (failed and held satellites excluded).
-        let duty = s.duty().unwrap_or(0.9);
+        let duty = s.duty().unwrap_or(0.72);
         let mut resp: Vec<f32> = s.cases.iter().flat_map(|c| c.resp.iter().copied()).collect();
         resp.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let med = resp.get(resp.len() / 2).map(|&x| x as f64);

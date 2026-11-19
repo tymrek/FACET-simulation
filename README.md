@@ -467,8 +467,20 @@ survey on idle telescopes instead of the zenith stare.
   |b| > 20°); variable-star monitoring uses the real variables; deep fields
   are the well-known extragalactic survey fields (HDF-N, HUDF, COSMOS, EGS,
   UDS, Lockman Hole, ELAIS-N1, XMM-LSS, Subaru Deep Field, Euclid Deep Field
-  North). Transients, NEO candidates, comets, occultations, GRBs and transit
+  North). NEO follow-up targets real known asteroids brighter than V 20.5 and
+  outside the keep-outs. Transients, comets, occultations, GRBs and transit
   hosts remain synthetic.
+* **Known near-Earth asteroids:** the IAU Minor Planet Center's NEA orbits
+  (43,182 objects, 2,537 potentially hazardous; snapshot with epoch
+  2026 Jun 9). Two-body positions and H, G brightness, refreshed every half
+  simulated hour, drawn in the sky view (hazardous ones in red). The panel
+  and public site show how many are observable right now by one telescope
+  and by 16 stacked, how many are bright but inside a keep-out, and close
+  approaches within 20 lunar distances over the next 60 days. Checked on
+  Apophis: the model puts the 2029 flyby at 0.090 LD on 14 April 01:07 UTC
+  (published: ~0.099 LD on 13 April ~21:46 UTC). Planetary perturbations are
+  ignored, so dates and distances degrade over years and through close
+  approaches.
 
 ## Space environment: South Atlantic Anomaly, Earthshine, orbital lifetime
 

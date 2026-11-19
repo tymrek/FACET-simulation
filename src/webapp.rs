@@ -1025,6 +1025,7 @@ impl App {
             "environment": self.env.json(self.shell.params.alt_km),
             "allsky": self.allsky_json(),
             "survey": self.survey_json(),
+            "neos": self.neo_json(),
             "ground": self.resil.ground,
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,

@@ -117,6 +117,7 @@ pub struct App {
     pub resil: crate::resilience::Resilience,
     pub env: crate::environment::Environment,
     pub survey: crate::survey::Survey,
+    pub neo: crate::neo::NeoSky,
     pub cost_window_open: bool,
     /// Presentation mode requests from the controls / command line.
     pub present_open: bool,
@@ -223,6 +224,7 @@ impl App {
             resil: Default::default(),
             env: Default::default(),
             survey: crate::survey::Survey { show: true, ..Default::default() },
+            neo: crate::neo::NeoSky { show: true, ..Default::default() },
             cost_window_open: false,
             present_open: false,
             presenting: false,
@@ -510,6 +512,7 @@ impl App {
         self.environment_step(dt_sim);
         prof("environment_step");
         self.survey_credit(dt_sim);
+        self.neo_tick();
         self.queue_credit();
         prof("queue_credit");
         self.science_account(dt_sim);
@@ -811,6 +814,8 @@ impl App {
         self.traffic_panel(ui);
         ui.separator();
         self.survey_panel(ui);
+        ui.separator();
+        self.neo_panel(ui);
         ui.separator();
         self.environment_panel(ui);
         ui.separator();
