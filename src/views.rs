@@ -618,7 +618,9 @@ impl App {
 
         // Stars
         let zf = (90.0 / fov_deg).powf(0.3).clamp(0.75, 2.2) as f32;
-        let mag_lim = if fov_deg > 150.0 { 5.8 } else { 6.5 };
+        // Fainter stars as the view zooms in: 5.8 all-sky, 6.5 at 90°,
+        // ~8 at 20°, 10 (the catalogue limit) below ~5°.
+        let mag_lim = if fov_deg > 150.0 { 5.8 } else { (6.5 + 2.3 * (90.0 / fov_deg).log10()).clamp(6.5, 10.0) as f32 };
         for s in self.stars.iter().take_while(|s| s.mag <= mag_lim) {
             if let Some(p) = proj(s.dir) {
                 if rect.contains(p) {
@@ -710,7 +712,60 @@ impl App {
             }
         }
 
+        // Deep-sky objects: everything brighter than a zoom-dependent limit
+        // (Messier objects always), drawn at true size once they are big
+        // enough to see: ellipse for galaxies, circle for clusters, square
+        // for nebulae.
+        let mut dso_labels: Vec<(Pos2, String)> = Vec::new();
+        if self.show.dso {
+            let dlim = if fov_deg > 100.0 { 0.0 } else { (8.0 + 3.0 * (90.0 / fov_deg).log10()).clamp(8.0, 14.0) as f32 };
+            for o in crate::catalog::dso() {
+                let mes = o.messier.is_some();
+                if !mes && o.mag.map_or(true, |m| m > dlim) {
+                    continue;
+                }
+                let Some(p) = proj(o.dir) else { continue };
+                if !rect.contains(p) {
+                    continue;
+                }
+                let r = ((o.major.unwrap_or(2.0) as f64 / 120.0).to_radians() * px_per_rad(o.dir)) as f32;
+                let col = if o.is_galaxy() {
+                    rgba(255, 170, 120, 0.75)
+                } else if o.is_cluster() {
+                    rgba(255, 230, 140, 0.75)
+                } else {
+                    rgba(130, 220, 190, 0.75)
+                };
+                let r = r.max(2.5);
+                if o.is_galaxy() {
+                    let q = o.minor.zip(o.major).map(|(a, b)| (a / b).clamp(0.15, 1.0)).unwrap_or(0.6);
+                    let pa = (o.pa.unwrap_or(0.0) as f32).to_radians();
+                    let pts: Vec<Pos2> = (0..24)
+                        .map(|k| {
+                            let t = k as f32 / 24.0 * std::f32::consts::TAU;
+                            let (x, y) = (r * q * t.cos(), r * t.sin());
+                            // PA measured from north through east (east = left in this view).
+                            p + egui::vec2(-(x * pa.cos() + y * pa.sin()), -(-x * pa.sin() + y * pa.cos()))
+                        })
+                        .collect();
+                    b.polyline(&pts, 1.0, col, true);
+                } else if o.is_cluster() {
+                    let pts: Vec<Pos2> = (0..24).map(|k| { let t = k as f32 / 24.0 * std::f32::consts::TAU; p + egui::vec2(r * t.cos(), r * t.sin()) }).collect();
+                    b.polyline(&pts, 1.0, col, true);
+                } else {
+                    let pts = [p + egui::vec2(-r, -r), p + egui::vec2(r, -r), p + egui::vec2(r, r), p + egui::vec2(-r, r)];
+                    b.polyline(&pts, 1.0, col, true);
+                }
+                if self.show.names && (mes || fov_deg < 25.0) {
+                    dso_labels.push((p + egui::vec2(r + 3.0, -2.0), o.messier.clone().or(o.common.clone()).unwrap_or_else(|| o.id.clone())));
+                }
+            }
+        }
+
         painter.add(b.shape());
+        for (p, s) in dso_labels.into_iter().take(400) {
+            text(&painter, p, Align2::LEFT_BOTTOM, s, 10.5, Color32::from_rgb(200, 180, 150));
+        }
 
         // Star names
         if self.show.names {
@@ -798,6 +853,9 @@ impl App {
         }
         for s in &self.names {
             cands.push((proj(s.dir), Target::Fixed { name: s.name.clone(), dir: s.dir }));
+        }
+        for o in crate::catalog::dso().iter().filter(|o| o.messier.is_some() || o.mag.map_or(false, |m| m <= 10.0)) {
+            cands.push((proj(o.dir), Target::Fixed { name: o.name(), dir: o.dir }));
         }
         let mut best = nearest(mp, cands);
         if best.is_none() {

@@ -16,7 +16,7 @@
 //!   * Stacking: N telescopes × t seconds are combined incoherently — signal and
 //!     variance add, so depth grows with total telescope-seconds; resolution
 //!     stays that of ONE aperture.
-//!   * Scene: real catalogue stars to V 6.5, plus a SYNTHETIC statistical
+//!   * Scene: real catalogue stars to V 9 (HYG v4.1), plus a SYNTHETIC statistical
 //!     population of fainter stars (latitude-dependent counts) and galaxies,
 //!     plus planets/Moon rendered with correct size, phase, pole orientation
 //!     and Saturn's ring tilt, but PROCEDURAL surface markings.
@@ -778,7 +778,7 @@ pub fn render(spec: &Spec) -> Output {
 
     // Real catalogue stars
     let hfov_rad = rad(hw.fov_deg / 2.0);
-    for s in stars.iter() {
+    for s in stars.iter().take_while(|s| s.mag <= catalog::REAL_STAR_LIMIT) {
         let ang = s.dir.angle(center);
         if ang > hfov_rad * 1.5 {
             continue;
@@ -796,7 +796,7 @@ pub fn render(spec: &Spec) -> Output {
     }
 
     // Synthetic faint stars
-    let v_min = 6.5;
+    let v_min = catalog::REAL_STAR_LIMIT as f64;
     let mut v_max = (lim + 1.0).clamp(8.0, 27.0);
     while star_counts(v_max, gal_b) * area_deg2 > 300_000.0 && v_max > v_min + 1.0 {
         v_max -= 0.25;
@@ -964,7 +964,7 @@ pub fn render(spec: &Spec) -> Output {
         notes.push(format!("{} pixels saturated in the full field, {} in the crop.", fe.saturated, ce.saturated));
     }
     notes.push(format!(
-        "Stars fainter than V 6.5 and all galaxies are a synthetic statistical population for galactic latitude {:+.0}°, not real objects. Planet surface markings are procedural.",
+        "Stars to V 9 are real (HYG v4.1 catalogue); fainter stars and all galaxies are a synthetic statistical population for galactic latitude {:+.0}°, not real objects. Planet surface markings are procedural.",
         gal_b
     ));
     notes.push("Every figure is an unchecked soft estimate from the idealised model described in imaging.rs.".into());

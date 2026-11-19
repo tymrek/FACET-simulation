@@ -8,13 +8,24 @@ at your option.
 
 Bundled data under other terms
 ------------------------------
-assets/stars.bin, assets/star_names.txt
-  Derived from the HYG Database v4.0 by David Nash (astronexus),
+assets/stars.bin, assets/star_names.txt, assets/variables.txt
+  Derived from the HYG Database v4.1 by David Nash (astronexus),
   https://github.com/astronexus/HYG-Database
   Licensed under Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0).
-  Modifications: filtered to V <= 6.5, converted to binary (RA, Dec, V, B-V);
-  proper names kept for stars brighter than V 2.6. These derived files are
-  shared under CC BY-SA 4.0.
+  Modifications: filtered to V <= 10, converted to binary (RA, Dec, V, B-V)
+  sorted by magnitude; proper names and variable-star designations with
+  magnitude ranges extracted to text. These derived files are shared under
+  CC BY-SA 4.0.
+
+assets/dso.txt
+  Derived from OpenNGC by Mattia Verga and contributors,
+  https://github.com/mattiaverga/OpenNGC
+  Licensed under Creative Commons Attribution-ShareAlike 4.0 (CC BY-SA 4.0).
+  Modifications: NGC.csv and addendum.csv merged; duplicate, non-existent,
+  single/double-star and "other" entries removed; positions converted to
+  radians; fields reduced to designation, type, position, magnitude, size,
+  position angle, Messier number and first common name. Shared under
+  CC BY-SA 4.0.
 
 assets/coast.bin
   Derived from Natural Earth 1:110m coastlines, https://www.naturalearthdata.com

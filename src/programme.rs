@@ -39,6 +39,31 @@ pub struct Case {
     sky: Sky,
 }
 
+/// Indices into the deep-sky catalogue for the cases that use real targets.
+pub struct RealLists {
+    /// Clusters and nearby galaxies brighter than V/B 11.
+    pub clusters_galaxies: Vec<usize>,
+    /// Galaxies brighter than 14th magnitude at |b| > 20° (transient hosts).
+    pub host_galaxies: Vec<usize>,
+}
+
+pub fn real_lists() -> &'static RealLists {
+    use std::sync::OnceLock;
+    static L: OnceLock<RealLists> = OnceLock::new();
+    L.get_or_init(|| {
+        let d = crate::catalog::dso();
+        let gal_pole = gal_to_eq(V3::Z);
+        RealLists {
+            clusters_galaxies: (0..d.len())
+                .filter(|&k| (d[k].is_cluster() || d[k].is_galaxy()) && d[k].mag.map_or(false, |m| m <= 11.0))
+                .collect(),
+            host_galaxies: (0..d.len())
+                .filter(|&k| d[k].is_galaxy() && d[k].mag.map_or(false, |m| m <= 14.0) && d[k].dir.dot(gal_pole).abs() > rad(20.0).sin())
+                .collect(),
+        }
+    })
+}
+
 pub const CASES: [Case; 10] = [
     Case { key: "neo", label: "NEO follow-up astrometry", team: "NEO", weight: 18.0, tel: (1, 3), exp_s: (120.0, 600.0), prio: (6, 8), deadline_h: 24.0, sky: Sky::Ecliptic(60.0, 175.0) },
     Case { key: "transient", label: "Supernova / transient follow-up", team: "transient", weight: 10.0, tel: (4, 16), exp_s: (600.0, 1800.0), prio: (7, 8), deadline_h: 48.0, sky: Sky::HighLat },
@@ -175,6 +200,23 @@ impl Generator {
             }
         }
     }
+    /// A random entry of `list` whose direction passes `ok` (30 tries).
+    fn pick_from<T>(&mut self, list: &[T], dir: impl Fn(&T) -> V3, ok: impl Fn(V3) -> bool) -> Option<T>
+    where
+        T: Copy,
+    {
+        if list.is_empty() {
+            return None;
+        }
+        for _ in 0..30 {
+            let k = list[(self.next() % list.len() as u64) as usize];
+            if ok(dir(&k)) {
+                return Some(k);
+            }
+        }
+        None
+    }
+
     fn uniform(&mut self) -> V3 {
         let z = self.range(-1.0, 1.0);
         let a = self.range(0.0, std::f64::consts::TAU);
@@ -190,7 +232,39 @@ impl Generator {
         let ser = self.serial;
         let cos_ex = rad(sun_excl_deg + 5.0).cos();
         let cos_mx = rad(moon_excl_deg + 5.0).cos();
-        let (body, dir) = if matches!(c.sky, Sky::Planet) {
+        // Real targets where a catalogue exists: (direction, name).
+        let ok_dir = |d: V3| d.dot(sun) < cos_ex && d.dot(moon) < cos_mx;
+        let real: Option<(V3, String)> = match c.key {
+            "cluster" => {
+                let l = real_lists();
+                self.pick_from(&l.clusters_galaxies, |&k| crate::catalog::dso()[k].dir, ok_dir)
+                    .map(|k| { let d = &crate::catalog::dso()[k]; (d.dir, d.name()) })
+            }
+            "transient" => {
+                let l = real_lists();
+                let ser3 = (self.letter().to_ascii_lowercase(), self.letter().to_ascii_lowercase(), self.letter().to_ascii_lowercase());
+                self.pick_from(&l.host_galaxies, |&k| crate::catalog::dso()[k].dir, ok_dir).map(|k| {
+                    let d = &crate::catalog::dso()[k];
+                    (d.dir, format!("AT 2026{}{}{} in {}", ser3.0, ser3.1, ser3.2, d.short()))
+                })
+            }
+            "variable" => {
+                let v = crate::catalog::variables();
+                let idx: Vec<usize> = (0..v.len()).collect();
+                self.pick_from(&idx, |&k| v[k].dir, ok_dir)
+                    .map(|k| (v[k].dir, format!("{} (V {:.1}–{:.1})", v[k].name, v[k].bright, v[k].faint)))
+            }
+            "deep" => {
+                let f = &crate::catalog::DEEP_FIELDS;
+                let idx: Vec<usize> = (0..f.len()).collect();
+                let dir = |k: &usize| V3::from_radec(rad(f[*k].1), rad(f[*k].2));
+                self.pick_from(&idx, dir, ok_dir).map(|k| (dir(&k), f[k].0.to_string()))
+            }
+            _ => None,
+        };
+        let (body, dir) = if let Some((d, _)) = &real {
+            (None, *d)
+        } else if matches!(c.sky, Sky::Planet) {
             // Mercury … Neptune (body indices 2..=8) that are clear of the Sun.
             let ok: Vec<usize> = (2..=8).filter(|&b| planets.get(b).map_or(false, |d| d.dot(sun) < cos_ex)).collect();
             let b = if ok.is_empty() { 5 } else { ok[(self.next() % ok.len() as u64) as usize] };
@@ -206,7 +280,7 @@ impl Generator {
             }
             (None, d)
         };
-        let target_name = match c.key {
+        let target_name = if let Some((_, n)) = real { n } else { match c.key {
             "neo" => format!("NEO candidate 2026 {}{}{}", self.letter(), self.letter(), 1 + self.next() % 99),
             "transient" => format!("AT 2026{}{}{}", self.letter().to_ascii_lowercase(), self.letter().to_ascii_lowercase(), self.letter().to_ascii_lowercase()),
             "grb" => format!("GRB afterglow G-{ser:04}"),
@@ -217,7 +291,7 @@ impl Generator {
             "planet" => crate::astro::BODY_NAMES[body.unwrap_or(5)].to_string(),
             "cluster" => format!("Cluster/galaxy CG-{:04}", self.next() % 10_000),
             _ => format!("Deep field DF-{:02}", 1 + self.next() % 40),
-        };
+        } };
         let telescopes = self.log_range(c.tel.0 as f64, c.tel.1 as f64 + 0.999).floor() as u32;
         let exposure_s = (self.log_range(c.exp_s.0, c.exp_s.1) / 60.0).round() * 60.0;
         let priority = c.prio.0 + (self.next() % (c.prio.1 - c.prio.0 + 1) as u64) as i32;

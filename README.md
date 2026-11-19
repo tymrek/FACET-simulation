@@ -449,6 +449,27 @@ last few percent are tiles hugging the Sun and Moon keep-out edges. The
 option *free telescopes tile during Science operations* runs the same
 survey on idle telescopes instead of the zenith stare.
 
+## Catalogues
+
+* **Stars:** HYG v4.1, 108,071 stars to V 10 with 443 proper names. The sky
+  view shows fainter stars as it zooms (V 6.5 at 90°, ~8 at 20°, 10 below
+  ~5°). Simulated request images use real stars to V 9 and a statistical
+  population below that.
+* **Deep sky:** OpenNGC, 12,162 galaxies, clusters and nebulae (107 Messier
+  objects), drawn at true size and orientation (ellipses: galaxies; circles:
+  clusters; squares: nebulae), labelled when zoomed in. Any of them can be a
+  target by designation, Messier number or common name (`--target M31`,
+  `--target "NGC 7000"`, public requests for "Andromeda Galaxy").
+* **Variable stars:** 5,221 HYG variables with magnitude ranges.
+* **Science programme on real objects:** cluster and nearby-galaxy requests
+  pick real clusters and galaxies brighter than 11th magnitude; supernova
+  and transient follow-up happens in real host galaxies (brighter than 14th,
+  |b| > 20°); variable-star monitoring uses the real variables; deep fields
+  are the well-known extragalactic survey fields (HDF-N, HUDF, COSMOS, EGS,
+  UDS, Lockman Hole, ELAIS-N1, XMM-LSS, Subaru Deep Field, Euclid Deep Field
+  North). Transients, NEO candidates, comets, occultations, GRBs and transit
+  hosts remain synthetic.
+
 ## Space environment: South Atlantic Anomaly, Earthshine, orbital lifetime
 
 Three effects that anyone who has operated a LEO telescope will ask about.

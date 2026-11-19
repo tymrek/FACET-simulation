@@ -43,6 +43,8 @@ pub struct Show {
     pub rays: bool,
     pub coverage: bool,
     pub names: bool,
+    /// Deep-sky objects (OpenNGC) in the sky view.
+    pub dso: bool,
     pub grid: bool,
     pub coast: bool,
     pub footprints: bool,
@@ -191,6 +193,7 @@ impl App {
                 footprints: true,
                 orbit_stars: true,
                 saa: true,
+                dso: true,
             },
             grid: obs::SkyGrid::new(4.0),
             cov: Vec::new(),
@@ -292,6 +295,8 @@ impl App {
                         self.target = Some(Target::Body(i));
                     } else if let Some(s) = self.names.iter().find(|s| s.name.eq_ignore_ascii_case(&v)) {
                         self.target = Some(Target::Fixed { name: s.name.clone(), dir: s.dir });
+                    } else if let Some(d) = catalog::find_dso(&v) {
+                        self.target = Some(Target::Fixed { name: d.name(), dir: d.dir });
                     }
                 }
                 "--look" => self.look_at_target(),
@@ -830,6 +835,7 @@ impl App {
             ui.checkbox(&mut s.footprints, "FOV footprints");
             ui.checkbox(&mut s.coverage, "stacking-depth map");
             ui.checkbox(&mut s.names, "labels");
+            ui.checkbox(&mut s.dso, "deep sky");
             ui.checkbox(&mut s.grid, "RA/Dec grid");
             ui.checkbox(&mut s.coast, "coastlines");
             ui.checkbox(&mut s.orbit_stars, "stars in orbit view");

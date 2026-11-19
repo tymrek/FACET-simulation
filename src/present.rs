@@ -729,7 +729,11 @@ impl App {
         if let Some(t) = crate::app::FIXED_TARGETS.iter().find(|t| t.0.to_lowercase().contains(&name.to_lowercase())) {
             return Some(V3::from_radec(t.1.to_radians(), t.2.to_radians()));
         }
-        self.names.iter().find(|s| s.name.eq_ignore_ascii_case(name)).map(|s| s.dir)
+        self.names
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
+            .map(|s| s.dir)
+            .or_else(|| crate::catalog::find_dso(name).map(|d| d.dir))
     }
 
     pub fn present_action(&mut self, a: &Action) {

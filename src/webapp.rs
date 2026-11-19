@@ -27,6 +27,18 @@ impl App {
         for s in &self.names {
             names.insert(s.name.to_lowercase(), Resolved::Fixed(s.name.clone(), s.dir));
         }
+        // Deep-sky objects by designation, Messier number and common name.
+        for o in crate::catalog::dso() {
+            let r = Resolved::Fixed(o.name(), o.dir);
+            names.entry(o.id.to_lowercase()).or_insert_with(|| r.clone());
+            names.entry(o.id.to_lowercase().replace(' ', "")).or_insert_with(|| r.clone());
+            if let Some(m) = &o.messier {
+                names.insert(m.to_lowercase(), r.clone());
+            }
+            if let Some(c) = &o.common {
+                names.entry(c.to_lowercase()).or_insert_with(|| r.clone());
+            }
+        }
         for (name, ra, dec) in FIXED_TARGETS {
             let d = V3::from_radec(rad(ra), rad(dec));
             names.insert(name.to_lowercase(), Resolved::Fixed(name.into(), d));
