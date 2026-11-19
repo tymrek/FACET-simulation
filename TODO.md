@@ -6,9 +6,9 @@
 - Real star, deep-sky and variable-star catalogues; programme on real targets.
 - Known near-Earth asteroids (MPC orbits): sky view, visibility, close approaches.
 - Public engagement model and metrics.
+- Optics rework: design inputs (aperture, f-ratio, design, sensor, pointing presets), derived field, image-size budget.
 
 ## Simulation
-- Optics rework (delivered FWHM ~2.7″ is worse than ground seeing).
 - Interferometry tier.
 
 ## Identity

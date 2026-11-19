@@ -654,7 +654,7 @@ impl App {
         let area_m2 = std::f64::consts::PI * (o.aperture_cm / 200.0).powi(2) * (1.0 - o.obstruction * o.obstruction);
         let omega = o.fov_deg * o.fov_deg;
         let sub = o.exp_s.min(o.sub_max_s).max(1.0);
-        let frame_bytes = o.sensor_px * (o.sensor_px * 2.0 / 3.0) * 2.0; // 3:2 sensor, 16-bit
+        let frame_bytes = o.sensor_px * o.sensor_py * 2.0; // 16-bit
         // Streak avoidance gates exposures around predicted crossings: that
         // time is not integrated.
         let gate = if self.traffic.cfg.streak_avoidance && self.traffic.streaks.exposed_s > 0.0 {
@@ -1028,6 +1028,15 @@ impl App {
             "survey": self.survey_json(),
             "neos": self.neo_json(),
             "public": self.public_json(),
+            "optics": {
+                "budget": crate::optics::blur_budget(&self.obs_params, self.obs_params.exp_s.min(self.obs_params.sub_max_s)),
+                "focal_mm": self.obs_params.focal_mm,
+                "plate_scale": self.obs_params.plate_scale(),
+                "field_deg": self.obs_params.field_deg(),
+                "sensor": crate::obs::SENSORS.get(self.obs_params.sensor_preset).map(|s| s.name),
+                "design": crate::obs::DESIGNS.get(self.obs_params.design_preset).map(|d| d.name),
+                "pointing": crate::obs::POINTING.get(self.obs_params.pointing_preset).map(|p| p.1),
+            },
             "ground": self.resil.ground,
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,

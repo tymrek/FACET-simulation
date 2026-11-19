@@ -52,6 +52,8 @@ pub struct Hardware {
     pub wfe_nm: f64,
     pub spider_vanes: u32,
     pub spider_mm: f64,
+    pub focal_mm: f64,
+    pub sensor_py: f64,
 }
 
 impl Hardware {
@@ -74,6 +76,8 @@ impl Hardware {
             wfe_nm: o.wfe_nm,
             spider_vanes: o.spider_vanes,
             spider_mm: o.spider_mm,
+            focal_mm: o.focal_mm,
+            sensor_py: o.sensor_py,
         }
     }
     pub fn area_cm2(&self) -> f64 {
@@ -84,10 +88,15 @@ impl Hardware {
         self.ph0 * self.area_cm2() * self.throughput * self.qe
     }
     pub fn pixel_scale(&self) -> f64 {
-        self.fov_deg * 3600.0 / self.sensor_px
+        self.pixel_um * 1e-3 * ARCSEC / self.focal_mm.max(1.0)
     }
     pub fn focal_mm(&self) -> f64 {
-        self.pixel_um * 1e-3 * ARCSEC / self.pixel_scale()
+        self.focal_mm
+    }
+    /// Pixels in one full frame.
+    #[allow(dead_code)]
+    pub fn pixels(&self) -> f64 {
+        self.sensor_px * self.sensor_py
     }
     pub fn f_ratio(&self) -> f64 {
         self.focal_mm() / (self.aperture_cm * 10.0)
@@ -1099,8 +1108,8 @@ mod tests {
     #[test]
     fn plate_scale_and_focal() {
         let h = hw();
-        assert!((h.pixel_scale() - 0.376).abs() < 0.001);
-        assert!((h.focal_mm() - 2063.0).abs() < 5.0, "{}", h.focal_mm());
+        assert!((h.pixel_scale() - 0.4847).abs() < 0.001, "{}", h.pixel_scale());
+        assert!((h.f_ratio() - 8.0).abs() < 1e-9);
         assert!((h.diffraction_fwhm() - 0.584).abs() < 0.01);
     }
 

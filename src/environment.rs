@@ -656,8 +656,8 @@ impl App {
             e.n_in_saa = e.in_saa.iter().filter(|&&b| b).count();
             return;
         }
-        let area_cm2 = (o.sensor_px * o.pixel_um * 1e-4) * (o.sensor_px * 2.0 / 3.0 * o.pixel_um * 1e-4);
-        let fov_as2 = (o.fov_deg * 3600.0).powi(2) * 2.0 / 3.0;
+        let area_cm2 = (o.sensor_px * o.pixel_um * 1e-4) * (o.sensor_py * o.pixel_um * 1e-4);
+        let fov_as2 = (o.fov_deg * 3600.0).powi(2);
         let sub = o.exp_s.min(o.sub_max_s).max(1.0);
         e.elapsed_s += dt;
         for i in 0..n {
@@ -752,9 +752,9 @@ impl App {
         ))
         .small());
         let o = &self.obs_params;
-        let area = (o.sensor_px * o.pixel_um * 1e-4) * (o.sensor_px * 2.0 / 3.0 * o.pixel_um * 1e-4);
+        let area = (o.sensor_px * o.pixel_um * 1e-4) * (o.sensor_py * o.pixel_um * 1e-4);
         let peak = row.as_ref().map(|r| r.peak_flux).unwrap_or(0.0);
-        let px = o.sensor_px * o.sensor_px * 2.0 / 3.0;
+        let px = o.sensor_px * o.sensor_py;
         let frame = o.exp_s.min(o.sub_max_s).max(1.0);
         let frac = |f: f64| 100.0 * f * area * frame * 10.0 / px;
         ui.label(RichText::new(format!(

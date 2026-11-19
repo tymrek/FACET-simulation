@@ -190,9 +190,35 @@ What's modelled (`src/imaging.rs`). Every input is a labelled assumption:
   the Strehl ratio, optical vs delivered FWHM, EE50/EE80 radii and a PSF
   image. Tests check FWHM and encircled energy against Airy theory, the
   effect of the obstruction, Strehl, and the spikes.
-- **Detector:** IMX455-class CMOS: 9576 px across, 3.76 µm pixels, QE 0.8,
-  read noise 1.5 e⁻, dark 0.003 e⁻/s, full well 51 ke⁻. Pixel scale comes from the
-  field of view. Focal length and f-ratio are derived (1° → 0.376″/px, f/10.3).
+- **Design inputs** (Telescope panel; `--design`, `--fratio`, `--sensor`,
+  `--pointing`): aperture, focal ratio, an optical-design preset and a
+  sensor preset. Focal length, plate scale and the field of view follow
+  from them; the sim's single footprint size (`fov_deg`) is the side of the
+  square with the field's area. Default: 20 cm f/8 Ritchey–Chrétien with a
+  field flattener, IMX455 → 1600 mm, 0.485″/px, 1.29° × 0.86° (1.11 deg²).
+- **Optical-design presets** (**assumed** typical values: obstruction, vanes,
+  corrected-field diameter, as-built wavefront error, f-ratio):
+  Ritchey–Chrétien + flattener (0.38, 1.6°, 60 nm, f/8); corrected
+  Dall–Kirkham (0.33, 1.0°, f/10); fast wide-field Cassegrain + corrector
+  (0.42, 3.0°, 70 nm, f/4); off-axis three-mirror anastigmat (unobstructed,
+  3.0°, 50 nm, f/6). If the sensor's diagonal overfills the corrected field
+  the panel warns and an **assumed** corner blur of
+  1.5″ × ((diagonal / corrected)² − 1) is reported.
+- **Sensor presets** (datasheet-level, treat as **assumed** for a flight
+  build): Sony IMX455 (9576 × 6388, 3.76 µm, QE 0.8, 1.5 e⁻), IMX571 (APS-C,
+  26 MP), IMX461 (102 MP), Gpixel GSENSE4040 (4096², 9 µm, QE 0.72, 3.7 e⁻)
+  and the onsemi KAF-16803 CCD (4096², 9 µm, QE 0.6, 9 e⁻). Frame size,
+  data volume and the particle-hit cross-section follow the sensor.
+- **Pointing presets** (**assumed** RMS jitter over a sub-frame): body pointing
+  with star trackers and reaction wheels 1.5″; fine guidance on the science
+  sensor 0.5″ (default); fine guidance plus a fast steering mirror 0.15″.
+- **Image size budget:** diffraction of the actual pupil, + wavefront error
+  (with Strehl), + jitter (all from the Fourier-optics PSF), ⊕ the pixel
+  (0.68 × pixel, Gaussian-equivalent), sampling in pixels per FWHM, and the
+  field-corner figure; ground seeing alongside. Default: 0.47″ → 0.52″
+  (Strehl 0.61) → 1.52″ → **1.55″ delivered**, 3.2 px per FWHM. With a fast
+  steering mirror: ~0.74″. Pointing stability, not the optics, sets the
+  image size of a 20 cm space telescope.
 - **Photometry:** a clear 400–700 nm band, zero point ≈ 3×10⁶ photons s⁻¹ cm⁻²
   at V = 0, times optics throughput (0.75) and QE.
 - **Sky:** zodiacal light only, since there's no atmosphere. Its brightness depends on
@@ -685,13 +711,14 @@ Australia, Spain, Uzbekistan, Tibetan plateau):
 * **Reported:** duty cycle, sky observable now, queue targets observable now
   and within 24 h, depth, and the number of ground telescopes needed to match
   one FACET telescope at equal depth. Throughput ratio × 10^(0.8 Δm) gives
-  about 9–10 with defaults. The ops console has the table; the public page
+  about 20–25 with the default optics (see below). The ops console has the table; the public page
   has a short "Why put telescopes in space?" card.
 
-FACET's delivered image FWHM (about 2.7″: pixel scale and pointing jitter
-dominate) is currently worse than good ground seeing, so most of the
-advantage comes from duty cycle and dark sky. That is the obvious target
-for the optics work. Ground benefits the model leaves out: large apertures
+With the default optics FACET's delivered FWHM (~1.55″) is a little
+sharper than good ground seeing (1.8″), so the depth advantage adds to the
+duty-cycle advantage and the equivalence rises to ~20–25 ground telescopes.
+It is sensitive to the pointing assumption: body pointing only (1.5″ RMS,
+~3.8″ images) brings it back to single figures. Quote it with that caveat. Ground benefits the model leaves out: large apertures
 are cheap on the ground, and it can be serviced and upgraded.
 
 ## Cost model

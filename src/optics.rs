@@ -565,3 +565,101 @@ mod conv_tests {
         assert!((out[15 * w + 20] - 50.0).abs() < 1e-6);
     }
 }
+
+// ------------------------------------------------------------ blur budget
+
+/// Where the delivered image size comes from, term by term (arcsec FWHM).
+#[derive(Clone, serde::Serialize)]
+pub struct BlurBudget {
+    /// Perfect optics: diffraction of the actual pupil, band-averaged.
+    pub diffraction: f64,
+    /// … plus the as-built wavefront error.
+    pub optics: f64,
+    pub strehl: f64,
+    /// … plus pointing jitter over a sub-frame.
+    pub with_jitter: f64,
+    pub jitter_rms: f64,
+    /// Pixel size, arcsec, and its Gaussian-equivalent FWHM (0.68 × pixel).
+    pub pixel: f64,
+    pub pixel_term: f64,
+    /// On-axis delivered FWHM (optics + jitter ⊕ pixel).
+    pub delivered: f64,
+    /// Pixels per delivered FWHM.
+    pub sampling: f64,
+    /// Field diagonal and the design's corrected-field diameter, deg.
+    pub field_diag_deg: f64,
+    pub corrected_deg: f64,
+    /// ASSUMED extra blur at the field corners when the sensor overfills the
+    /// corrected field: 1.5″ × ((diagonal / corrected)² − 1).
+    pub corner_extra: f64,
+    pub corner_delivered: f64,
+    /// Typical good ground seeing for comparison (the ground model's value).
+    pub ground_seeing: f64,
+}
+
+pub fn blur_budget(o: &crate::obs::ObsParams, sub_s: f64) -> BlurBudget {
+    let hw = Hardware::from_obs(o);
+    let mut perfect = hw.clone();
+    perfect.wfe_nm = 0.0;
+    let diffraction = psf(&perfect, 0.0).fwhm;
+    let p_opt = psf(&hw, 0.0);
+    let jit = hw.jitter_for(sub_s);
+    let p_all = psf(&hw, jit);
+    let pixel = hw.pixel_scale();
+    let pixel_term = 0.68 * pixel;
+    let delivered = p_all.fwhm.hypot(pixel_term);
+    let (_, _, diag) = o.field_deg();
+    let corrected = o.corrected_field_deg.max(0.01);
+    let corner_extra = if diag > corrected { 1.5 * ((diag / corrected).powi(2) - 1.0) } else { 0.0 };
+    BlurBudget {
+        diffraction,
+        optics: p_opt.fwhm,
+        strehl: p_opt.strehl,
+        with_jitter: p_all.fwhm,
+        jitter_rms: jit,
+        pixel,
+        pixel_term,
+        delivered,
+        sampling: delivered / pixel,
+        field_diag_deg: diag,
+        corrected_deg: corrected,
+        corner_extra,
+        corner_delivered: delivered.hypot(corner_extra),
+        ground_seeing: crate::ground::COND.seeing_arcsec,
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use crate::obs::{ObsParams, DESIGNS, POINTING, SENSORS};
+
+    #[test]
+    fn default_budget_beats_ground_seeing() {
+        let o = ObsParams::default();
+        let b = blur_budget(&o, 60.0);
+        eprintln!("default: diff {:.2} opt {:.2} (S {:.2}) jit {:.2} pix {:.2} -> {:.2} ({:.1} px) corner {:.2}", b.diffraction, b.optics, b.strehl, b.with_jitter, b.pixel, b.delivered, b.sampling, b.corner_delivered);
+        assert!(b.delivered < b.ground_seeing && b.delivered > b.diffraction);
+        assert!(b.corner_extra == 0.0);
+    }
+
+    #[test]
+    #[ignore]
+    fn table() {
+        for (pk, p) in POINTING.iter().enumerate() {
+            for (dk, d) in DESIGNS.iter().enumerate() {
+                for (sk, s) in SENSORS.iter().enumerate() {
+                    let mut o = ObsParams::default();
+                    o.apply_design(dk);
+                    o.apply_sensor(sk);
+                    o.apply_pointing(pk);
+                    let b = blur_budget(&o, 60.0);
+                    let hw = crate::imaging::Hardware::from_obs(&o);
+                    let lim = crate::imaging::point_lim_mag(&hw, 60.0, 60.0, 22.0);
+                    let (w, h, _) = o.field_deg();
+                    eprintln!("{:4} {:5} {:10} f/{:.0} {:.2}\"/px field {:.2}x{:.2} ({:.2}) FWHM {:.2} ({:.1}px) corner {:.2} V60 {:.2}", p.0, d.key, s.key, o.focal_mm / 200.0, o.plate_scale(), w, h, w * h, b.delivered, b.sampling, b.corner_delivered, lim);
+                }
+            }
+        }
+    }
+}

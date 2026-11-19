@@ -307,6 +307,29 @@ impl App {
                 "--no-target" => self.target = None,
                 "--target-eyes" => self.obs_params.target_eyes = val().parse().unwrap_or(25),
                 "--click-target" => self.click_target = true,
+                "--sensor" => {
+                    let v = val();
+                    if let Some(k) = crate::obs::SENSORS.iter().position(|s| s.key.eq_ignore_ascii_case(&v)) {
+                        self.obs_params.apply_sensor(k);
+                    }
+                }
+                "--design" => {
+                    let v = val();
+                    if let Some(k) = crate::obs::DESIGNS.iter().position(|d| d.key.eq_ignore_ascii_case(&v)) {
+                        self.obs_params.apply_design(k);
+                    }
+                }
+                "--pointing" => {
+                    let v = val();
+                    if let Some(k) = crate::obs::POINTING.iter().position(|p| p.0.eq_ignore_ascii_case(&v)) {
+                        self.obs_params.apply_pointing(k);
+                    }
+                }
+                "--fratio" => {
+                    let fr: f64 = val().parse().unwrap_or(8.0);
+                    self.obs_params.focal_mm = fr * self.obs_params.aperture_cm * 10.0;
+                    self.obs_params.derive();
+                }
                 "--no-public-demand" => self.public.cfg.on = false,
                 "--public-users" => self.public.cfg.population = val().parse().unwrap_or(20_000),
                 "--no-programme" => self.gen.on = false,
@@ -663,34 +686,113 @@ impl App {
 
         // ---------------- Telescope
         ui.label(RichText::new("Telescope (per satellite)").strong());
-        let o = &mut self.obs_params;
-        ui.add(egui::Slider::new(&mut o.aperture_cm, 5.0..=100.0).text("aperture cm"));
-        ui.add(egui::Slider::new(&mut o.fov_deg, 0.1..=5.0).logarithmic(true).text("FOV ° (square)"));
-        ui.add(egui::Slider::new(&mut o.exp_s, 1.0..=3600.0).logarithmic(true).text("exposure s"));
-        ui.add(egui::Slider::new(&mut o.jitter_arcsec, 0.1..=5.0).text("pointing jitter arcsec RMS"))
-            .on_hover_text("ASSUMPTION: bus pointing stability over a sub-frame. Small-sat buses: ~0.5–2 arcsec.");
-        ui.add(egui::Slider::new(&mut o.wfe_nm, 0.0..=200.0).text("wavefront error nm RMS"))
-            .on_hover_text("ASSUMPTION: total figure + alignment + thermal wavefront error. λ/10 at 633 nm ≈ 63 nm.");
-        ui.horizontal(|ui| {
-            ui.label("spider:");
-            for v in [0u32, 3, 4] {
-                ui.selectable_value(&mut o.spider_vanes, v, if v == 0 { "none (off-axis)".to_string() } else { format!("{v} vanes") });
-            }
-        });
-        ui.add_enabled(o.spider_vanes > 0, egui::Slider::new(&mut o.spider_mm, 0.5..=10.0).text("vane width mm"));
-        ui.add(egui::Slider::new(&mut o.read_noise_e, 0.5..=10.0).text("read noise e-"));
-        ui.add(egui::Slider::new(&mut o.sub_max_s, 10.0..=1200.0).logarithmic(true).text("max sub-frame s"));
         {
-            let hw = crate::imaging::Hardware::from_obs(o);
-            let lim = crate::imaging::point_lim_mag(&hw, o.exp_s, o.exp_s.min(o.sub_max_s), 22.0);
+            use crate::obs::{DESIGNS, POINTING, SENSORS};
+            let o = &mut self.obs_params;
+            let dname = DESIGNS.get(o.design_preset).map(|d| d.name).unwrap_or("custom");
+            egui::ComboBox::from_id_source("design").selected_text(dname).width(300.0).show_ui(ui, |ui| {
+                for (k, d) in DESIGNS.iter().enumerate() {
+                    if ui.selectable_label(o.design_preset == k, d.name).clicked() {
+                        o.apply_design(k);
+                    }
+                }
+            });
+            let fr0 = o.focal_mm / (o.aperture_cm * 10.0);
+            ui.add(egui::Slider::new(&mut o.aperture_cm, 5.0..=100.0).text("aperture cm"));
+            let mut fr = fr0;
+            ui.add(egui::Slider::new(&mut fr, 2.0..=15.0).text("focal ratio f/"));
+            o.focal_mm = fr * o.aperture_cm * 10.0;
+            let sname = SENSORS.get(o.sensor_preset).map(|s| s.name).unwrap_or("custom");
+            egui::ComboBox::from_id_source("sensor").selected_text(sname).width(300.0).show_ui(ui, |ui| {
+                for (k, s) in SENSORS.iter().enumerate() {
+                    if ui.selectable_label(o.sensor_preset == k, s.name).clicked() {
+                        o.apply_sensor(k);
+                    }
+                }
+            });
+            let pname = POINTING.get(o.pointing_preset).map(|p| p.1).unwrap_or("custom jitter");
+            egui::ComboBox::from_id_source("pointing").selected_text(pname).width(300.0).show_ui(ui, |ui| {
+                for (k, p) in POINTING.iter().enumerate() {
+                    if ui.selectable_label(o.pointing_preset == k, format!("{} ({:.2}″ RMS)", p.1, p.2)).clicked() {
+                        o.apply_pointing(k);
+                    }
+                }
+            });
+            o.derive();
+            let (w, h, diag) = o.field_deg();
             ui.label(
                 RichText::new(format!(
-                    "f/{:.1}, {:.0} mm, {:.2}\"/px, Strehl {:.2}, FWHM {:.2}\" · 1 telescope, {:.0} s: V≈{:.1} (5σ, dark sky)",
-                    hw.f_ratio(),
-                    hw.focal_mm(),
-                    hw.pixel_scale(),
-                    hw.psf(o.exp_s.min(o.sub_max_s)).strehl,
-                    hw.fwhm(o.exp_s.min(o.sub_max_s)),
+                    "{:.0} mm focal length · {:.3}″/px · field {:.2}° × {:.2}° ({:.2} deg², {:.2}° diagonal)",
+                    o.focal_mm,
+                    o.plate_scale(),
+                    w,
+                    h,
+                    w * h,
+                    diag
+                ))
+                .small(),
+            );
+            if diag > o.corrected_field_deg {
+                ui.label(
+                    RichText::new(format!(
+                        "The sensor overfills this design's corrected field ({:.1}° diameter): stars soften toward the corners. Use a slower focal ratio, a smaller sensor or a wider-field design.",
+                        o.corrected_field_deg
+                    ))
+                    .small()
+                    .color(egui::Color32::from_rgb(240, 180, 90)),
+                );
+            }
+        }
+        let o = &mut self.obs_params;
+        ui.add(egui::Slider::new(&mut o.exp_s, 1.0..=3600.0).logarithmic(true).text("exposure s"));
+        egui::CollapsingHeader::new(RichText::new("Optics and detector details").small()).id_source("optics_adv").show(ui, |ui| {
+            if ui
+                .add(egui::Slider::new(&mut o.jitter_arcsec, 0.05..=5.0).logarithmic(true).text("pointing jitter arcsec RMS"))
+                .on_hover_text("ASSUMPTION: pointing stability over a sub-frame.")
+                .changed()
+            {
+                o.pointing_preset = usize::MAX;
+            }
+            ui.add(egui::Slider::new(&mut o.wfe_nm, 0.0..=200.0).text("wavefront error nm RMS"))
+                .on_hover_text("ASSUMPTION: total figure + alignment + thermal wavefront error. λ/10 at 633 nm ≈ 63 nm.");
+            ui.add(egui::Slider::new(&mut o.obstruction, 0.0..=0.6).text("central obstruction (diameter ratio)"));
+            ui.horizontal(|ui| {
+                ui.label("spider:");
+                for v in [0u32, 3, 4] {
+                    ui.selectable_value(&mut o.spider_vanes, v, if v == 0 { "none (off-axis)".to_string() } else { format!("{v} vanes") });
+                }
+            });
+            ui.add_enabled(o.spider_vanes > 0, egui::Slider::new(&mut o.spider_mm, 0.5..=10.0).text("vane width mm"));
+            ui.add(egui::Slider::new(&mut o.corrected_field_deg, 0.3..=5.0).text("corrected field ° (design)"));
+            ui.add(egui::Slider::new(&mut o.read_noise_e, 0.5..=10.0).text("read noise e-"));
+            ui.add(egui::Slider::new(&mut o.sub_max_s, 10.0..=1200.0).logarithmic(true).text("max sub-frame s"));
+        });
+        {
+            let sub = o.exp_s.min(o.sub_max_s);
+            let b = crate::optics::blur_budget(o, sub);
+            let hw = crate::imaging::Hardware::from_obs(o);
+            let lim = crate::imaging::point_lim_mag(&hw, o.exp_s, sub, 22.0);
+            ui.label(RichText::new("Image size budget (FWHM)").small().strong());
+            egui::Grid::new("blur").striped(true).show(ui, |ui| {
+                let row = |ui: &mut egui::Ui, a: &str, v: String| {
+                    ui.label(RichText::new(a).small());
+                    ui.label(RichText::new(v).small());
+                    ui.end_row();
+                };
+                row(ui, "diffraction (perfect optics)", format!("{:.2}″", b.diffraction));
+                row(ui, "+ wavefront error", format!("{:.2}″ (Strehl {:.2})", b.optics, b.strehl));
+                row(ui, "+ pointing jitter", format!("{:.2}″ ({:.2}″ RMS)", b.with_jitter, b.jitter_rms));
+                row(ui, "+ pixel size", format!("{:.2}″ ({:.2}″ pixels)", b.delivered, b.pixel));
+                if b.corner_extra > 0.0 {
+                    row(ui, "at the field corners", format!("{:.2}″", b.corner_delivered));
+                }
+                row(ui, "ground, good site (for comparison)", format!("{:.1}″ seeing", b.ground_seeing));
+            });
+            ui.label(
+                RichText::new(format!(
+                    "{:.1} pixels per FWHM ({}) · 1 telescope, {:.0} s: V≈{:.1} (5σ, dark sky)",
+                    b.sampling,
+                    if b.sampling < 1.5 { "undersampled" } else if b.sampling < 2.5 { "well sampled" } else { "oversampled: data wasted" },
                     o.exp_s,
                     lim
                 ))

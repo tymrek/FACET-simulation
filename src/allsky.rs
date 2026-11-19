@@ -67,7 +67,7 @@ impl App {
         };
         let passes: Vec<Pass> = [60.0, 300.0, 3600.0].iter().map(|&e| pass(e)).collect();
         let p60 = passes[0].seconds;
-        let frame_bytes = o.sensor_px * (o.sensor_px * 2.0 / 3.0) * 2.0;
+        let frame_bytes = o.sensor_px * o.sensor_py * 2.0;
         AllSky {
             available_deg2: available,
             fields,

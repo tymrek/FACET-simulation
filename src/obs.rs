@@ -118,11 +118,116 @@ pub struct ObsParams {
     pub stray_slope: f64,
     /// Model sunward stray light at all (off = perfect baffle).
     pub stray_on: bool,
+    /// Telescope focal length, mm (design input: with the sensor it sets the
+    /// plate scale and field of view).
+    pub focal_mm: f64,
+    /// Sensor rows (sensor_px is columns).
+    pub sensor_py: f64,
+    /// Corrected-field diameter of the optical design, deg (ASSUMED per design).
+    pub corrected_field_deg: f64,
+    /// Selected presets (indices into SENSORS / DESIGNS / POINTING; usize::MAX = custom).
+    pub sensor_preset: usize,
+    pub design_preset: usize,
+    pub pointing_preset: usize,
 }
+
+/// Detector presets: name, columns, rows, pixel µm, QE, read noise e⁻,
+/// dark e⁻/s/px (cooled), full well e⁻. Typical datasheet-level figures;
+/// treat as ASSUMED for a flight build.
+pub struct SensorSpec {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub cols: f64,
+    pub rows: f64,
+    pub pixel_um: f64,
+    pub qe: f64,
+    pub read_noise_e: f64,
+    pub dark_e_s: f64,
+    pub full_well_e: f64,
+}
+pub const SENSORS: [SensorSpec; 5] = [
+    SensorSpec { key: "imx455", name: "Sony IMX455 · full frame, 61 MP, 3.76 µm", cols: 9576.0, rows: 6388.0, pixel_um: 3.76, qe: 0.80, read_noise_e: 1.5, dark_e_s: 0.003, full_well_e: 51_000.0 },
+    SensorSpec { key: "imx571", name: "Sony IMX571 · APS-C, 26 MP, 3.76 µm", cols: 6252.0, rows: 4176.0, pixel_um: 3.76, qe: 0.80, read_noise_e: 1.5, dark_e_s: 0.003, full_well_e: 51_000.0 },
+    SensorSpec { key: "imx461", name: "Sony IMX461 · medium format, 102 MP, 3.76 µm", cols: 11664.0, rows: 8750.0, pixel_um: 3.76, qe: 0.80, read_noise_e: 1.5, dark_e_s: 0.003, full_well_e: 51_000.0 },
+    SensorSpec { key: "gsense4040", name: "Gpixel GSENSE4040 · 4k × 4k, 16.8 MP, 9 µm", cols: 4096.0, rows: 4096.0, pixel_um: 9.0, qe: 0.72, read_noise_e: 3.7, dark_e_s: 0.04, full_well_e: 70_000.0 },
+    SensorSpec { key: "kaf16803", name: "onsemi KAF-16803 CCD · 4k × 4k, 16.8 MP, 9 µm", cols: 4096.0, rows: 4096.0, pixel_um: 9.0, qe: 0.60, read_noise_e: 9.0, dark_e_s: 0.02, full_well_e: 100_000.0 },
+];
+
+/// Optical design presets: central obstruction, spider vanes, corrected
+/// field diameter (deg) and a representative as-built wavefront error.
+/// ASSUMED typical values for a 20 cm class space telescope.
+pub struct DesignSpec {
+    pub key: &'static str,
+    pub name: &'static str,
+    pub obstruction: f64,
+    pub vanes: u32,
+    pub corrected_field_deg: f64,
+    pub wfe_nm: f64,
+    pub f_ratio: f64,
+}
+pub const DESIGNS: [DesignSpec; 4] = [
+    DesignSpec { key: "rc", name: "Ritchey–Chrétien + field flattener", obstruction: 0.38, vanes: 4, corrected_field_deg: 1.6, wfe_nm: 60.0, f_ratio: 8.0 },
+    DesignSpec { key: "dk", name: "Corrected Dall–Kirkham", obstruction: 0.33, vanes: 4, corrected_field_deg: 1.0, wfe_nm: 60.0, f_ratio: 10.0 },
+    DesignSpec { key: "wide", name: "Fast wide-field Cassegrain + corrector", obstruction: 0.42, vanes: 4, corrected_field_deg: 3.0, wfe_nm: 70.0, f_ratio: 4.0 },
+    DesignSpec { key: "tma", name: "Off-axis three-mirror anastigmat (unobstructed)", obstruction: 0.0, vanes: 0, corrected_field_deg: 3.0, wfe_nm: 50.0, f_ratio: 6.0 },
+];
+
+/// Pointing-stability presets: name and RMS jitter over a sub-frame, arcsec.
+pub const POINTING: [(&str, &str, f64); 3] = [
+    ("body", "Body pointing only (star trackers, reaction wheels)", 1.5),
+    ("fine", "Fine guidance on the science sensor", 0.5),
+    ("fsm", "Fine guidance + fast steering mirror", 0.15),
+];
+
+impl ObsParams {
+    pub fn apply_sensor(&mut self, k: usize) {
+        let s = &SENSORS[k];
+        self.sensor_px = s.cols;
+        self.sensor_py = s.rows;
+        self.pixel_um = s.pixel_um;
+        self.qe = s.qe;
+        self.read_noise_e = s.read_noise_e;
+        self.dark_e_s = s.dark_e_s;
+        self.full_well_e = s.full_well_e;
+        self.sensor_preset = k;
+        self.derive();
+    }
+    pub fn apply_design(&mut self, k: usize) {
+        let d = &DESIGNS[k];
+        self.obstruction = d.obstruction;
+        self.spider_vanes = d.vanes;
+        self.corrected_field_deg = d.corrected_field_deg;
+        self.wfe_nm = d.wfe_nm;
+        self.focal_mm = d.f_ratio * self.aperture_cm * 10.0;
+        self.design_preset = k;
+        self.derive();
+    }
+    pub fn apply_pointing(&mut self, k: usize) {
+        self.jitter_arcsec = POINTING[k].2;
+        self.pointing_preset = k;
+    }
+    /// Plate scale, arcsec per pixel.
+    pub fn plate_scale(&self) -> f64 {
+        self.pixel_um * 1e-3 / self.focal_mm.max(1.0) * 206_264.806
+    }
+    /// Field of view, deg (width, height, diagonal).
+    pub fn field_deg(&self) -> (f64, f64, f64) {
+        let s = self.plate_scale() / 3600.0;
+        let (w, h) = (self.sensor_px * s, self.sensor_py * s);
+        (w, h, w.hypot(h))
+    }
+    /// Recompute the derived field: `fov_deg` is the side of the square of
+    /// equal area, used wherever the sim needs one footprint size.
+    pub fn derive(&mut self) {
+        let (w, h, _) = self.field_deg();
+        self.fov_deg = (w * h).sqrt();
+    }
+}
+
 
 impl Default for ObsParams {
     fn default() -> Self {
-        ObsParams {
+        let mut o = ObsParams {
             aperture_cm: 20.0,
             fov_deg: 1.0,
             sun_excl_deg: 45.0,
@@ -134,7 +239,7 @@ impl Default for ObsParams {
             neo_band_deg: 20.0,
             wavelength_nm: 550.0,
             overhead_s: 15.0,
-            obstruction: 0.33,
+            obstruction: 0.38,
             sensor_px: 9576.0,
             pixel_um: 3.76,
             qe: 0.8,
@@ -142,7 +247,7 @@ impl Default for ObsParams {
             read_noise_e: 1.5,
             dark_e_s: 0.003,
             full_well_e: 51_000.0,
-            jitter_arcsec: 1.0,
+            jitter_arcsec: 0.5,
             sub_max_s: 300.0,
             wfe_nm: 60.0,
             spider_vanes: 4,
@@ -161,7 +266,15 @@ impl Default for ObsParams {
             stray_sb45: 21.0,
             stray_slope: 7.5,
             stray_on: true,
-        }
+            focal_mm: 1600.0,
+            sensor_py: 6388.0,
+            corrected_field_deg: 1.6,
+            sensor_preset: 0,
+            design_preset: 0,
+            pointing_preset: 1,
+        };
+        o.derive();
+        o
     }
 }
 
