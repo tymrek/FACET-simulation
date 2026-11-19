@@ -6,6 +6,13 @@ point at, stack, mosaic and sweep.
 
 Rust + egui/eframe (OpenGL via glow). One native binary, data embedded.
 
+**Status.** A planning and pitch tool for the [FACET concept proposal](https://www.kermyt.com/FACET/).
+Every performance figure it shows is an unchecked soft estimate (see
+[Accuracy and assumptions](#accuracy-and-assumptions)). It is not a validated
+detection-performance model: that is the first job of the proposed concept study.
+Where its assumptions differ from the proposal documents, the
+[simulator page](https://www.kermyt.com/FACET/facet-simulator.html) lists the differences.
+
 ## Build & run
 
 ```sh
@@ -21,8 +28,9 @@ one, and clicking the sky only sets the target when *Click on the sky sets the
 target* is ticked (`--click-target`).
 
 Needs Rust ≥ 1.79 (the windowing stack pulls `quick-xml`, which needs 1.79).
-The distro Cargo 1.75 on *crash* is too old. Install a user-local toolchain
-with rustup. It lives in `~/.rustup` and `~/.cargo` and leaves `/usr/bin/cargo` alone:
+Some distributions ship an older Cargo. If yours does, install a user-local
+toolchain with rustup. It lives in `~/.rustup` and `~/.cargo` and leaves the
+system `cargo` alone:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # then open a new shell
@@ -686,10 +694,13 @@ about 1.5 PB/day at 10,000. The panel compares four on-board products:
 
 It compares them against two ways down:
 
-* **Starlink optical relay** (`--no-relay` to disable): an **assumed**
-  service, since buying relay access is not an established commercial
-  offering. Defaults are 10 Gb/s per FACET terminal and 1,500 km range;
-  line of sight must clear 100 km altitude.
+* **Starlink optical relay** (`--no-relay` to disable). SpaceX sells its
+  "mini laser" terminal (rated 25 Gb/s at up to 4,000 km) to third-party
+  spacecraft builders such as Muon Space and Starcloud, but the first
+  customer satellites only fly from 2027, so service terms and the throughput
+  a third party actually gets are still **assumed**. Defaults are a
+  conservative 10 Gb/s per FACET terminal and 1,500 km range; line of sight
+  must clear 100 km altitude.
 * **Direct-to-ground stations** (generic, assumed): 20 polar-heavy sites ×
   2 antennas × 1.2 Gb/s × 70 %.
 
@@ -755,6 +766,15 @@ sky; the public page shows a plain-language card.
 | 1 Sunward Tunguska-class | 50 m, 9 Mt | 10 d | radiant 55° from the Sun | FACET finds it ~1 day out and is certain within the hour; ground never sees it |
 | 2 Chelyabinsk-class from the Sun | 20 m, 0.7 Mt | 4 d | radiant 50° | FACET: hours of warning; ground: none |
 | 3 Night-side city-killer | 140 m, 120 Mt | 60 d | radiant 150° | ground finds it first (deeper); FACET makes impact certain ~6 days sooner |
+
+**Read the presets as illustrations of the method, not performance claims.**
+FACET discovery here needs one trailed 60 s exposure from a single telescope.
+Synthetic tracking (shift-and-stack of many short frames along trial
+velocities) is not modelled, and neither is sunward stray light near the
+Sun keep-out edge (see `TODO.md`). Both matter most for exactly the sunward
+presets, in opposite directions: synthetic tracking would find fainter objects,
+and stray light would raise the background. The ground model is a generic
+composite with assumed parameters, not any real survey.
 
 **Method.**
 * *Orbit*: heliocentric two-body, universal-variable Kepler propagation. The
