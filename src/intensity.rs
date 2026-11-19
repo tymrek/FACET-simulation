@@ -87,7 +87,6 @@ pub struct Cluster {
     pub why: String,
 }
 
-#[derive(Default)]
 pub struct Ii {
     pub cfg: IiCfg,
     pub clusters: Vec<Cluster>,
@@ -101,6 +100,24 @@ pub struct Ii {
     rng: u64,
     star_key: usize,
     pub fit: Option<(f64, f64)>,
+}
+
+impl Default for Ii {
+    fn default() -> Self {
+        Ii {
+            cfg: IiCfg::default(),
+            clusters: Vec::new(),
+            key: (0, 0),
+            w: vec![0.0; NBINS],
+            wy: vec![0.0; NBINS],
+            uv: Vec::new(),
+            on_target_s: 0.0,
+            pair_s: 0.0,
+            rng: 0x51ab_cdef_0123_4567,
+            star_key: usize::MAX,
+            fit: None,
+        }
+    }
 }
 
 fn bessel_j1(x: f64) -> f64 {
@@ -606,5 +623,15 @@ mod tests {
         let k = ii.k_rate(0.027, 3.0e6, 0.0);
         eprintln!("SNR per sqrt(s) at V=0: {k:.3}, timing {:.0} ps, null at {b0:.0} m", ii.tau_s() * 1e12);
         assert!(k > 0.03 && k < 0.5);
+    }
+}
+
+#[cfg(test)]
+mod default_tests {
+    #[test]
+    fn json_and_fit_work_when_off() {
+        let ii = super::Ii::default();
+        assert_eq!(ii.w.len(), super::NBINS);
+        assert!(ii.fit_theta().is_none());
     }
 }
