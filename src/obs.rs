@@ -107,6 +107,13 @@ pub struct ObsParams {
     /// Most telescopes the director's target may take in Stack/Mosaic
     /// (0 = every telescope that can see it). The rest keep surveying.
     pub target_eyes: u32,
+    /// Sunlight scattered into the telescope (baffle point-source
+    /// transmittance): surface brightness at 45° solar elongation,
+    /// V mag/arcsec², and its fall-off in mag per decade of elongation.
+    pub stray_sb45: f64,
+    pub stray_slope: f64,
+    /// Model sunward stray light at all (off = perfect baffle).
+    pub stray_on: bool,
 }
 
 impl Default for ObsParams {
@@ -147,6 +154,9 @@ impl Default for ObsParams {
             coarse_jitter_arcsec: 6.0,
             guide_mag: 13.0,
             target_eyes: 25,
+            stray_sb45: 21.0,
+            stray_slope: 7.5,
+            stray_on: true,
         }
     }
 }

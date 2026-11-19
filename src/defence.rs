@@ -586,7 +586,7 @@ impl Scenario {
         let inp = StepIn { jd, ..*inp };
         let (v, rate, u) = self.sky_now(&inp);
         let o = inp.o;
-        let sky_sb = crate::imaging::zodi_sb(u, inp.sun);
+        let sky_sb = crate::imaging::sky_sb(u, inp.sun, o);
         let fwhm = inp.hw.fwhm(60.0).max(0.3);
         // Search: one telescope, 60 s, trailed.
         let trail = rate * 60.0;

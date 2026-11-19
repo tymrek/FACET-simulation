@@ -150,6 +150,7 @@ pub fn earthshine_sb(p: V3, d: V3, sun: V3, limb_r: f64) -> Option<f64> {
 
 /// Background-limited efficiency: dark-sky-equivalent time per second of
 /// exposure when Earthshine `es` adds to sky `sky` (both mag/arcsec²).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn bg_efficiency(sky: f64, es: Option<f64>) -> f64 {
     match es {
         None => 1.0,
@@ -256,6 +257,65 @@ pub fn deorbit_dv(alt_km: f64, perigee_km: f64) -> f64 {
     (vc - va) * 1e3
 }
 
+// ----------------------------------------------------- Sun keep-out trade
+
+/// One row of the Sun keep-out trade: what a given keep-out angle buys and costs.
+#[derive(Clone, Serialize)]
+pub struct KeepRow {
+    pub keepout_deg: f64,
+    /// Share of days over the next three years each inner planet is outside it.
+    pub venus_frac: f64,
+    pub mercury_frac: f64,
+    /// Sky outside the keep-out, deg².
+    pub open_deg2: f64,
+    /// Background at the keep-out edge on the ecliptic, V mag/arcsec²
+    /// (zodiacal + stray), and the stray light alone.
+    pub edge_sb: f64,
+    pub edge_stray_sb: f64,
+    /// Depth at the edge versus a dark sky (ecliptic pole, 22.3), background-
+    /// limited, mag; and the part of that due to stray light alone.
+    pub edge_depth_loss: f64,
+    pub edge_stray_loss: f64,
+}
+
+/// Keep-out trade over 20°–60°, inner-planet visibility from the sim's own
+/// ephemeris sampled daily for three years from `jd`.
+pub fn keepout_trade(jd: f64, o: &crate::obs::ObsParams) -> Vec<KeepRow> {
+    let days = 3 * 365;
+    let el: Vec<(f64, f64)> = (0..days)
+        .map(|k| {
+            let b = crate::astro::bodies(jd + k as f64);
+            (deg(b[3].dir.angle(b[0].dir)), deg(b[2].dir.angle(b[0].dir)))
+        })
+        .collect();
+    let sun = V3::new(1.0, 0.0, 0.0).rot_x(rad(crate::astro::OBLIQUITY_J2000_DEG));
+    let mut ks: Vec<f64> = (0..9).map(|k| 20.0 + 5.0 * k as f64).collect();
+    if !ks.iter().any(|&k| (k - o.sun_excl_deg).abs() < 0.5) {
+        ks.push(o.sun_excl_deg);
+        ks.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    }
+    ks.iter()
+        .map(|&k| {
+            // A point on the ecliptic `k` from the Sun.
+            let ecl_pole = V3::Z.rot_x(rad(crate::astro::OBLIQUITY_J2000_DEG));
+            let d = sun.rot_axis(ecl_pole, rad(k));
+            let z = crate::imaging::zodi_sb(d, sun);
+            let st = crate::imaging::sun_stray_sb(d, sun, o.stray_sb45, o.stray_slope);
+            let tot = if o.stray_on { crate::imaging::add_sb(z, st) } else { z };
+            KeepRow {
+                keepout_deg: k,
+                venus_frac: el.iter().filter(|e| e.0 > k).count() as f64 / days as f64,
+                mercury_frac: el.iter().filter(|e| e.1 > k).count() as f64 / days as f64,
+                open_deg2: crate::allsky::SKY_DEG2 * (1.0 + rad(k).cos()) / 2.0,
+                edge_sb: tot,
+                edge_stray_sb: st,
+                edge_depth_loss: 1.25 * (10f64.powf(-0.4 * tot) / 10f64.powf(-0.4 * 22.3)).log10(),
+                edge_stray_loss: 1.25 * (10f64.powf(-0.4 * tot) / 10f64.powf(-0.4 * z)).log10(),
+            }
+        })
+        .collect()
+}
+
 // --------------------------------------------------------------- State
 
 #[derive(Clone, Copy, PartialEq, Serialize)]
@@ -333,6 +393,11 @@ pub struct Environment {
     pub flagged_s: f64,
     /// Exposure seconds lost to Earthshine (raw − dark-sky equivalent).
     pub earthshine_lost_s: f64,
+    /// Exposure seconds lost to sunward stray light.
+    pub sunlight_lost_s: f64,
+    pub n_sun: usize,
+    pub keepout: Vec<KeepRow>,
+    pub keepout_key: (i64, i64, i64, i64),
     pub exposed_s: f64,
     /// Fleet proton fluence through the sensors, p/cm² summed over satellites.
     pub fluence: f64,
@@ -362,7 +427,8 @@ impl Environment {
         let cfg = self.cfg.clone();
         let (trade, tk, life, contour, ck) =
             (std::mem::take(&mut self.trade), self.trade_key, self.life, std::mem::take(&mut self.contour), self.contour_key);
-        *self = Environment { cfg, trade, trade_key: tk, life, contour, contour_key: ck, ..Default::default() };
+        let (keepout, kk) = (std::mem::take(&mut self.keepout), self.keepout_key);
+        *self = Environment { cfg, trade, trade_key: tk, life, contour, contour_key: ck, keepout, keepout_key: kk, ..Default::default() };
     }
 
     /// Refresh the altitude trade study and lifetime when inputs change.
@@ -419,6 +485,9 @@ impl Environment {
             "earthshine_on": self.cfg.earthshine,
             "earthshine_now": self.n_shine,
             "earthshine_lost_pct": if self.exposed_s > 0.0 { 100.0 * self.earthshine_lost_s / self.exposed_s } else { 0.0 },
+            "sunlight_now": self.n_sun,
+            "sunlight_lost_pct": if self.exposed_s > 0.0 { 100.0 * self.sunlight_lost_s / self.exposed_s } else { 0.0 },
+            "keepout": self.keepout,
             "fluence_per_sat_yr": self.fluence / sat * 365.25 * 86_400.0,
             "hits_per_day": self.hits / days,
             "candidates_per_day": self.candidates / days,
@@ -476,6 +545,25 @@ mod tests {
     }
 
     #[test]
+    fn keepout() {
+        let o = crate::obs::ObsParams::default();
+        let jd = 2_461_360.5; // 2026-11
+        let t = keepout_trade(jd, &o);
+        let at = |k: f64| t.iter().find(|r| (r.keepout_deg - k).abs() < 0.1).unwrap().clone();
+        let (k20, k30, k45, k60) = (at(20.0), at(30.0), at(45.0), at(60.0));
+        eprintln!(
+            "venus 20 {:.2} 30 {:.2} 45 {:.2} 60 {:.2} · mercury 20 {:.2} 30 {:.2} · edge loss 20 {:.2} 45 {:.2} 60 {:.2}",
+            k20.venus_frac, k30.venus_frac, k45.venus_frac, k60.venus_frac, k20.mercury_frac, k30.mercury_frac,
+            k20.edge_stray_loss, k45.edge_stray_loss, k60.edge_stray_loss
+        );
+        assert!(k45.venus_frac > 0.03 && k45.venus_frac < 0.25);
+        assert!(k30.venus_frac > k45.venus_frac && k60.venus_frac == 0.0);
+        assert!(k30.mercury_frac == 0.0 && k20.mercury_frac > 0.0);
+        assert!(k20.edge_depth_loss > k45.edge_depth_loss + 1.0 && k60.edge_depth_loss > 0.0);
+        assert!(k20.edge_stray_loss > k60.edge_stray_loss && k60.edge_stray_loss > 0.0);
+    }
+
+    #[test]
     fn earthshine() {
         let p = V3::new(EARTH_RADIUS_KM + 550.0, 0.0, 0.0);
         let sun = V3::new(1.0, 0.0, 0.0);
@@ -511,6 +599,14 @@ impl App {
         let year = year_of(self.jd);
         let (alt, inc) = (self.shell.params.alt_km, self.shell.params.inc_deg);
         self.env.refresh_cached(alt, inc, year);
+        {
+            let o = &self.obs_params;
+            let key = ((self.jd / 30.0) as i64, (o.stray_sb45 * 10.0) as i64, (o.stray_slope * 10.0 + if o.stray_on { 0.0 } else { 1e4 }) as i64, (o.sun_excl_deg * 2.0).round() as i64);
+            if key != self.env.keepout_key {
+                self.env.keepout_key = key;
+                self.env.keepout = keepout_trade(self.jd, o);
+            }
+        }
         let n = self.shell.pos.len();
         let gm = crate::astro::gmst(self.jd);
         let sun = self.bodies[0].dir;
@@ -521,25 +617,31 @@ impl App {
         let pos = &self.shell.pos;
         let att = &self.obs.att;
         let obs_dt = &self.obs.obs_dt;
-        // Per satellite: (proton flux, dark-sky efficiency of its exposure).
-        let per: Vec<(f64, f64)> = (0..n)
+        // Per satellite: (proton flux, dark-sky efficiency, share of the loss
+        // due to sunlight rather than Earthshine).
+        let per: Vec<(f64, f64, f64)> = (0..n)
             .into_par_iter()
             .map(|i| {
                 let p = pos[i];
                 let (lat, lon) = latlon(p, gm);
                 let f = saa_flux(lat, lon, p.norm() - EARTH_RADIUS_KM, year);
-                let eff = if cfg.earthshine && obs_dt.get(i).copied().unwrap_or(0.0) > 0.0 {
-                    let d = att[i].dir;
-                    let es = earthshine_sb(p, d, sun, limb);
-                    if es.is_some() {
-                        bg_efficiency(crate::imaging::zodi_sb(d, sun), es)
-                    } else {
-                        1.0
-                    }
+                if obs_dt.get(i).copied().unwrap_or(0.0) <= 0.0 {
+                    return (f, 1.0, 0.0);
+                }
+                let d = att[i].dir;
+                let b0 = 10f64.powf(-0.4 * crate::imaging::zodi_sb(d, sun));
+                let be = if cfg.earthshine { earthshine_sb(p, d, sun, limb).map(|m| 10f64.powf(-0.4 * m)).unwrap_or(0.0) } else { 0.0 };
+                let bs = if o.stray_on {
+                    10f64.powf(-0.4 * crate::imaging::sun_stray_sb(d, sun, o.stray_sb45, o.stray_slope))
                 } else {
-                    1.0
+                    0.0
                 };
-                (f, eff)
+                let extra = be + bs;
+                if extra <= 0.0 {
+                    (f, 1.0, 0.0)
+                } else {
+                    (f, b0 / (b0 + extra), bs / extra)
+                }
             })
             .collect();
         let e = &mut self.env;
@@ -549,6 +651,7 @@ impl App {
         e.shine.resize(n, 1.0);
         e.n_in_saa = 0;
         e.n_shine = 0;
+        e.n_sun = 0;
         if dt <= 0.0 {
             e.n_in_saa = e.in_saa.iter().filter(|&&b| b).count();
             return;
@@ -561,7 +664,7 @@ impl App {
             if self.obs.hold.get(i).copied().unwrap_or(false) {
                 continue;
             }
-            let (flux, eff) = per[i];
+            let (flux, eff, sun_share) = per[i];
             let in_saa = e.in_saa[i];
             e.sat_s += dt;
             e.fluence += (flux + GCR_FLUX) * dt;
@@ -603,7 +706,11 @@ impl App {
                 if eff < 0.7 {
                     e.n_shine += 1;
                 }
-                e.earthshine_lost_s += raw * (1.0 - eff);
+                e.earthshine_lost_s += raw * (1.0 - eff) * (1.0 - sun_share);
+                e.sunlight_lost_s += raw * (1.0 - eff) * sun_share;
+                if eff < 0.7 && sun_share > 0.5 {
+                    e.n_sun += 1;
+                }
                 self.obs.obs_dt[i] = raw * eff;
             }
         }
@@ -683,6 +790,57 @@ impl App {
             ))
             .small());
         }
+        ui.add_space(4.0);
+        ui.label(RichText::new("Sunward stray light and the Sun keep-out").small().strong());
+        {
+            let o = &mut self.obs_params;
+            ui.checkbox(&mut o.stray_on, "model sunlight scattered past the baffle");
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("baffle:").small());
+                for (name, v, tip) in [
+                    ("basic tube", 19.5, "a plain light-shield tube"),
+                    ("good baffle", 21.0, "vaned baffle and blackened tube (default)"),
+                    ("sunshade", 22.5, "deployable sunshade beyond the baffle"),
+                ] {
+                    if ui.selectable_label((o.stray_sb45 - v).abs() < 0.05, name).on_hover_text(tip).clicked() {
+                        o.stray_sb45 = v;
+                    }
+                }
+            });
+            ui.add(egui::Slider::new(&mut o.stray_sb45, 17.0..=24.0).text("stray light at 45° (V mag/arcsec²)"));
+            ui.add(egui::Slider::new(&mut o.sun_excl_deg, 5.0..=120.0).text("Sun exclusion °"));
+        }
+        let e = &self.env;
+        if self.obs_params.stray_on && e.exposed_s > 0.0 {
+            ui.label(RichText::new(format!(
+                "{} telescopes now lose > 30 % to sunlight · {:.1} % of all exposure time lost (dark-sky equivalent)",
+                e.n_sun,
+                100.0 * e.sunlight_lost_s / e.exposed_s
+            ))
+            .small());
+        }
+        let cur = self.obs_params.sun_excl_deg;
+        egui::CollapsingHeader::new(RichText::new("Keep-out trade").small()).id_source("keep_trade").default_open(true).show(ui, |ui| {
+            egui::Grid::new("keepout").striped(true).show(ui, |ui| {
+                for h in ["keep-out", "Venus visible", "Mercury visible", "open sky", "sky at edge", "depth vs dark sky", "of which stray light"] {
+                    ui.label(RichText::new(h).small().strong());
+                }
+                ui.end_row();
+                for r in &e.keepout {
+                    let me = (r.keepout_deg - cur).abs() < 0.5;
+                    let t = |s: String| if me { RichText::new(s).small().strong() } else { RichText::new(s).small() };
+                    ui.label(t(format!("{:.0}°", r.keepout_deg)));
+                    ui.label(t(format!("{:.0} %", 100.0 * r.venus_frac)));
+                    ui.label(t(format!("{:.0} %", 100.0 * r.mercury_frac)));
+                    ui.label(t(format!("{:.0} deg²", r.open_deg2)));
+                    ui.label(t(format!("{:.1}", r.edge_sb)));
+                    ui.label(t(format!("−{:.1} mag", r.edge_depth_loss)));
+                    ui.label(t(format!("−{:.2} mag", r.edge_stray_loss)));
+                    ui.end_row();
+                }
+            });
+            ui.label(RichText::new("Venus and Mercury: share of days over the next three years outside the keep-out (this ephemeris). Edge figures: on the ecliptic, at the keep-out angle, zodiacal light plus stray light.").small().weak());
+        });
         ui.add_space(4.0);
         ui.label(RichText::new("Orbital lifetime and disposal").small().strong());
         let c = &mut self.env.cfg;

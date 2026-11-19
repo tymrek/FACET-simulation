@@ -482,7 +482,7 @@ impl App {
                         }
                         if let Some(hw) = &r.hw {
                             let sub = r.exposure_s.min(hw.sub_max_s);
-                            let lim = crate::imaging::point_lim_mag(hw, r.progress_s, sub, crate::imaging::zodi_sb(r.dir, self.bodies[0].dir));
+                            let lim = crate::imaging::point_lim_mag(hw, r.progress_s, sub, crate::imaging::sky_sb(r.dir, self.bodies[0].dir, &self.obs_params));
                             crate::programme::Science::push_capped(&mut cs.depth, lim);
                         }
                         if let Some(v) = r.inv_idx {
@@ -1030,7 +1030,7 @@ impl App {
             "mode_label": self.mode.label(),
             "shell": {
                 "n": n, "planes": sp.effective_planes(), "planes_setting": sp.planes, "phasing": sp.phasing,
-                "alt_km": sp.alt_km, "inc_deg": r2(sp.inc_deg), "sso": self.sun_sync,
+                "alt_km": sp.alt_km, "inc_deg": r2(sp.inc_deg), "sun_excl_deg": self.obs_params.sun_excl_deg, "sso": self.sun_sync,
                 "raan_span_deg": sp.raan_span_deg,
                 "period_min": r2(sp.period_s() / 60.0),
                 "node_drift_deg_day": r2(self.shell.raan_drift_deg_per_day()),

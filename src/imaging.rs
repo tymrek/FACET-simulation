@@ -152,6 +152,36 @@ pub fn sb_lim(hw: &Hardware, total_s: f64, sub_s: f64, sky_sb: f64) -> f64 {
 }
 
 /// Zodiacal-light surface brightness (V mag/arcsec²) toward `d`.
+/// Sunlight scattered off the baffle and tube into the field, V mag/arcsec²
+/// (ASSUMED parametric point-source-transmittance law: brightness falls as
+/// elongation^-3, i.e. 7.5 mag per decade, from `sb45` at 45°, then tapers
+/// to nothing between 60° and 100° as the Sun drops behind the aperture
+/// plane and the sunshade and can no longer light the baffle interior).
+pub fn sun_stray_sb(d: V3, sun: V3, sb45: f64, slope: f64) -> f64 {
+    let e = deg(d.angle(sun)).max(5.0);
+    let taper = ((100.0 - e) / 40.0).clamp(0.0, 1.0).powi(2);
+    if taper <= 1e-6 {
+        return 40.0;
+    }
+    sb45 + slope * (e / 45.0).log10() - 2.5 * taper.log10()
+}
+
+/// Sum of two surface brightnesses (mag/arcsec²).
+pub fn add_sb(a: f64, b: f64) -> f64 {
+    -2.5 * (10f64.powf(-0.4 * a) + 10f64.powf(-0.4 * b)).log10()
+}
+
+/// Sky background a telescope actually sees: zodiacal light plus sunward
+/// stray light (Earthshine is applied separately, per satellite).
+pub fn sky_sb(d: V3, sun: V3, o: &crate::obs::ObsParams) -> f64 {
+    let z = zodi_sb(d, sun);
+    if o.stray_on {
+        add_sb(z, sun_stray_sb(d, sun, o.stray_sb45, o.stray_slope))
+    } else {
+        z
+    }
+}
+
 pub fn zodi_sb(d: V3, sun: V3) -> f64 {
     const ECL: [(f64, f64); 11] = [
         (10.0, 15.8),

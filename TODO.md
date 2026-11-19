@@ -1,10 +1,7 @@
 # FACET simulator: to do
 
-## Next up
-- **Sunward stray-light model**: make the Sun keep-out slider a real trade.
-  Charge scattered sunlight near the keep-out edge (baffle/sunshade
-  dependent), so tightening 45° → 35° buys Venus/Mercury/sunward-NEO time
-  at the cost of brighter backgrounds and shallower depth.
+## Done since 0.5.0
+- Sunward stray-light model and Sun keep-out trade table.
 
 ## Simulation
 - All-sky survey mode: actually tile the observable sky and time each pass

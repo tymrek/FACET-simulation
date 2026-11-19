@@ -363,10 +363,19 @@ function renderEnvironment(s) {
   const L = e.lifetime || {};
   $("en_life").replaceChildren(
     tile("Earthshine loss", e.earthshine_on ? `${e.earthshine_lost_pct.toFixed(1)} %` : "off", `of exposure time (dark-sky equivalent) · ${e.earthshine_now} telescopes badly affected now`),
+    tile("sunlight stray-light loss", `${(e.sunlight_lost_pct || 0).toFixed(1)} %`, `of exposure time (dark-sky equivalent) · ${e.sunlight_now || 0} telescopes badly affected now`),
     tile("passive lifetime", fmtYears(L.mean_yr), `mean sun · ${fmtYears(L.solar_max_yr)} at solar max, ${fmtYears(L.solar_min_yr)} at solar min`),
     tile("following the cycle", fmtYears(L.cycle_yr), L.cycle_yr != null && L.cycle_yr <= 5 ? "meets a 5-year disposal rule passively" : `needs a ${e.disposal_dv_ms == null ? "–" : e.disposal_dv_ms.toFixed(0)} m/s disposal burn for a 5-year rule`),
     tile("ballistic coefficient", `${e.ballistic_m2_kg.toFixed(4)}`, "C_D·A/m, m²/kg"),
   );
+  const ko = s.shell.sun_excl_deg;
+  $("en_keep").replaceChildren(...(e.keepout || []).map(r => el("tr", Math.abs(r.keepout_deg - ko) < 0.5 ? { class: "me" } : {},
+    el("td", {}, `${r.keepout_deg.toFixed(0)}°${Math.abs(r.keepout_deg - ko) < 0.5 ? " (now)" : ""}`),
+    el("td", { class: "num" }, `${(100 * r.venus_frac).toFixed(0)} %`),
+    el("td", { class: "num" }, `${(100 * r.mercury_frac).toFixed(0)} %`),
+    el("td", { class: "num" }, `${Math.round(r.open_deg2).toLocaleString()} deg²`),
+    el("td", { class: "num" }, `−${r.edge_depth_loss.toFixed(1)} mag`),
+    el("td", { class: "num" }, `−${r.edge_stray_loss.toFixed(2)} mag`))));
   $("en_trade").replaceChildren(...e.trade.map(r => el("tr", {},
     el("td", {}, `${r.alt_km.toFixed(0)}`),
     el("td", { class: "num" }, `${(100 * r.saa_frac).toFixed(1)} %`),

@@ -475,6 +475,23 @@ longer to reach their depth, and the lost share is reported (typically 5–10 %
 of exposure time in a busy queue). The duty cycle shown against the ground uses
 dark-sky-equivalent time.
 
+**Sunward stray light and the Sun keep-out.** Sunlight scattered past the
+baffle into the field. **Assumed** parametric point-source-transmittance law:
+V ≈ 21.0 mag/arcsec² at 45° from the Sun for a good vaned baffle (19.5 for a
+plain tube, 22.5 with a deployable sunshade), fading as elongation⁻³ (7.5 mag
+per decade) and tapering to nothing between 60° and 100° as the Sun drops
+behind the aperture plane. It is added to the zodiacal light in queue depths,
+the defence search and per-exposure efficiency (charged, like Earthshine, as
+dark-sky-equivalent time; typically ~5–7 % fleet-wide, concentrated in the
+sunward search band). The **Sun keep-out trade** table (native and console)
+shows what each keep-out angle from 20° to 60° buys and costs: the share of
+days Venus and Mercury are outside it over the next three years (from the
+sim's ephemeris), open sky, and depth at the keep-out edge against a dark sky,
+with the stray-light part shown separately. With a good baffle the cost near
+the Sun is dominated by the zodiacal light itself (≈ −1.4 mag at 45°,
+−2.0 at 30°), the stray light adding only ~0.2 mag. Venus is outside a 45°
+keep-out ~15 % of the time and a 30° one ~53 %; Mercury needs 25° or less.
+
 **Orbital lifetime and disposal.** Circular-orbit drag decay with the CIRA-72
 exponential atmosphere (mean solar activity) and an **assumed** solar-cycle
 swing (×1 at 150 km rising to ×3.5 above 600 km between mean and max), cycle
@@ -492,7 +509,7 @@ tumbling cross-section, C_D 2.2 (all adjustable).
   all but solar-minimum conditions, at the cost of ~7 % SAA time instead of ~9 %
   — in FACET's favour on both counts, against slightly more drag make-up.
 
-Not modelled: the outer-belt electron "horns" at high latitude, solar particle
+Not modelled: ghost images and glints from bright sources in the field, the outer-belt electron "horns" at high latitude, solar particle
 events, detector annealing, and drag make-up propellant for station-keeping.
 
 ## Presentation mode
