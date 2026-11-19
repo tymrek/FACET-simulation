@@ -9,7 +9,10 @@
 - Optics rework: design inputs (aperture, f-ratio, design, sensor, pointing presets), derived field, image-size budget.
 
 ## Simulation
-- Interferometry tier.
+- Intensity interferometry on the shell (photon time-tagging over the laser
+  links): baseline/uv geometry from real orbits, HBT SNR per pair, bright-star
+  diameters; two planes ~90° apart for complementary coverage, half their
+  satellites carrying timing detectors.
 
 ## Identity
 - Motion logo (B ↔ C gem): port into the app as start-up splash and the
@@ -21,3 +24,11 @@
 
 ## Last
 - Browser (WASM) build.
+
+## Parked (out of scope for the current proposal)
+- Amplitude (Michelson) interferometry. Needs dedicated spacecraft, not the
+  shell. Ladder discussed: single-spacecraft boom interferometer (≤ ~20 m,
+  3 collectors) → spinning tethered formation (100 m – 1 km, fibre-fed) →
+  free-flying formation (> 1 km); 3 collectors + combiner minimum for
+  closure-phase imaging, ~6 + 1 for a science array; one per plane of two
+  planes ~90° apart for complementary uv coverage.
