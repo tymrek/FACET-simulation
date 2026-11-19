@@ -119,7 +119,7 @@ pub struct ObsRequest {
 }
 
 /// Per-request state for science requirements beyond telescope-seconds.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Sched {
     pub need: crate::programme::Need,
     /// Event window (JD start, end) for `Need::Window`.
@@ -135,6 +135,12 @@ pub struct Sched {
     pub host_v: f64,
     /// First moment the window was covered (JD), for the late-start metric.
     pub first_cover_jd: Option<f64>,
+    /// Nominal-telescope-equivalent seconds: each contributing telescope's
+    /// time × its sensitivity factor (fleet optical variation).
+    pub eff_s: f64,
+    /// What the members were doing when the current / longest gap began.
+    pub gap_note_now: Option<String>,
+    pub gap_note: Option<String>,
 }
 
 impl Sched {
@@ -170,6 +176,11 @@ impl ObsRequest {
     /// Integration-weighted pointing jitter, arcsec RMS.
     pub fn eff_jitter(&self) -> Option<f64> {
         (self.progress_s > 0.0 && self.jit2_s > 0.0).then(|| (self.jit2_s / self.progress_s).sqrt())
+    }
+
+    /// Integration in nominal-telescope seconds (for depth).
+    pub fn eff_total(&self) -> f64 {
+        if self.sched.eff_s > 0.0 { self.sched.eff_s } else { self.progress_s }
     }
 }
 
@@ -649,6 +660,8 @@ fn handle_result(shared: SharedRef, req: Request, path: String) {
         // Quantise live stacks to 5 % steps so repeated polls hit the cache.
         let bucket = if done { u32::MAX } else { ((r.progress_s / required * 20.0).floor() as u32).max(1) };
         let total = if done { r.progress_s } else { (bucket as f64 / 20.0 * required).min(r.progress_s.max(1e-6)) };
+        // Telescopes differ: scale to nominal-equivalent time.
+        let total = if r.sched.eff_s > 0.0 { total * r.sched.eff_s / r.progress_s } else { total };
         (
             (id, bucket),
             crate::imaging::Spec {

@@ -344,10 +344,11 @@ impl App {
                 None => all.push(i),
             }
         }
-        // Time-critical first: an open event window outranks everything but
-        // planetary defence, because it cannot be observed later.
-        let eff = |r: &crate::server::ObsRequest| if self.handover && r.sched.continuous(jd, prep) { r.priority.max(9) } else { r.priority };
-        all.sort_by_key(|&i| (std::cmp::Reverse(eff(&sh.requests[i])), sh.requests[i].id));
+        // Time-critical first: an open event window is scheduled before any
+        // other queue work, ToOs included, because it cannot be observed
+        // later. (Planetary defence runs as STARE campaigns, ahead of the queue.)
+        let first = |r: &crate::server::ObsRequest| self.handover && r.sched.continuous(jd, prep);
+        all.sort_by_key(|&i| (!first(&sh.requests[i]), std::cmp::Reverse(sh.requests[i].priority), sh.requests[i].id));
         let n = self.shell.len();
         // Pool 1: public / director requests on the public time share (they
         // may pre-empt director tasks outside Science operations, as before).
@@ -426,8 +427,11 @@ impl App {
     pub fn queue_credit(&mut self) {
         let Some(web) = self.web.clone() else { return };
         let ag = crate::attitude::Agility::from_obs(&self.obs_params);
-        let mut per: HashMap<u64, (f64, f64, f64, u32)> = HashMap::new(); // id -> (s, jit²·s, fine s, locked sats)
+        let fleet = crate::optics::fleet_spread(&self.obs_params);
+        let mut per: HashMap<u64, (f64, f64, f64, u32, f64)> = HashMap::new(); // id -> (s, jit²·s, fine s, locked sats, q·s)
         let mut longest: HashMap<u64, f64> = HashMap::new(); // id -> longest integration this step
+        // id -> members (slewing, settling/acquiring, in the SAA, other)
+        let mut why: HashMap<u64, [u32; 4]> = HashMap::new();
         for i in 0..self.obs.att.len() {
             let j = self.obs.job[i];
             if obs::job_tag(j) != obs::TAG_QUEUE {
@@ -439,11 +443,26 @@ impl App {
             if a.phase() == crate::attitude::Phase::Locked {
                 e.3 += 1;
             }
+            {
+                use crate::attitude::Phase;
+                let w = why.entry(obs::job_val(j)).or_default();
+                if self.env.in_saa.get(i).copied().unwrap_or(false) {
+                    w[2] += 1;
+                } else {
+                    match a.phase() {
+                        Phase::Slewing => w[0] += 1,
+                        Phase::Settling | Phase::Acquiring => w[1] += 1,
+                        Phase::Locked => {}
+                        _ => w[3] += 1,
+                    }
+                }
+            }
             if dt > 0.0 {
                 let m = longest.entry(obs::job_val(j)).or_insert(0.0);
                 *m = m.max(dt);
                 let jit = a.jitter(&ag);
                 e.0 += dt;
+                e.4 += dt * crate::optics::sat_q(fleet.as_ref(), i);
                 e.1 += dt * jit * jit;
                 if a.fine {
                     e.2 += dt;
@@ -467,7 +486,8 @@ impl App {
                 r.slews += n;
                 r.slew_deg_sum += sum;
             }
-            let (got, jit2, fine_s, locked) = per.get(&r.id).copied().unwrap_or_default();
+            let (got, jit2, fine_s, locked, eff_got) = per.get(&r.id).copied().unwrap_or_default();
+            let raw_got = got;
             r.locked_now = locked;
             if let (Some(c), true) = (r.case_idx, got > 0.0) {
                 self.science.cases[c].tel_s += got;
@@ -518,6 +538,9 @@ impl App {
                         got = 0.0; // settling in: nothing useful before the event
                     }
                 }
+                if raw_got > 0.0 {
+                    r.sched.eff_s += got / raw_got * eff_got;
+                }
                 r.progress_s += got;
                 r.jit2_s += jit2;
                 r.fine_s += fine_s;
@@ -537,7 +560,7 @@ impl App {
                         }
                         if let Some(hw) = &r.hw {
                             let sub = r.exposure_s.min(hw.sub_max_s);
-                            let lim = crate::imaging::point_lim_mag(hw, r.progress_s, sub, crate::imaging::sky_sb(r.dir, self.bodies[0].dir, &self.obs_params));
+                            let lim = crate::imaging::point_lim_mag(hw, r.eff_total(), sub, crate::imaging::sky_sb(r.dir, self.bodies[0].dir, &self.obs_params));
                             crate::programme::Science::push_capped(&mut cs.depth, lim);
                         }
                         if let Some(v) = r.inv_idx {
@@ -563,8 +586,18 @@ impl App {
                         r.sched.cover_s += span;
                         r.sched.gap_s = 0.0;
                     } else {
+                        if r.sched.gap_s == 0.0 {
+                            let w = why.get(&r.id).copied().unwrap_or_default();
+                            r.sched.gap_note_now = Some(format!(
+                                "at {:.0} s into the window: {} of {} locked, {} slewing, {} settling or acquiring, {} in the SAA, {} other",
+                                (t0 - a) * 86_400.0, locked, r.telescopes, w[0], w[1], w[2], w[3]
+                            ));
+                        }
                         r.sched.gap_s += span;
-                        r.sched.gap_max_s = r.sched.gap_max_s.max(r.sched.gap_s);
+                        if r.sched.gap_s > r.sched.gap_max_s {
+                            r.sched.gap_max_s = r.sched.gap_s;
+                            r.sched.gap_note = r.sched.gap_note_now.clone();
+                        }
                     }
                 }
                 r.sched.last_jd = jd;
@@ -587,7 +620,7 @@ impl App {
                             if let Some(hw) = &r.hw {
                                 let sub = r.exposure_s.min(hw.sub_max_s);
                                 let sky = crate::imaging::sky_sb(r.dir, self.bodies[0].dir, &self.obs_params);
-                                let lim = crate::imaging::point_lim_mag(hw, r.progress_s, sub, sky);
+                                let lim = crate::imaging::point_lim_mag(hw, r.eff_total(), sub, sky);
                                 crate::programme::Science::push_capped(&mut cs.depth, lim);
                                 if r.sched.host_v > 0.0 {
                                     // Short sub-frames for bright hosts, so the peak pixel stays unsaturated.
@@ -601,12 +634,27 @@ impl App {
                             }
                         } else {
                             cs.failed += 1;
+                            cs.recent_failures.push(format!(
+                                "#{}: {:.1} % covered, longest gap {}{}",
+                                r.id,
+                                100.0 * cover,
+                                crate::allsky::fmt_span(r.sched.gap_max_s),
+                                r.sched.gap_note.as_ref().map(|n| format!(" ({n})")).unwrap_or_default()
+                            ));
+                            if cs.recent_failures.len() > 6 {
+                                cs.recent_failures.remove(0);
+                            }
                         }
                     }
                     if ok {
                         r.state = ReqState::Done;
                     } else {
                         r.state = ReqState::Failed;
+                        events.push(("warn", format!(
+                            "#{} {} failed its window: {:.1} % covered, longest gap {}, coverage began {} after opening, {} of {} telescopes locked at the end",
+                            r.id, r.programme.unwrap_or("request"), 100.0 * cover, crate::allsky::fmt_span(r.sched.gap_max_s),
+                            crate::allsky::fmt_span(r.sched.first_cover_jd.map_or(len, |f| (f - a) * 86_400.0)), locked, r.telescopes
+                        )));
                         r.blocked = Some(format!(
                             "requirement not met: {:.1} % of the window covered, longest gap {}",
                             100.0 * cover,

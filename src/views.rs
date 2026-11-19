@@ -328,7 +328,7 @@ impl App {
                     Phase::Locked => C_ACTIVE,
                     Phase::Slewing => C_SLEWING,
                     Phase::Settling | Phase::Acquiring => C_SETTLING,
-                    Phase::Idle if self.obs.lit[i] => C_LIT,
+                    Phase::Idle if self.obs.lit.get(i).copied().unwrap_or(true) => C_LIT,
                     Phase::Idle => C_ECLIPSED,
                 };
                 b.point(p, sr, c3(col, 1.0));

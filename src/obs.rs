@@ -52,7 +52,8 @@ impl Mode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ObsParams {
     pub aperture_cm: f64,
     /// Square field of view, side, degrees.
@@ -290,6 +291,13 @@ impl Default for ObsParams {
 /// Per-frame observation state.
 #[derive(Default)]
 pub struct ObsState {
+    /// Seconds until each satellite enters the SAA and safes its detector
+    /// (0 = inside now, +∞ = not within the look-ahead, or SAA not safing).
+    /// Handover planning treats SAA entry like losing the target.
+    pub saa_eta: Vec<f64>,
+    /// Serving an open event window (transit, occultation) on the queue:
+    /// STARE recruits these only when nothing else can see its target.
+    pub protected: Vec<bool>,
     /// Unit radial (zenith) vector of each satellite.
     pub rhat: Vec<V3>,
     pub lit: Vec<bool>,
@@ -638,6 +646,16 @@ pub struct QueueItem {
     pub continuous: bool,
 }
 
+/// When satellite `i` stops being useful on `dir`: whichever comes first of
+/// the target setting behind the Earth and the satellite safing in the SAA.
+fn loss_time(st: &ObsState, shell: &crate::constellation::Shell, i: usize, dir: V3) -> Option<f64> {
+    let saa = st.saa_eta.get(i).copied().unwrap_or(f64::INFINITY);
+    if saa <= 0.0 {
+        return None;
+    }
+    shell.time_to_set(i, dir, st.cos_lim).map(|t| t.min(saa))
+}
+
 pub struct QueueResult {
     #[allow(dead_code)]
     pub id: u64,
@@ -707,7 +725,11 @@ pub fn assign_queue(
         let mut assigned = 0;
         if let Some(members) = by_job.get(&me) {
             for &i in members {
-                if healthy < it.want && used < budget && !taken[i] && !st.hold[i] && job_tag(st.job[i]) != TAG_STARE && it.dir.dot(st.rhat[i]) > st.cos_lim {
+                // Event windows keep every member that still sees the target:
+                // an outgoing member stays locked until its replacement (which
+                // already counts as healthy while it slews) has locked on.
+                let keep = healthy < it.want || (it.continuous && st.att[i].phase() == crate::attitude::Phase::Locked);
+                if keep && used < budget && !taken[i] && !st.hold[i] && job_tag(st.job[i]) != TAG_STARE && it.dir.dot(st.rhat[i]) > st.cos_lim {
                     taken[i] = true;
                     st.pointing[i] = Some(it.dir);
                     st.job[i] = me;
@@ -715,7 +737,7 @@ pub fn assign_queue(
                     assigned += 1;
                     used += 1;
                     free -= 1;
-                    if !it.continuous || shell.time_to_set(i, it.dir, st.cos_lim).map_or(false, |t| t > lead) {
+                    if !it.continuous || loss_time(st, shell, i, it.dir).map_or(false, |t| t > lead) {
                         healthy += 1;
                     }
                 }
@@ -744,7 +766,7 @@ pub fn assign_queue(
                 // Continuous items skip telescopes about to lose the target.
                 let mut extra = 0.0;
                 if it.continuous {
-                    match shell.time_to_set(i, it.dir, st_ref.cos_lim) {
+                    match loss_time(st_ref, shell, i, it.dir) {
                         Some(t) if t > 3.0 * lead => {}
                         Some(t) if t > 1.5 * lead => extra = 1.0,
                         _ => return None,
@@ -800,6 +822,16 @@ pub fn assign_queue(
             None
         };
         out.push(QueueResult { id: it.id, assigned: got + outgoing, blocked });
+    }
+    st.protected.clear();
+    st.protected.resize(n, false);
+    for it in items.iter().filter(|it| it.continuous) {
+        let me = job(TAG_QUEUE, it.id);
+        for i in 0..n {
+            if st.job[i] == me {
+                st.protected[i] = true;
+            }
+        }
     }
     st.n_active = st.pointing.iter().filter(|p| p.is_some()).count();
     out
@@ -867,7 +899,7 @@ pub fn assign_stare(
             if st.prev_job[i] != me || taken[i] || st.hold[i] {
                 continue;
             }
-            if let Some(tts) = shell.time_to_set(i, it.dir, st.cos_lim) {
+            if let Some(tts) = loss_time(st, shell, i, it.dir) {
                 take(st, &mut taken, i);
                 assigned += 1;
                 if tts > lead {
@@ -879,7 +911,7 @@ pub fn assign_stare(
         let need = it.eyes.saturating_sub(healthy);
         let mut recruited = 0;
         if need > 0 {
-            let mut cands: Vec<(bool, f64, usize)> = {
+            let mut cands: Vec<(bool, bool, f64, usize)> = {
                 use rayon::prelude::*;
                 let (taken, st_ref) = (&taken, &*st);
                 (0..n)
@@ -892,18 +924,21 @@ pub fn assign_stare(
                         if job_tag(pj) == TAG_STARE && pj != me {
                             return None; // another campaign's eye
                         }
-                        let tts = shell.time_to_set(i, it.dir, st_ref.cos_lim)?;
+                        let tts = loss_time(st_ref, shell, i, it.dir)?;
                         let rt = ag.repoint_time(st_ref.att[i].dir.angle(it.dir));
                         if tts <= rt + dwell {
                             return None;
                         }
-                        // Prefer telescopes that can lock in time; among them, the longest window.
-                        Some((rt > lead - 10.0, -tts.min(1e7), i))
+                        // Leave telescopes alone that are mid-way through an
+                        // event window; then prefer telescopes that can lock in
+                        // time and, among them, the longest window.
+                        let prot = st_ref.protected.get(i).copied().unwrap_or(false);
+                        Some((prot, rt > lead - 10.0, -tts.min(1e7), i))
                     })
                     .collect()
             };
             cands.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            for &(_, _, i) in cands.iter().take(need) {
+            for &(_, _, _, i) in cands.iter().take(need) {
                 take(st, &mut taken, i);
                 assigned += 1;
                 recruited += 1;

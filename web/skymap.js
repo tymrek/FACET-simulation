@@ -209,6 +209,12 @@ function basisChip(key) {
 function tileB(label, value, key) {
   return el("div", { class: "tile" }, el("div", { class: "tv" }, value), el("div", { class: "tl" }, label, " ", basisChip(key)));
 }
+function fmtSpan(s) {
+  if (s < 90) return `${Math.round(s)} s`;
+  if (s < 5400) return `${Math.round(s / 60)} min`;
+  if (s < 2 * 86400) return `${(s / 3600).toFixed(1)} h`;
+  return `${(s / 86400).toFixed(1)} days`;
+}
 function fmtDur(s) {
   if (s < 120) return `${s.toFixed(0)} s`;
   if (s < 7200) return `${(s/60).toFixed(1)} min`;

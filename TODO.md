@@ -18,10 +18,9 @@
       handover-aware staffing of open windows.
 - [x] Fleet optical variation: per-telescope aberrations; PSF and depth reported as a spread.
 - [x] Photometric precision separate from detection depth, with an assumed systematic floor.
-- [ ] SAA-aware handover: don't recruit telescopes about to enter the anomaly
-      (the remaining ~5 % of transit failures).
-- [ ] Requests use per-telescope hardware (currently the fleet spread is
-      reported but stacks use the nominal telescope).
+- [x] SAA-aware handover: telescopes about to enter the anomaly are treated as
+      about to lose the target.
+- [x] Requests credit each telescope by its own sensitivity (fleet optical variation).
 
 ## Validation work (engineering, not code)
 - Stray-light ray trace and baffle test.
@@ -39,8 +38,9 @@
   presentations' title card; favicon from the top view.
 
 ## Usability
-- The controls column is very long: regroup into tabs (Fleet, Optics,
-  Operations, Science, Environment, Programme).
+- [x] Tabbed controls, headline strip, saved scenarios, target search (desktop).
+- [x] Director console: headline strip, tabbed lower sections.
+- [ ] Moving targets: track NEOs and planets as they move when chosen from search.
 
 ## Build and platform
 - GitHub CI (build + tests).

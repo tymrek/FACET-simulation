@@ -24,6 +24,7 @@ mod obs;
 mod optics;
 mod present;
 mod provenance;
+mod ui_shell;
 mod public;
 mod programme;
 mod resilience;

@@ -126,6 +126,14 @@ pub struct App {
     pub present_open: bool,
     /// Presentation mode is running: views hide their headers and legends.
     pub presenting: bool,
+    pub tab: crate::ui_shell::Tab,
+    pub search: String,
+    pub search_hits: Vec<crate::ui_shell::Hit>,
+    pub headlines: crate::ui_shell::Headlines,
+    pub scenario_name: String,
+    pub scenario_msg: Option<String>,
+    pub scenario_saving: bool,
+    pub scenario_save_name: String,
     /// Handover-aware scheduling for event windows (off: plain greedy queue,
     /// for comparison).
     pub handover: bool,
@@ -237,6 +245,14 @@ impl App {
             cost_window_open: false,
             present_open: false,
             presenting: false,
+            tab: Default::default(),
+            search: String::new(),
+            search_hits: Vec::new(),
+            headlines: Default::default(),
+            scenario_name: String::new(),
+            scenario_msg: None,
+            scenario_saving: false,
+            scenario_save_name: String::new(),
             handover: true,
             present_deck: None,
             cost_msg: None,
@@ -347,6 +363,13 @@ impl App {
                 }
                 "--no-public-demand" => self.public.cfg.on = false,
                 "--no-handover" => self.handover = false,
+                "--scenario" => {
+                    let q = val();
+                    match crate::ui_shell::find_scenario(&q) {
+                        Some(sc) => self.apply_scenario(&sc),
+                        None => eprintln!("no scenario named {q:?} (built in: {})", crate::ui_shell::builtin_scenarios().iter().map(|s| s.name.clone()).collect::<Vec<_>>().join(", ")),
+                    }
+                }
                 "--public-users" => self.public.cfg.population = val().parse().unwrap_or(20_000),
                 "--no-programme" => self.gen.on = false,
                 "--costs" => self.cost_window_open = true,
@@ -416,7 +439,7 @@ impl App {
         }
     }
 
-    fn look_at_target(&mut self) {
+    pub(crate) fn look_at_target(&mut self) {
         if let Some(t) = self.target_dir() {
             self.look_at(t);
         }
@@ -544,6 +567,9 @@ impl App {
         self.programme_tick(dt_sim);
         self.public_tick(dt_sim);
         prof("programme_tick");
+        if self.handover {
+            self.saa_lookahead(dt_sim);
+        }
         self.stare_assign();
         prof("stare_assign");
         self.queue_assign();
@@ -606,13 +632,8 @@ impl App {
         }
     }
 
-    fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-        ui.label(RichText::new("FACET simulator").size(18.0).strong());
-        ui.label(RichText::new("an open astronomical survey shell").italics().weak());
-        ui.separator();
 
-        // ---------------- Time
+    pub(crate) fn sec_time(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Time").strong());
         ui.monospace(astro::format_utc(self.jd));
         ui.horizontal_wrapped(|ui| {
@@ -629,9 +650,9 @@ impl App {
                 }
             }
         });
-        ui.separator();
+    }
 
-        // ---------------- Constellation
+    pub(crate) fn sec_constellation(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Constellation").strong());
         ui.add(
             egui::Slider::new(&mut self.shell_params.n, 2..=10_000)
@@ -699,9 +720,9 @@ impl App {
         if let Some(m) = &self.export_msg {
             ui.label(RichText::new(m).small());
         }
-        ui.separator();
+    }
 
-        // ---------------- Telescope
+    pub(crate) fn sec_telescope(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| { ui.label(RichText::new("Telescope (per satellite)").strong()); crate::provenance::chip(ui, "depth"); crate::provenance::chip(ui, "fwhm"); });
         {
             use crate::obs::{DESIGNS, POINTING, SENSORS};
@@ -727,10 +748,14 @@ impl App {
                     }
                 }
             });
-            let pname = POINTING.get(o.pointing_preset).map(|p| p.1).unwrap_or("custom jitter");
+            let pname = POINTING
+                .get(o.pointing_preset)
+                .filter(|p| (p.2 - o.jitter_arcsec).abs() < 1e-6)
+                .map(|p| p.1.to_string())
+                .unwrap_or_else(|| format!("Custom pointing ({:.2}\" RMS jitter)", o.jitter_arcsec));
             egui::ComboBox::from_id_source("pointing").selected_text(pname).width(300.0).show_ui(ui, |ui| {
                 for (k, p) in POINTING.iter().enumerate() {
-                    if ui.selectable_label(o.pointing_preset == k, format!("{} ({:.2}″ RMS)", p.1, p.2)).clicked() {
+                    if ui.selectable_label(o.pointing_preset == k, format!("{} ({:.2}\" RMS)", p.1, p.2)).clicked() {
                         o.apply_pointing(k);
                     }
                 }
@@ -739,7 +764,7 @@ impl App {
             let (w, h, diag) = o.field_deg();
             ui.label(
                 RichText::new(format!(
-                    "{:.0} mm focal length · {:.3}″/px · field {:.2}° × {:.2}° ({:.2} deg², {:.2}° diagonal)",
+                    "{:.0} mm focal length · {:.3}\"/px · field {:.2}° × {:.2}° ({:.2} deg², {:.2}° diagonal)",
                     o.focal_mm,
                     o.plate_scale(),
                     w,
@@ -796,14 +821,14 @@ impl App {
                     ui.label(RichText::new(v).small());
                     ui.end_row();
                 };
-                row(ui, "diffraction (perfect optics)", format!("{:.2}″", b.diffraction));
-                row(ui, "+ wavefront error", format!("{:.2}″ (Strehl {:.2})", b.optics, b.strehl));
-                row(ui, "+ pointing jitter", format!("{:.2}″ ({:.2}″ RMS)", b.with_jitter, b.jitter_rms));
-                row(ui, "+ pixel size", format!("{:.2}″ ({:.2}″ pixels)", b.delivered, b.pixel));
+                row(ui, "diffraction (perfect optics)", format!("{:.2}\"", b.diffraction));
+                row(ui, "+ wavefront error", format!("{:.2}\" (Strehl {:.2})", b.optics, b.strehl));
+                row(ui, "+ pointing jitter", format!("{:.2}\" ({:.2}\" RMS)", b.with_jitter, b.jitter_rms));
+                row(ui, "+ pixel size", format!("{:.2}\" ({:.2}\" pixels)", b.delivered, b.pixel));
                 if b.corner_extra > 0.0 {
-                    row(ui, "at the field corners", format!("{:.2}″", b.corner_delivered));
+                    row(ui, "at the field corners", format!("{:.2}\"", b.corner_delivered));
                 }
-                row(ui, "ground, good site (for comparison)", format!("{:.1}″ seeing", b.ground_seeing));
+                row(ui, "ground, good site (for comparison)", format!("{:.1}\" seeing", b.ground_seeing));
             });
             ui.label(
                 RichText::new(format!(
@@ -828,7 +853,7 @@ impl App {
             match crate::optics::fleet_spread(o) {
                 Some(f) => {
                     crate::provenance::line(ui, "fleet_optics", format!(
-                        "{} sampled telescopes: FWHM {:.2}/{:.2}/{:.2}″, Strehl {:.2}/{:.2}/{:.2}, 60 s depth V {:.2}/{:.2}/{:.2} (10th/50th/90th percentile; nominal {:.2}″, V {:.2})",
+                        "{} sampled telescopes: FWHM {:.2}/{:.2}/{:.2}\", Strehl {:.2}/{:.2}/{:.2}, 60 s depth V {:.2}/{:.2}/{:.2} (10th/50th/90th percentile; nominal {:.2}\", V {:.2})",
                         f.samples, f.fwhm.0, f.fwhm.1, f.fwhm.2, f.strehl.2, f.strehl.1, f.strehl.0,
                         f.depth_v60.0, f.depth_v60.1, f.depth_v60.2, f.nominal_fwhm, f.nominal_depth_v60
                     ));
@@ -864,9 +889,9 @@ impl App {
         }
         ui.add(egui::Slider::new(&mut o.overhead_s, 0.0..=120.0).text("slew+settle overhead s"))
             .on_hover_text("ASSUMPTION: dead time per pointing (slew, settle, readout).");
-        ui.separator();
+    }
 
-        // ---------------- Agility
+    pub(crate) fn sec_attitude(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Attitude control (per satellite)").strong());
         let o = &mut self.obs_params;
         ui.add(egui::Slider::new(&mut o.inertia_kgm2, 2.0..=200.0).logarithmic(true).text("inertia kg·m²"))
@@ -896,16 +921,17 @@ impl App {
                 .weak(),
             );
         }
-        ui.separator();
+    }
 
-        // ---------------- Constraints
+    pub(crate) fn sec_constraints(&mut self, ui: &mut egui::Ui) {
+        let o = &mut self.obs_params;
         ui.label(RichText::new("Keep-out constraints").strong());
         ui.add(egui::Slider::new(&mut o.sun_excl_deg, 5.0..=120.0).text("Sun exclusion °"));
         ui.add(egui::Slider::new(&mut o.moon_excl_deg, 0.0..=45.0).text("Moon exclusion °"));
         ui.add(egui::Slider::new(&mut o.limb_margin_deg, 0.0..=40.0).text("Earth-limb margin °"));
-        ui.separator();
+    }
 
-        // ---------------- Mode & target
+    pub(crate) fn sec_mode_target(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Operations").strong());
         egui::ComboBox::from_id_source("mode")
             .selected_text(self.mode.label())
@@ -960,46 +986,9 @@ impl App {
                 self.look_at(self.bodies[0].dir);
             }
         });
-        ui.separator();
+    }
 
-        self.stats(ui);
-        ui.separator();
-
-        if ui.button("Presentation mode…").on_hover_text("Narrated, scripted tours for an audience (full screen)").clicked() {
-            self.present_open = true;
-        }
-        if ui
-            .button(if self.cost_window_open { "Cost model window (open)" } else { "Open cost model window" })
-            .on_hover_text("Programme costs in a separate window: edit prices and trends live")
-            .clicked()
-        {
-            self.cost_window_open = true;
-        }
-        ui.separator();
-        self.defence_panel(ui);
-        ui.separator();
-        self.resilience_panel(ui);
-        ui.separator();
-        self.traffic_panel(ui);
-        ui.separator();
-        self.survey_panel(ui);
-        ui.separator();
-        self.neo_panel(ui);
-        ui.separator();
-        self.public_panel(ui);
-        ui.separator();
-        self.ii_panel(ui);
-        ui.separator();
-        self.fuel_panel(ui);
-        ui.separator();
-        self.environment_panel(ui);
-        ui.separator();
-        self.science_panel(ui);
-        ui.separator();
-        self.web_panel(ui);
-        ui.separator();
-
-        // ---------------- Display
+    pub(crate) fn sec_display(&mut self, ui: &mut egui::Ui) {
         ui.label(RichText::new("Display").strong());
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.view, View::Orbit, "Orbit");
@@ -1035,16 +1024,17 @@ impl App {
         ui.add_space(6.0);
         ui.label(
             RichText::new(
-                "All performance numbers are unchecked soft estimates from idealised scaling \
-                 (equal telescopes, background-limited stacking, perfect registration).",
+                "Simulation only: nothing here is a measurement of flight hardware. Each headline carries a tag \
+                 (simulated / modelled / assumed / data); hover over it for what the figure rests on.",
             )
             .small()
             .weak(),
         );
-        ui.label(RichText::new("Stars: HYG v4.0 (CC BY-SA 4.0). Coastlines: Natural Earth.").small().weak());
+        ui.label(RichText::new("Stars: HYG v4.1 (CC BY-SA 4.0). Deep sky: OpenNGC (CC BY-SA 4.0). NEOs: IAU Minor Planet Center. Coastlines: Natural Earth.").small().weak());
     }
 
-    fn stats(&mut self, ui: &mut egui::Ui) {
+
+    pub(crate) fn stats(&mut self, ui: &mut egui::Ui) {
         let n = self.shell.len();
         ui.label(RichText::new("Now").strong());
         egui::Grid::new("stats").num_columns(2).spacing([12.0, 2.0]).show(ui, |ui| {
@@ -1140,12 +1130,8 @@ impl App {
             self.target = None;
         }
 
-        egui::SidePanel::left("controls")
-            .resizable(true)
-            .default_width(340.0)
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
-            });
+        self.headline_strip(ctx);
+        self.side_panel(ctx);
         self.draw_views(ctx);
         self.cost_window(ctx);
     }

@@ -384,6 +384,7 @@ pub struct Environment {
     /// Satellite inside the SAA contour this step.
     pub in_saa: Vec<bool>,
     pub n_in_saa: usize,
+    pub saa_eta_age: f64,
     /// Dark-sky-equivalent efficiency of the current exposure (1 = no Earthshine).
     pub shine: Vec<f32>,
     pub n_shine: usize,
@@ -588,6 +589,53 @@ use crate::app::App;
 use egui::RichText;
 
 /// Decimal year of a Julian date.
+impl App {
+    /// Look ahead along each orbit (30 s steps, up to 30 min) for the next
+    /// SAA entry, for handover planning. Only when the SAA safes detectors;
+    /// refreshed every 15 s of sim time and counted down between refreshes.
+    pub fn saa_lookahead(&mut self, dt: f64) {
+        let n = self.shell.pos.len();
+        if self.env.cfg.saa_policy != SaaPolicy::Pause {
+            self.obs.saa_eta.clear();
+            return;
+        }
+        if self.obs.saa_eta.len() == n && self.env.saa_eta_age < 15.0 {
+            self.env.saa_eta_age += dt;
+            for t in self.obs.saa_eta.iter_mut() {
+                if t.is_finite() {
+                    *t = (*t - dt).max(0.0);
+                }
+            }
+            return;
+        }
+        self.env.saa_eta_age = 0.0;
+        let year = year_of(self.jd);
+        let thr = self.env.cfg.saa_threshold;
+        let r = self.shell.params.alt_km + EARTH_RADIUS_KM;
+        let jd = self.jd;
+        let shell = &self.shell;
+        use rayon::prelude::*;
+        self.obs.saa_eta = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                if self.env.in_saa.get(i).copied().unwrap_or(false) {
+                    return 0.0;
+                }
+                let mut tau = 30.0;
+                while tau <= 1800.0 {
+                    let p = shell.rhat_after(i, tau) * r;
+                    let (lat, lon) = latlon(p, crate::astro::gmst(jd + tau / 86_400.0));
+                    if saa_flux(lat, lon, self.shell.params.alt_km, year) > thr {
+                        return tau - 15.0;
+                    }
+                    tau += 30.0;
+                }
+                f64::INFINITY
+            })
+            .collect();
+    }
+}
+
 pub fn year_of(jd: f64) -> f64 {
     2000.0 + (jd - crate::astro::JD_J2000) / 365.25
 }

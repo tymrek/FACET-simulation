@@ -423,6 +423,8 @@ pub struct CaseStats {
     /// Finished, but the schedule broke the science requirement (gaps,
     /// short coverage): no partial credit.
     pub failed: u32,
+    /// Why the most recent failures failed (newest last, up to 6).
+    pub recent_failures: Vec<String>,
     pub requirement: String,
     pub open: u32,
     /// Telescope-seconds integrated.

@@ -41,8 +41,48 @@ System packages (Debian/Ubuntu): `libx11-dev libxcursor-dev libxrandr-dev libxi-
 
 ## What's in it
 
+**The window.** A *headline strip* across the top keeps the pitch figures in
+view: fleet size, observing duty, science requests per day and the share
+meeting their requirements, 60 s depth across the fleet, median image size,
+all-sky pass time, public images per year and the transit sensitivity. Each
+carries its provenance tag. The left panel has a fixed header (clock and
+speed, scenario, target search) above eight tabs:
+
+| Tab | Contents |
+|---|---|
+| Operations | mode, target, what the fleet is doing now, all-sky survey, web servers |
+| Fleet | constellation, attitude control, keep-out constraints, failures, traffic |
+| Telescope | optics, detector, pointing, fleet variation, photometric precision |
+| Science | science programme, near-Earth asteroids, planetary defence |
+| Public | public engagement |
+| Environment | SAA, Earthshine, stray light, orbital lifetime |
+| Interferometry & fuel | intensity-interferometry clusters, propellant budget |
+| Display | views, overlays, credits |
+
+**Target search.** Type a star, deep-sky object (Messier, NGC/IC, common
+name), planet, near-Earth asteroid or "RA Dec" in decimal degrees; Enter
+takes the first match. The view swings to the target. NEOs are set at their
+position when selected.
+
+**Scenarios.** The *Scenario* menu applies a named set of settings: the
+constellation, every telescope and pointing input, mode, sim speed,
+programme load, public users, SAA policy and handover scheduling. Built in:
+
+| Scenario | What changes |
+|---|---|
+| 1k stage (defaults) | 1,000 satellites, default assumptions |
+| 100-satellite pilot | first deployment stage |
+| 1k stage, conservative | 90 nm WFE, 1.0" jitter, 1,000 ppm/h photometric floor, wider fleet scatter, stray light 1 mag brighter, 2× demand |
+| 10k stage, optimistic | 10,000 satellites, fast steering mirror, 40 nm WFE, 200 ppm/h floor |
+
+The conservative and optimistic sets bracket the assumed engineering inputs;
+neither is a validated design point. *Save…* writes the current settings to
+`./scenarios/<name>.json`; saved files appear in the menu, and
+`--scenario <name or path>` loads one at start-up. Missing fields take their
+defaults, so older files keep loading.
+
 **Sky view (planetarium).** Geocentric J2000 sky in stereographic projection:
-8,920 stars to V 6.5 (HYG v4.0) with B−V colours, Sun, Moon and planets, an RA/Dec
+108,071 stars to V 10 (HYG v4.1) with B−V colours, 12,162 deep-sky objects (OpenNGC) and the known near-Earth asteroids (MPC), Sun, Moon and planets, an RA/Dec
 grid, the ecliptic, and Sun/Moon keep-out zones. Each telescope's FOV footprint is
 drawn on the sky. Drag to pan, scroll to zoom, click to set the target.
 
@@ -97,7 +137,13 @@ cannot change the fleet, orbits, hardware or clock (`cargo test` checks that
 such commands are rejected).
 
 The **operations console** (port 8780) is a mock-up of the hoped-for
-control surface. It has:
+control surface. A headline strip under the title bar carries the same
+tagged pitch figures as the desktop window. The live operations view (fleet,
+alerts, payload, ground track, sky, programme, STARE campaigns, satellite
+inspector) stays on top; the sections below it are tabs: *Queue & log*,
+*Science return*, *Resilience & ground*, *Space environment* and *Traffic &
+data* (the choice is remembered, and can be linked with `#Science%20return`
+etc.). It has:
 - **Fleet** status: in service, safe hold and integrating counts, a phase bar,
   sunlit/eclipse split and the optical mesh;
 - **Alerts**;
@@ -191,7 +237,11 @@ What's modelled (`src/imaging.rs`). Every input is a labelled assumption:
     panel and `/api/status` (`fleet_optics`) report 10th/50th/90th
     percentiles over 48 sampled telescopes: at the defaults FWHM
     1.47/1.59/1.81″ and 60 s depth V 20.53/20.71/20.83, against 1.52″ and
-    V 20.73 nominal. Requests still use the nominal telescope.
+    V 20.73 nominal. Each satellite is assigned one of the sampled builds
+    (by a hash of its index), and requests credit each contributing
+    telescope's time by its sensitivity factor q = 10^(0.8·Δdepth) for a
+    background-limited point source (0.64–1.24 at the defaults), so stacks
+    reach the depth of the telescopes that actually took part.
 
   The ideal scene (stars as points, galaxy profiles, shaded planets) is
   convolved with this PSF, integrated over the pixels. So images show Airy
@@ -390,6 +440,9 @@ STARE flags: `--stare <target>` (repeatable), `--stare-eyes N`.
 
 Web flags: `--control-addr --public-addr --no-control --no-public --no-web --token`.
 
+Scenario and scheduling flags: `--scenario <name or path>`, `--no-handover`,
+`--saa pause|flag|off`.
+
 Flags: `--n --planes --alt --inc --sso --star --aperture --rate --paused
 --mode survey|stack|mosaic|neo --view orbit|sky|split|unified --camfov <deg> --target <planet or star>
 --look --look-sun --fov <deg> --zoom <km> --coverage`.
@@ -439,7 +492,9 @@ real demand) are listed as validation work in TODO.md.
 | `src/constellation.rs` | Walker shell, J2 propagation, link topology |
 | `src/obs.rs` | constraints, pointing modes, metrics, sky grid |
 | `src/views.rs` | orbit and sky rendering, picking |
-| `src/app.rs` | state, clock, control panel |
+| `src/app.rs` | state, clock, control sections |
+| `src/ui_shell.rs` | window layout: headline strip, tabs, target search, scenarios |
+| `src/provenance.rs` | simulated / modelled / assumed / data tags for headline figures |
 | `src/tle.rs` | TLE export |
 | `src/server.rs` | HTTP ports, auth, limits, request book |
 | `src/attitude.rs` | slew / settle / guide-lock state machine, agility model |
@@ -447,7 +502,7 @@ real demand) are listed as validation work in TODO.md.
 | `src/imaging.rs` | hardware + photometry model, simulated images and reports |
 | `src/webapp.rs` | sim ↔ web glue: commands, queue scheduling, status |
 | `web/` | director and public pages, all-sky map |
-| `assets/` | stars (HYG v4.0, CC BY-SA 4.0), coastlines (Natural Earth, public domain) |
+| `assets/` | stars (HYG v4.1, CC BY-SA 4.0), deep sky (OpenNGC, CC BY-SA 4.0), NEOs (MPC), coastlines (Natural Earth, public domain) |
 
 `cargo test` runs 36 checks (`cargo test -- --ignored` also writes a gallery of sample results to /tmp): ephemeris vs ERFA, orbital period, SSO inclination,
 nodal regression, Earth-cone geometry, stacking maths and TLE format.
@@ -1055,19 +1110,25 @@ the request the way STARE does: members about to lose the target to the
 Earth are replaced before they set (lead = a 90° repoint plus a minute,
 using the drift-corrected set-time prediction), and the window outranks
 other work except planetary defence. `--no-handover` turns that off to
-compare with the plain greedy queue. Measured over 27.6 simulated hours,
+compare with the plain greedy queue. Telescopes that will enter the South
+Atlantic Anomaly (and safe their detectors) within the lead are treated as
+about to lose the target, using a 30-minute look-ahead along each orbit.
+Members of an open window are kept while they are locked, until their
+replacements have locked on, and STARE campaigns recruit them only when
+nothing else can see their target. Measured over 24.4 simulated hours,
 1,000 satellites, default load:
 
 | | Transits meeting the requirement | Occultations |
 |---|---|---|
-| Handover-aware scheduling | 94.3 % (1,628 of 1,727) | 98.5 % (267 of 271) |
-| Plain greedy queue (`--no-handover`) | 61.8 % (1,099 of 1,778) | 83.8 % (232 of 277) |
+| Handover-aware scheduling | 100 % (1,414 of 1,414) | 99.1 % (220 of 222) |
+| Plain greedy queue (`--no-handover`) | 61.3 % (917 of 1,496) | 81.4 % (197 of 242) |
 
 Before this change both were credited as 100 %, because interrupted pieces
-added up to the same telescope-seconds. The remaining handover failures are
-South Atlantic Anomaly safing: with `--saa flag` (keep observing, flag the
-frames) a 14-hour run had none. Avoiding recruits about to enter the SAA
-would recover most of them. For event windows the *response*
+added up to the same telescope-seconds. The remaining occultation
+failures fall just short: for example, 98.9 % covered against the 99 %
+requirement, with a 2 s gap while a replacement telescope settled. The science table and `/api/status` list
+the last few failures per case with what the telescopes were doing when the
+gap began. For event windows the *response*
 column is how late coverage began after the window opened.
 
 **Transit precision.** Detection depth is not photometric precision: a

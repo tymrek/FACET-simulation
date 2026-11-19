@@ -7,7 +7,8 @@ use crate::astro::{EARTH_RADIUS_KM, J2, MU_EARTH};
 use crate::math::{rad, V3};
 use std::f64::consts::{PI, TAU};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ShellParams {
     /// Total satellites T.
     pub n: usize,

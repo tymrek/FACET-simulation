@@ -349,7 +349,7 @@ impl App {
 
     pub fn survey_json(&self) -> serde_json::Value {
         let s = &self.survey;
-        let el = (self.jd - s.pass_start_jd) * 86_400.0;
+        let el = if s.pass_start_jd > 0.0 { (self.jd - s.pass_start_jd) * 86_400.0 } else { 0.0 };
         let per_tile = if s.tiles_completed > 0 { Some(s.busy_s / s.tiles_completed as f64) } else { None };
         serde_json::json!({
             "active": self.survey_active(),

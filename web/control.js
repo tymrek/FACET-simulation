@@ -533,6 +533,7 @@ function kvRows(tbl, rows) {
 function render(s) {
   last = s;
   if (s.provenance) PROV = s.provenance;
+  try { renderHeadlines(s); } catch (e) { console.log("headlines", e); }
   const [d, t] = s.utc.split(" ");
   $("utc").textContent = `${t} UTC`;
   const doy = Math.floor((Date.parse(d + "T00:00:00Z") - Date.parse(d.slice(0, 4) + "-01-01T00:00:00Z")) / 86400000) + 1;
@@ -568,7 +569,7 @@ function render(s) {
   ]);
   const t2 = s.telescope;
   kvRows($("payloadkv"), [
-    ["Telescope", `${t2.aperture_cm} cm aperture · ${t2.fov_deg}° field`],
+    ["Telescope", `${t2.aperture_cm} cm aperture · ${Number(t2.fov_deg).toFixed(2)}° field`],
     ["Optics", `${t2.wfe_nm} nm RMS wavefront · Strehl ${t2.strehl} · ${t2.spider_vanes ? t2.spider_vanes + "-vane spider" : "unobstructed spider-free"}`],
     ["Pointing", `${t2.jitter_arcsec}″ RMS fine-guided · ${t2.coarse_jitter_arcsec}″ star tracker`],
     ["Agility", `${t2.omega_dps}°/s · repoint 10° ${t2.repoint_10_s} s, 90° ${t2.repoint_90_s} s`],
@@ -649,3 +650,64 @@ setInterval(poll, 1000); poll();
 setInterval(pollFleet, 1500); pollFleet();
 setInterval(loadInspector, 1500);
 { const rid = new URLSearchParams(location.search).get("result"); if (rid) viewer.show(+rid); }
+
+
+// ---------------------------------------------------------------- layout
+// Tabs for the lower sections; the live operations view stays on top.
+(function tabs() {
+  const secs = [...document.querySelectorAll("section[data-tab]")];
+  const bar = $("tabbar");
+  // Queue & log first: it is what a director checks most.
+  secs.sort((a, b) => (b.dataset.tab.startsWith("Queue") ? 1 : 0) - (a.dataset.tab.startsWith("Queue") ? 1 : 0));
+  let cur = null;
+  try { cur = localStorage.getItem("facet.tab"); } catch (e) {}
+  if (location.hash) cur = decodeURIComponent(location.hash.slice(1));
+  if (!secs.some(s => s.dataset.tab === cur)) cur = secs[0].dataset.tab;
+  const show = name => {
+    for (const s of secs) s.hidden = s.dataset.tab !== name;
+    for (const b of bar.children) b.classList.toggle("on", b.dataset.tab === name);
+    try { localStorage.setItem("facet.tab", name); } catch (e) {}
+    try { history.replaceState(null, "", location.pathname + location.search + "#" + encodeURIComponent(name)); } catch (e) {}
+    window.dispatchEvent(new Event("resize"));
+  };
+  for (const s of secs) {
+    const b = el("button", { class: "tab", type: "button" }, s.dataset.tab);
+    b.dataset.tab = s.dataset.tab;
+    b.onclick = () => show(s.dataset.tab);
+    bar.append(b);
+  }
+  show(cur);
+})();
+
+// Headline strip: the pitch figures, each with its provenance tag.
+function renderHeadlines(s) {
+  const items = [];
+  const push = (label, value, key) => items.push(el("span", { class: "hl" }, el("span", { class: "hll" }, label), el("b", {}, value), basisChip(key)));
+  const n = s.shell ? s.shell.n : 0;
+  const failed = s.resilience ? s.resilience.failed : 0;
+  push("Fleet", failed ? `${n} satellites (${failed} failed)` : `${n} satellites`, "build_out");
+  const sc = s.science;
+  if (sc && sc.elapsed_s > 3600) {
+    const e = sc.efficiency;
+    push("Observing", `${Math.round(100 * e.integrating_pct / Math.max(1e-9, 100 - e.hold_pct))} %`, "duty");
+    let done = 0, on = 0, fin = 0;
+    for (const c of sc.cases) { done += c.completed; on += c.on_time; fin += c.completed + c.expired + (c.failed || 0); }
+    const days = sc.elapsed_s / 86400;
+    if (fin) push("Science", `${Math.round(done / days).toLocaleString()}/day, ${(100 * on / fin).toFixed(1)} % met`, "science");
+  } else push("Observing", "measuring…", "duty");
+  const f = s.fleet_optics;
+  if (f) {
+    push("60 s depth", `V ${f.depth_v60[0].toFixed(1)}–${f.depth_v60[2].toFixed(1)}`, "fleet_optics");
+    push("Image size", `${f.fwhm[1].toFixed(2)}″ median`, "fleet_optics");
+  }
+  const sv = s.survey;
+  if (sv && sv.last_pass_s) push("All-sky pass", fmtSpan(sv.last_pass_s), "allsky_measured");
+  else if (s.allsky && s.allsky.passes.length) push("All-sky pass (est.)", fmtSpan(s.allsky.passes[0].seconds), "allsky_estimate");
+  if (s.public && s.public.images_per_year > 0) {
+    const y = s.public.images_per_year;
+    push("Public", y >= 1e6 ? `${(y / 1e6).toFixed(1)} M images/yr` : `${Math.round(y / 1e3)}k images/yr`, "public_service");
+  }
+  const ph = s.photometry;
+  if (ph && ph.rows[1]) push("Transit 5σ (V 10, 4 tel.)", `${Math.round(ph.rows[1].transit_5sigma_ppm).toLocaleString()} ppm`, "photometry");
+  $("headlines").replaceChildren(...items);
+}

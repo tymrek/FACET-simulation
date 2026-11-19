@@ -53,12 +53,6 @@ function renderWhy(s) {
     tileB("ground telescopes to match one FACET telescope", `≈ ${g.equivalent_ground_telescopes.toFixed(0)}`, "ground_equiv"));
 }
 
-function fmtSpan(s) {
-  if (s < 90) return `${Math.round(s)} s`;
-  if (s < 5400) return `${Math.round(s / 60)} min`;
-  if (s < 2 * 86400) return `${(s / 3600).toFixed(1)} h`;
-  return `${(s / 86400).toFixed(1)} days`;
-}
 function renderAllSky(s) {
   const a = s.allsky, c = $("allsky_card"); c.hidden = !a; if (!a) return;
   const n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });

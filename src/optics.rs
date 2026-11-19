@@ -228,6 +228,23 @@ pub struct FleetSpread {
     pub nominal_depth_v60: f64,
     pub wfe_spread: f64,
     pub throughput_spread: f64,
+    /// Relative sensitivity of each sampled build, as an exposure-time
+    /// factor for a background-limited point source: q = 10^(0.8·Δdepth).
+    #[serde(skip)]
+    pub q: Vec<f64>,
+}
+
+/// Exposure-time sensitivity factor of satellite `i` (1 = nominal). Each
+/// satellite is assigned one of the sampled optical builds by a hash of its
+/// index; 1 everywhere until the fleet sample is ready.
+pub fn sat_q(f: Option<&FleetSpread>, i: usize) -> f64 {
+    match f {
+        Some(f) if !f.q.is_empty() => {
+            let h = (i as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32;
+            f.q[(h as usize) % f.q.len()]
+        }
+        _ => 1.0,
+    }
 }
 
 /// Sample `n` telescopes, each with its own random Zernike pattern, a
@@ -257,13 +274,16 @@ pub fn fleet_spread_sample(hw0: &Hardware, wfe_spread: f64, tput_spread: f64, ji
         (q(0.1), q(0.5), q(0.9))
     };
     let nom = psf(hw0, jitter);
+    let nominal_depth = crate::imaging::point_lim_mag(hw0, 60.0, sub, 22.0);
+    let q = rows.iter().map(|r| 10f64.powf(0.8 * (r.2 - nominal_depth))).collect();
     FleetSpread {
+        q,
         samples: n,
         fwhm: pct(&|r| r.0),
         strehl: pct(&|r| r.1),
         depth_v60: pct(&|r| r.2),
         nominal_fwhm: nom.fwhm,
-        nominal_depth_v60: crate::imaging::point_lim_mag(hw0, 60.0, sub, 22.0),
+        nominal_depth_v60: nominal_depth,
         wfe_spread,
         throughput_spread: tput_spread,
     }
@@ -592,7 +612,7 @@ mod tests {
         let r = 100.0; // ≈11″
         let with_spider = ratio(&p, r);
         let no_spider = ratio(&without, r);
-        println!("spike/ring at 11″: with spiders {with_spider:.1}, without {no_spider:.2}");
+        println!("spike/ring at 11\": with spiders {with_spider:.1}, without {no_spider:.2}");
         assert!(with_spider > 5.0 && no_spider < 2.0, "{with_spider} {no_spider}");
     }
 
@@ -796,6 +816,12 @@ mod budget_tests {
         eprintln!("fleet FWHM {:?} Strehl {:?} V60 {:?} nominal {:.2} V{:.2}", f.fwhm, f.strehl, f.depth_v60, f.nominal_fwhm, f.nominal_depth_v60);
         assert!(f.fwhm.0 < f.fwhm.2 && f.depth_v60.0 < f.depth_v60.2);
         assert!((f.fwhm.1 - f.nominal_fwhm).abs() < 0.25 * f.nominal_fwhm);
+        let mut q = f.q.clone();
+        q.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!("sensitivity factor q: min {:.2} median {:.2} max {:.2}", q[0], q[q.len() / 2], q[q.len() - 1]);
+        assert!(q[q.len() / 2] > 0.8 && q[q.len() / 2] < 1.15);
+        let a = (0..1000).map(|i| sat_q(Some(&f), i)).sum::<f64>() / 1000.0;
+        assert!((a - q.iter().sum::<f64>() / q.len() as f64).abs() < 0.05, "satellites spread over the builds");
         let none = fleet_spread_sample(&h, 0.0, 0.0, h.jitter_arcsec, 8);
         assert!(none.fwhm.2 - none.fwhm.0 < f.fwhm.2 - f.fwhm.0, "random patterns alone spread less than with RMS scatter");
     }

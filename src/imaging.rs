@@ -1121,7 +1121,7 @@ pub fn render(spec: &Spec) -> Output {
         },
         "optics": {
             "model": format!(
-                "Fourier optics: {:.0} cm aperture, {:.0} % central obstruction, {} spider vane{} × {} mm, {:.0} nm RMS wavefront error, 7 wavelengths 420–690 nm, ⊗ {:.2}″ RMS jitter, pixel-integrated",
+                "Fourier optics: {:.0} cm aperture, {:.0} % central obstruction, {} spider vane{} × {} mm, {:.0} nm RMS wavefront error, 7 wavelengths 420–690 nm, ⊗ {:.2}\" RMS jitter, pixel-integrated",
                 hw.aperture_cm, hw.obstruction * 100.0, hw.spider_vanes, if hw.spider_vanes == 1 { "" } else { "s" },
                 hw.spider_mm, hw.wfe_nm, hw.jitter_for(sub_s)
             ),

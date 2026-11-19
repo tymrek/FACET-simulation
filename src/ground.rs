@@ -228,7 +228,7 @@ pub fn compare(
         equivalent_ground_telescopes: equiv,
         notes: vec![
             format!(
-                "Ground: {} sites, Sun below {}°, targets above {}°, {}° from the Moon; seeing {}″, sky V {} mag/arcsec², extinction {} mag; clear fractions 55–85 % (assumed).",
+                "Ground: {} sites, Sun below {}°, targets above {}°, {}° from the Moon; seeing {}\", sky V {} mag/arcsec², extinction {} mag; clear fractions 55–85 % (assumed).",
                 ns, c.sun_alt_deg, c.min_alt_deg, c.moon_sep_deg, c.seeing_arcsec, c.sky_mag_arcsec2, c.extinction_mag
             ),
             "Ground benefits not modelled: larger apertures are cheap on the ground, and it can be serviced and upgraded.".into(),
