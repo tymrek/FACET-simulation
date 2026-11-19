@@ -509,6 +509,54 @@ a day, ≈ 3.5 million images a year, median wait ~10 min, public time
 70–90 % used, i.e. room for roughly 23,000 monthly users at this mix. The
 30-day user figures settle after the first simulated month.
 
+## Intensity interferometry (satellite clusters)
+
+`--ii <star>` or **Intensity interferometry** in the controls
+(`src/intensity.rs`). Two clusters, each a shell satellite ("chief") and up
+to five deputies, in planes ~90° apart in node, so their orbit poles, and
+the sky they cover best, are complementary. Deputies fly on concentric 2:1
+relative-motion ellipses around the chief (a projected circular-orbit
+formation, Hill/Clohessy–Wiltshire): same semi-major axis and inclination,
+different eccentricity vector, node and phase, so J2 acts on all members
+alike and the nested ellipses never cross. Size ρ (default 300 m) sets the
+baseline range.
+
+Every pair on the target records the squared visibility |V|² at its
+projected baseline, with the Hanbury Brown–Twiss signal-to-noise
+SNR = A α n |V|² √(m Δf / 2) √T: collecting area, detection efficiency
+(**assumed** 0.35), spectral photon flux density, spectral channels
+(**assumed** 4) and electronic bandwidth from the combined timing error
+(**assumed** 50 ps detector jitter, 10 ps clock sync over the laser links,
+1 cm position knowledge; ≈ 70 ps). The star is a uniform disk; noisy
+measurements are binned by baseline and the diameter fitted by least
+squares. Targets: twelve bright stars with approximate published diameters
+(0.5–6 mas), from Mirzam and Bellatrix to Sirius. Clusters stop when the
+Earth is in the way, the star is in a keep-out or the chief is in the South
+Atlantic Anomaly. The panel draws the members' relative motion, the uv
+coverage from both clusters and |V|² against baseline with the published
+and fitted curves.
+
+Example: Bellatrix (V 1.6, ~0.70 mas), six telescopes per cluster, ρ 300 m:
+about 0.02 SNR per √s per pair at |V|² = 1; after ~5 hours on target the
+fit is typically 0.5–0.7 ± 0.2 mas. Why clusters and not the whole shell:
+a star's signal vanishes at a baseline of ~1.22 λ/θ (tens to hundreds of
+metres for bright stars), while shell neighbours are hundreds of km apart.
+
+## Propellant budget
+
+**Propulsion and propellant** panel and the status API (`fuel`): Δv per
+satellite from drag make-up at the shell altitude (solar-cycle average of
+the lifetime model's density), collision avoidance (the traffic model's
+measured rate and Δv, else 2.3 a year × an **assumed** 0.05 m/s), the
+end-of-life disposal burn, and for cluster deputies an extra 5 % of drag Δv
+for differential drag plus an **assumed** 1 m/s a year for trims; 25 %
+margin; propellant by the rocket equation for a Hall-effect thruster
+(Isp 1400 s, default), green monopropellant (230 s) or cold gas (65 s).
+Defaults at 550 km over 5 years: ~7.7 m/s a year of drag, 84 m/s disposal,
+~154 m/s in all, **~1.7 kg of krypton per 150 kg satellite** (cluster
+deputies ~1.8 kg). With green monopropellant the same budget is ~10 kg,
+with cold gas ~32 kg.
+
 ## Catalogues
 
 * **Stars:** HYG v4.1, 108,071 stars to V 10 with 443 proper names. The sky

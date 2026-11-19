@@ -119,6 +119,8 @@ pub struct App {
     pub survey: crate::survey::Survey,
     pub neo: crate::neo::NeoSky,
     pub public: crate::public::Public,
+    pub ii: crate::intensity::Ii,
+    pub fuel: crate::intensity::FuelCfg,
     pub cost_window_open: bool,
     /// Presentation mode requests from the controls / command line.
     pub present_open: bool,
@@ -227,6 +229,8 @@ impl App {
             survey: crate::survey::Survey { show: true, ..Default::default() },
             neo: crate::neo::NeoSky { show: true, ..Default::default() },
             public: Default::default(),
+            ii: Default::default(),
+            fuel: Default::default(),
             cost_window_open: false,
             present_open: false,
             presenting: false,
@@ -329,6 +333,13 @@ impl App {
                     let fr: f64 = val().parse().unwrap_or(8.0);
                     self.obs_params.focal_mm = fr * self.obs_params.aperture_cm * 10.0;
                     self.obs_params.derive();
+                }
+                "--ii" => {
+                    self.ii.cfg.on = true;
+                    let v = val();
+                    if let Some(k) = crate::intensity::STARS.iter().position(|s| s.0.eq_ignore_ascii_case(&v)) {
+                        self.ii.cfg.star = k;
+                    }
                 }
                 "--no-public-demand" => self.public.cfg.on = false,
                 "--public-users" => self.public.cfg.population = val().parse().unwrap_or(20_000),
@@ -541,6 +552,7 @@ impl App {
         prof("environment_step");
         self.survey_credit(dt_sim);
         self.neo_tick();
+        self.ii_step(dt_sim);
         self.queue_credit();
         prof("queue_credit");
         self.science_account(dt_sim);
@@ -925,6 +937,10 @@ impl App {
         self.neo_panel(ui);
         ui.separator();
         self.public_panel(ui);
+        ui.separator();
+        self.ii_panel(ui);
+        ui.separator();
+        self.fuel_panel(ui);
         ui.separator();
         self.environment_panel(ui);
         ui.separator();

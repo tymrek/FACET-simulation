@@ -1028,6 +1028,8 @@ impl App {
             "survey": self.survey_json(),
             "neos": self.neo_json(),
             "public": self.public_json(),
+            "interferometry": self.ii_json(),
+            "fuel": self.fuel_budget(),
             "optics": {
                 "budget": crate::optics::blur_budget(&self.obs_params, self.obs_params.exp_s.min(self.obs_params.sub_max_s)),
                 "focal_mm": self.obs_params.focal_mm,

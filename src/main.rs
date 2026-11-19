@@ -17,6 +17,7 @@ mod draw;
 mod environment;
 mod ground;
 mod imaging;
+mod intensity;
 mod math;
 mod neo;
 mod obs;

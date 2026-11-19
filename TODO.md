@@ -6,17 +6,20 @@
 - Real star, deep-sky and variable-star catalogues; programme on real targets.
 - Known near-Earth asteroids (MPC orbits): sky view, visibility, close approaches.
 - Public engagement model and metrics.
+- Intensity interferometry clusters and the propellant budget.
 - Optics rework: design inputs (aperture, f-ratio, design, sensor, pointing presets), derived field, image-size budget.
 
 ## Simulation
-- Intensity interferometry on the shell (photon time-tagging over the laser
-  links): baseline/uv geometry from real orbits, HBT SNR per pair, bright-star
-  diameters; two planes ~90° apart for complementary coverage, half their
-  satellites carrying timing detectors.
+- Interferometry follow-ups: limb-darkened and oblate star models; closure
+  of the third-order correlation for phase; cluster size optimisation per star.
 
 ## Identity
 - Motion logo (B ↔ C gem): port into the app as start-up splash and the
   presentations' title card; favicon from the top view.
+
+## Usability
+- The controls column is very long: regroup into tabs (Fleet, Optics,
+  Operations, Science, Environment, Programme).
 
 ## Build and platform
 - GitHub CI (build + tests).

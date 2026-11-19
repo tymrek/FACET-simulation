@@ -287,6 +287,15 @@ pub struct FacetState<'a> {
 }
 
 impl Traffic {
+    /// Measured collision-avoidance rate and Δv per satellite-year, once at
+    /// least a few satellite-days have been screened.
+    pub fn manoeuvres_per_sat_yr(&self) -> Option<f64> {
+        (self.conj.screened_sat_days > 5.0).then(|| self.conj.manoeuvres as f64 / self.conj.screened_sat_days * 365.25)
+    }
+    pub fn cam_dv_per_sat_yr(&self) -> Option<f64> {
+        (self.conj.screened_sat_days > 5.0).then(|| self.conj.dv_ms / self.conj.screened_sat_days * 365.25)
+    }
+
     pub fn new(cfg: Config, jd: f64, facet_alt_km: f64) -> Traffic {
         let mut t = Traffic {
             cfg,
