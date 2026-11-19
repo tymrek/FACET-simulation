@@ -9,6 +9,23 @@
 - Intensity interferometry clusters and the propellant budget.
 - Optics rework: design inputs (aperture, f-ratio, design, sensor, pointing presets), derived field, image-size budget.
 
+## Adversarial review (Nov 2026): fixes in code
+- [x] Removed the sub-second lucky-imaging jitter cap.
+- [x] Provenance tags on every headline (simulated / modelled / assumed / data).
+- [x] STARE handover prediction includes J2 node drift; tested against the propagator.
+- [ ] Science-specific scheduling: minimum continuous windows (transits,
+      occultations), cadence (NEO follow-up), no partial credit where an
+      interruption ruins the measurement.
+- [ ] Fleet optical variation: per-telescope aberrations; report PSF and depth as a spread.
+- [ ] Photometric precision separate from detection depth, with a systematic floor.
+
+## Validation work (engineering, not code)
+- Stray-light ray trace and baffle test.
+- Structural/thermal pointing and wavefront error budget (STOP analysis).
+- Optical inter-satellite and downlink link budgets.
+- Settling from attitude dynamics (reaction wheels, flexible modes), not a timer.
+- External evidence of demand: letters of interest, user surveys.
+
 ## Simulation
 - Interferometry follow-ups: limb-darkened and oblate star models; closure
   of the third-order correlation for phase; cluster size optimisation per star.

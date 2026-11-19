@@ -371,7 +371,7 @@ impl App {
 
     pub fn survey_panel(&mut self, ui: &mut egui::Ui) {
         use egui::RichText;
-        ui.label(RichText::new("All-sky survey").strong());
+        ui.horizontal(|ui| { ui.label(RichText::new("All-sky survey").strong()); crate::provenance::chip(ui, "allsky_measured"); });
         ui.horizontal_wrapped(|ui| {
             if ui.selectable_label(self.mode == obs::Mode::AllSky, "Dedicate the fleet").on_hover_text("Every telescope not on a STARE campaign tiles the sky.").clicked() {
                 self.mode = if self.mode == obs::Mode::AllSky { obs::Mode::Queue } else { obs::Mode::AllSky };
@@ -397,7 +397,7 @@ impl App {
         )));
         if let Some(h) = s.history.last() {
             let mean = s.history.iter().map(|h| h.seconds).sum::<f64>() / s.history.len() as f64;
-            ui.label(RichText::new(format!(
+            crate::provenance::line(ui, "allsky_measured", format!(
                 "Last pass: {} (95 % in {}; {} tiles, {:.0} telescopes on average) · mean of {} passes: {}",
                 crate::allsky::fmt_span(h.seconds),
                 crate::allsky::fmt_span(h.t95),
@@ -405,18 +405,16 @@ impl App {
                 h.eyes_mean,
                 s.history.len(),
                 crate::allsky::fmt_span(mean)
-            ))
-            .small());
+            ));
         }
         if s.tiles_completed > 0 {
             let per = s.busy_s / s.tiles_completed as f64;
-            ui.label(RichText::new(format!(
+            crate::provenance::line(ui, "allsky_measured", format!(
                 "Measured telescope time per tile: {:.0} s ({:.0} s exposure + {:.0} s slew, settle and losses)",
                 per,
                 self.obs_params.exp_s,
                 (per - self.obs_params.exp_s).max(0.0)
-            ))
-            .small());
+            ));
         }
         if ui.small_button("Restart pass").clicked() {
             let jd = self.jd;

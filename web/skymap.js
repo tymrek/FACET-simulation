@@ -197,6 +197,18 @@ function el(tag, attrs = {}, ...kids) {
   for (const k of kids) e.append(k instanceof Node ? k : document.createTextNode(String(k)));
   return e;
 }
+// Provenance chip for a headline: simulated / modelled / assumed / data,
+// with what the figure rests on as a tooltip. Registry comes from /api/status.
+let PROV = null;
+function basisChip(key) {
+  const it = PROV && PROV.items && PROV.items[key];
+  if (!it) return "";
+  const m = (PROV.bases.find(b => b.basis === it.basis) || {}).meaning || "";
+  return el("span", { class: `basis b-${it.basis}`, title: `${m}\n\n${it.rests_on}` }, it.basis);
+}
+function tileB(label, value, key) {
+  return el("div", { class: "tile" }, el("div", { class: "tv" }, value), el("div", { class: "tl" }, label, " ", basisChip(key)));
+}
 function fmtDur(s) {
   if (s < 120) return `${s.toFixed(0)} s`;
   if (s < 7200) return `${(s/60).toFixed(1)} min`;

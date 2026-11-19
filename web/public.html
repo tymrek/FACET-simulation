@@ -37,7 +37,7 @@
       <h2>The whole sky, in minutes</h2>
       <div class="bighead"><span class="bignum" id="as_time"></span><span class="bigtxt" id="as_head"></span></div>
       <div class="tiles" id="as_tiles"></div>
-      <table><thead><tr><th>Telescopes in orbit</th><th class="num">60 s per field</th><th class="num">5 min per field</th><th class="num">1 hour per field</th></tr></thead>
+      <table><thead><tr><th>Telescopes in orbit <span class="basis b-modelled">modelled</span></th><th class="num">60 s per field</th><th class="num">5 min per field</th><th class="num">1 hour per field</th></tr></thead>
       <tbody id="as_stages"></tbody></table>
       <p class="small" id="as_meas" hidden></p>
       <p class="small muted" id="as_note"></p>
@@ -45,14 +45,14 @@
     <div class="card" id="pub_card" hidden>
       <h2>FACET for everyone</h2>
       <div class="tiles" id="pub_tiles"></div>
-      <table><thead><tr><th>Who uses it (assumed mix)</th><th class="num">Requests a day</th><th class="num">Images delivered a day</th></tr></thead><tbody id="pub_segs"></tbody></table>
-      <table><thead><tr><th>Telescopes in orbit</th><th class="num">Monthly public users served</th></tr></thead><tbody id="pub_stages"></tbody></table>
+      <table><thead><tr><th>Who uses it <span class="basis b-assumed">assumed</span></th><th class="num">Requests a day</th><th class="num">Images delivered a day</th></tr></thead><tbody id="pub_segs"></tbody></table>
+      <table><thead><tr><th>Telescopes in orbit <span class="basis b-modelled">modelled</span></th><th class="num">Monthly public users served</th></tr></thead><tbody id="pub_stages"></tbody></table>
       <p class="small muted" id="pub_note"></p>
     </div>
     <div class="card" id="neo_card" hidden>
       <h2>Known near-Earth asteroids</h2>
       <div class="tiles" id="neo_tiles"></div>
-      <table><thead><tr><th>Upcoming close approach</th><th>Date (UTC)</th><th class="num">Distance</th><th class="num">Peak brightness</th><th class="num">Size</th></tr></thead>
+      <table><thead><tr><th>Upcoming close approach <span class="basis b-modelled">modelled</span></th><th>Date (UTC)</th><th class="num">Distance</th><th class="num">Peak brightness</th><th class="num">Size</th></tr></thead>
       <tbody id="neo_ca"></tbody></table>
       <p class="small muted" id="neo_note"></p>
     </div>
@@ -71,7 +71,7 @@
     <div class="card">
       <h2>Science return <span class="small muted" id="sci_since"></span></h2>
       <div class="tiles" id="sci_tiles"></div>
-      <table><thead><tr><th>Science case</th><th class="num">Completed</th><th class="num">On time</th><th class="num">Typical response</th><th class="num">Typical depth</th></tr></thead>
+      <table><thead><tr><th>Science case <span class="basis b-simulated">simulated</span></th><th class="num">Completed</th><th class="num">On time</th><th class="num">Typical response</th><th class="num">Typical depth</th></tr></thead>
       <tbody id="sci_cases"></tbody></table>
       <p class="small muted">Investigators, targets and requests in this simulation are synthetic.</p>
     </div>
@@ -117,8 +117,12 @@
       <h2>Your requests</h2>
       <table><tbody id="mine"><tr><td class="muted small">None yet from this browser.</td></tr></tbody></table>
     </div>
-    <p class="note">Simulation only. FACET is a proposed constellation; every number here is
-    an unchecked soft estimate from idealised scaling, not a measured capability.</p>
+    <div class="card basislegend">
+      <h2>Where the numbers come from</h2>
+      <p class="small">Simulation only. FACET is a proposed constellation, and nothing here is a measurement of flight hardware.
+      Each headline carries a tag; hover over it for what that figure rests on.</p>
+      <div id="basis_legend"></div>
+    </div>
   </aside>
 </main>
 <script src="/skymap.js"></script>

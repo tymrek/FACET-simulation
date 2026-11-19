@@ -220,16 +220,14 @@ impl App {
         ui.label(RichText::new("Known near-Earth asteroids").strong());
         ui.checkbox(&mut self.neo.show, "show in sky view (hazardous ones in red)");
         let j = self.neo_json();
-        ui.label(RichText::new(format!(
+        crate::provenance::line(ui, "neo_catalogue", format!(
             "{} known (MPC), {} potentially hazardous, {} larger than ~1 km.",
             j["known"], j["pha"], j["km"]
-        ))
-        .small());
-        ui.label(RichText::new(format!(
+        ));
+        crate::provenance::line(ui, "neo_visible", format!(
             "Observable now, outside the keep-outs: {} brighter than V {:.1} (one telescope, 60 s), {} brighter than V {:.1} (16 stacked). {} more are bright enough but inside the Sun or Moon keep-out.",
             j["visible_1tel"], j["lim_1tel_60s"].as_f64().unwrap_or(0.0), j["visible_16tel"], j["lim_16tel"].as_f64().unwrap_or(0.0), j["bright_but_in_keepout"]
-        ))
-        .small());
+        ));
         if !self.neo.approaches.is_empty() {
             egui::CollapsingHeader::new(RichText::new("Close approaches, next 60 days (within 20 lunar distances)").small())
                 .id_source("neo_ca")

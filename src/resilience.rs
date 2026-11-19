@@ -305,7 +305,7 @@ impl App {
     }
 
     pub fn resilience_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Resilience (failures & replacement)").strong());
+        ui.horizontal(|ui| { ui.label(RichText::new("Resilience (failures & replacement)").strong()); crate::provenance::chip(ui, "resilience"); });
         let n = self.shell.len();
         let failed = self.resil.n_failed();
         ui.horizontal_wrapped(|ui| {

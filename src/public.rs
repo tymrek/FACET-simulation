@@ -493,31 +493,28 @@ impl App {
         if j["days_measured"].as_u64().unwrap_or(0) == 0 {
             ui.label(RichText::new("Measuring the first simulated day…").small().weak());
         }
-        ui.label(RichText::new(format!(
+        crate::provenance::line(ui, "public_service", format!(
             "{:.0} requests/day · {:.0} images delivered/day (≈ {:.1} M a year) · median wait {}",
             f("submitted_per_day"),
             f("completed_per_day"),
             f("images_per_year") / 1e6,
             j["median_wait_s"].as_f64().map(crate::allsky::fmt_span).unwrap_or("–".into())
-        ))
-        .small());
-        ui.label(RichText::new(format!(
+        ));
+        crate::provenance::line(ui, "public_service", format!(
             "{} users in the last 30 days, {:.0} % returning · {:.0} classroom sessions/day · {:.0} citizen-science measurements/day",
             j["users_30d"],
             100.0 * f("returning_share"),
             f("classroom_sessions_per_day"),
             f("citizen_measurements_per_day")
-        ))
-        .small());
-        ui.label(RichText::new(format!(
+        ));
+        crate::provenance::line(ui, "public_service", format!(
             "Turned away per day: {:.0} over fair-use quota, {:.0} queue full, {:.0} gave up waiting · public pool {:.0} % utilised",
             f("turned_away_quota_per_day"),
             f("turned_away_full_per_day"),
             f("expired_per_day"),
             100.0 * f("pool_utilisation")
-        ))
-        .small());
-        ui.label(RichText::new(format!("Live (real visitors to the public site): {} requests, {} open", j["live"]["submitted"], j["live"]["open"])).small().weak());
+        ));
+        crate::provenance::line(ui, "public_live", format!("Live (real visitors to the public site): {} requests, {} open", j["live"]["submitted"], j["live"]["open"]));
     }
 }
 

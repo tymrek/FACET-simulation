@@ -697,7 +697,7 @@ impl App {
         ui.separator();
 
         // ---------------- Telescope
-        ui.label(RichText::new("Telescope (per satellite)").strong());
+        ui.horizontal(|ui| { ui.label(RichText::new("Telescope (per satellite)").strong()); crate::provenance::chip(ui, "depth"); crate::provenance::chip(ui, "fwhm"); });
         {
             use crate::obs::{DESIGNS, POINTING, SENSORS};
             let o = &mut self.obs_params;

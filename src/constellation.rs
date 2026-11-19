@@ -240,8 +240,45 @@ impl Shell {
 
     /// Seconds until direction `t` leaves satellite i's field of regard (the
     /// sky outside the Earth keep-out cone: dot(t, r̂) > cos_lim). None if it
-    /// is not visible now; +∞ if it never sets. Ignores the slow node drift.
+    /// is not visible now; +∞ if it never sets.
+    ///
+    /// The in-plane geometry gives a closed-form first guess with the node
+    /// frozen; Newton steps on the propagated r̂(τ) then fold in the J2 node
+    /// drift (−4.5 °/day at 550 km, 53°), so the result agrees with the
+    /// propagator to well under 0.1 s (see `time_to_set_matches_propagation`).
     pub fn time_to_set(&self, i: usize, t: V3, cos_lim: f64) -> Option<f64> {
+        let tau0 = self.time_to_set_frozen(i, t, cos_lim)?;
+        if !tau0.is_finite() {
+            return Some(tau0);
+        }
+        let f = |tau: f64| t.dot(self.rhat_after(i, tau)) - cos_lim;
+        let mut tau = tau0;
+        for _ in 0..6 {
+            let h = 0.5;
+            let d = (f(tau + h) - f(tau - h)) / (2.0 * h);
+            if d.abs() < 1e-15 {
+                break;
+            }
+            let step = (f(tau) / d).clamp(-30.0, 30.0);
+            tau -= step;
+            if step.abs() < 1e-4 {
+                break;
+            }
+        }
+        Some(tau.max(0.0))
+    }
+
+    /// Radial unit vector of satellite i, `tau` seconds after the current
+    /// propagation epoch (node and argument of latitude both advanced).
+    pub fn rhat_after(&self, i: usize, tau: f64) -> V3 {
+        let (so, co) = (self.raan_now[i] + self.raan_dot * tau).sin_cos();
+        let (su, cu) = (self.u_now[i] + self.u_dot * tau).sin_cos();
+        let (ci, si) = (self.cos_i, self.sin_i);
+        V3::new(cu * co - su * ci * so, cu * so + su * ci * co, su * si)
+    }
+
+    /// Closed-form time to set with the node held fixed (the first guess).
+    pub fn time_to_set_frozen(&self, i: usize, t: V3, cos_lim: f64) -> Option<f64> {
         let (p, q) = self.plane_basis(i);
         let (a, b) = (t.dot(p), t.dot(q));
         let r = a.hypot(b);
@@ -306,25 +343,44 @@ mod tests {
 
     #[test]
     fn time_to_set_matches_propagation() {
-        // Predict when a target sets for a few satellites, then propagate and check.
+        // Predict set times, then bisect the propagated geometry for the truth.
+        // Reports the frozen-node error the drift correction removes.
         let jd0 = 2_461_000.0;
         let mut s = Shell::new(ShellParams { n: 60, ..Default::default() }, jd0);
-        let t = V3::from_radec(1.0, 0.4);
         let cos_lim = -(69.2f64.to_radians() + 10f64.to_radians()).cos();
-        for i in 0..60 {
-            if let Some(tts) = s.time_to_set(i, t, cos_lim) {
-                if !tts.is_finite() || tts > 3000.0 {
+        let (mut worst_new, mut worst_old, mut n) = (0.0f64, 0.0f64, 0);
+        for (ra, de) in [(1.0, 0.4), (3.0, -0.9), (5.0, 1.2), (0.2, 0.0)] {
+            let t = V3::from_radec(ra, de);
+            for i in 0..60 {
+                s.propagate(jd0);
+                let (Some(tts), Some(old)) =
+                    (s.time_to_set(i, t, cos_lim), s.time_to_set_frozen(i, t, cos_lim))
+                else {
+                    continue;
+                };
+                if !tts.is_finite() || tts > 3000.0 || tts < 1.0 {
                     continue;
                 }
-                let before = jd0 + (tts - 5.0) / 86_400.0;
-                let after = jd0 + (tts + 5.0) / 86_400.0;
-                s.propagate(before);
-                assert!(t.dot(s.pos[i].unit()) > cos_lim, "sat {i} should still see it");
-                s.propagate(after);
-                assert!(t.dot(s.pos[i].unit()) <= cos_lim + 1e-4, "sat {i} should have lost it");
-                s.propagate(jd0);
+                let vis = |s: &mut Shell, dt: f64| {
+                    s.propagate(jd0 + dt / 86_400.0);
+                    t.dot(s.pos[i].unit()) > cos_lim
+                };
+                let (mut lo, mut hi) = (tts - 60.0, tts + 60.0);
+                assert!(vis(&mut s, lo.max(0.0)) && !vis(&mut s, hi), "sat {i}: bracket");
+                lo = lo.max(0.0);
+                for _ in 0..40 {
+                    let m = 0.5 * (lo + hi);
+                    if vis(&mut s, m) { lo = m } else { hi = m }
+                }
+                let truth = 0.5 * (lo + hi);
+                worst_new = worst_new.max((tts - truth).abs());
+                worst_old = worst_old.max((old - truth).abs());
+                n += 1;
             }
         }
+        eprintln!("time_to_set over {n} passes: frozen-node error ≤ {worst_old:.3} s, with drift ≤ {worst_new:.4} s");
+        assert!(n > 10, "too few passes tested ({n})");
+        assert!(worst_new < 0.05, "drift-corrected error {worst_new} s");
     }
 
     #[test]

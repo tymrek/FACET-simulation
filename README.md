@@ -179,9 +179,11 @@ What's modelled (`src/imaging.rs`). Every input is a labelled assumption:
     astigmatism, coma, trefoil, spherical), default 60 nm RMS, which gives
     Strehl ≈ 0.6 across the band;
   - monochromatic PSFs at 7 wavelengths from 420 to 690 nm are averaged;
-  - the result is convolved with the pointing jitter, 1″ RMS by default.
-    Sub-second frames are registered, which freezes most of the jitter
-    (lucky imaging).
+  - the result is convolved with the pointing jitter at its full RMS figure
+    for every frame length. There is no lucky-imaging credit: removing jitter
+    by registering short frames needs a jitter spectrum, enough stars per
+    frame to centroid and read-noise-limited stacking, none of which is
+    modelled.
 
   The ideal scene (stars as points, galaxy profiles, shaded planets) is
   convolved with this PSF, integrated over the pixels. So images show Airy
@@ -387,7 +389,26 @@ Flags: `--n --planes --alt --inc --sso --star --aperture --rate --paused
 
 ## Accuracy and assumptions
 
-Every performance number is an **unchecked soft estimate**:
+### Where each number comes from
+
+Every headline figure carries one of four tags, in the native panels and on
+both web pages (hover over a tag for what that figure rests on). The
+registry is `src/provenance.rs` and is served in `/api/status` as
+`provenance`.
+
+| Tag | Meaning | Examples |
+|---|---|---|
+| **simulated** | Measured from the simulated fleet as it runs: scheduling, slews, eclipses, the SAA, queues. Inherits every model and assumption beneath it; it is not a measurement of hardware. | duty cycle, measured all-sky pass, public waits, science completions, SAA and Earthshine losses, STARE coverage, interferometric fits |
+| **modelled** | Computed from a physical or engineering model with stated inputs, not from running the fleet. | depth and FWHM, all-sky estimate table, orbital lifetime, stray light, propellant, NEO visibility and close approaches, ground equivalence |
+| **assumed** | An input or scenario chosen for the simulation. Change it and the answer changes. | public user numbers and mix, synthetic investigators, build-out stages, prices |
+| **data** | Real external data. | MPC near-Earth asteroid list, star and deep-sky catalogues, real visitors' requests |
+
+Nothing in FACET has been validated against flight hardware. The figures
+that would need engineering work to validate (stray light, thermal and
+structural pointing error, optical link budgets, photometric systematics,
+real demand) are listed as validation work in TODO.md.
+
+### Notes on the models
 
 - Stacked depth comes from the photometric and noise model described under
   *Simulated observation results*, assuming a typical dark sky of 22.0 mag/arcsec².

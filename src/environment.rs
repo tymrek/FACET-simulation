@@ -735,7 +735,7 @@ impl App {
         let e = &self.env;
         let sat = e.sat_s.max(1e-9);
         let row = e.trade.iter().find(|r| (r.alt_km - alt).abs() < 1.0).cloned();
-        ui.label(RichText::new(format!(
+        crate::provenance::line(ui, "saa", format!(
             "In the anomaly now: {} of {} ({:.1} %) · orbit average at {:.0} km / {:.1}°: {}",
             e.n_in_saa,
             n,
@@ -743,21 +743,19 @@ impl App {
             alt,
             inc,
             row.as_ref().map(|r| format!("{:.1} %", 100.0 * r.saa_frac)).unwrap_or("-".into())
-        ))
-        .small());
-        ui.label(RichText::new(format!(
+        ));
+        crate::provenance::line(ui, "saa", format!(
             "This run: {:.1} % of satellite time inside; {:.1} % of fleet time lost to safed detectors",
             100.0 * e.saa_s / sat,
             100.0 * e.saa_lost_s / sat
-        ))
-        .small());
+        ));
         let o = &self.obs_params;
         let area = (o.sensor_px * o.pixel_um * 1e-4) * (o.sensor_py * o.pixel_um * 1e-4);
         let peak = row.as_ref().map(|r| r.peak_flux).unwrap_or(0.0);
         let px = o.sensor_px * o.sensor_py;
         let frame = o.exp_s.min(o.sub_max_s).max(1.0);
         let frac = |f: f64| 100.0 * f * area * frame * 10.0 / px;
-        ui.label(RichText::new(format!(
+        crate::provenance::line(ui, "saa", format!(
             "Particle hits per {:.0} s frame ({:.1} cm² sensor): ~{:.0} outside the anomaly ({:.3} % of pixels), ~{:.0} at its centre ({:.1} %)",
             frame,
             area,
@@ -765,30 +763,27 @@ impl App {
             frac(GCR_FLUX),
             (GCR_FLUX + peak) * area * frame,
             frac(GCR_FLUX + peak)
-        ))
-        .small());
+        ));
         let days = (e.elapsed_s / 86_400.0).max(1e-9);
         if e.elapsed_s > 0.0 {
-            ui.label(RichText::new(format!(
+            crate::provenance::line(ui, "saa", format!(
                 "Single-frame false transients from particle hits: {:.0}/day fleet-wide; chance matches between two telescopes: {:.0}/day, between three: {:.1e}/day",
                 e.candidates / days,
                 e.coincidences / days,
                 e.coincidences3 / days
-            ))
-            .small());
-            ui.label(RichText::new(format!("Proton fluence per satellite: {:.1e} p/cm²/yr", e.fluence / sat * 365.25 * 86_400.0)).small());
+            ));
+            crate::provenance::line(ui, "saa", format!("Proton fluence per satellite: {:.1e} p/cm²/yr", e.fluence / sat * 365.25 * 86_400.0));
         }
         ui.add_space(4.0);
         ui.label(RichText::new("Earthshine").small().strong());
         ui.checkbox(&mut self.env.cfg.earthshine, "model sunlit-limb stray light");
         let e = &self.env;
         if e.cfg.earthshine && e.exposed_s > 0.0 {
-            ui.label(RichText::new(format!(
+            crate::provenance::line(ui, "earthshine", format!(
                 "{} telescopes now lose > 30 % to Earthshine · {:.1} % of all exposure time lost (dark-sky equivalent)",
                 e.n_shine,
                 100.0 * e.earthshine_lost_s / e.exposed_s
-            ))
-            .small());
+            ));
         }
         ui.add_space(4.0);
         ui.label(RichText::new("Sunward stray light and the Sun keep-out").small().strong());
@@ -812,12 +807,11 @@ impl App {
         }
         let e = &self.env;
         if self.obs_params.stray_on && e.exposed_s > 0.0 {
-            ui.label(RichText::new(format!(
+            crate::provenance::line(ui, "stray_loss", format!(
                 "{} telescopes now lose > 30 % to sunlight · {:.1} % of all exposure time lost (dark-sky equivalent)",
                 e.n_sun,
                 100.0 * e.sunlight_lost_s / e.exposed_s
-            ))
-            .small());
+            ));
         }
         let cur = self.obs_params.sun_excl_deg;
         egui::CollapsingHeader::new(RichText::new("Keep-out trade").small()).id_source("keep_trade").default_open(true).show(ui, |ui| {
@@ -849,15 +843,14 @@ impl App {
         ui.add(egui::Slider::new(&mut c.disposal_perigee_km, 150.0..=350.0).text("disposal perigee km"));
         let e = &self.env;
         if let Some((m, lo, hi, cy)) = e.life {
-            ui.label(RichText::new(format!(
+            crate::provenance::line(ui, "lifetime", format!(
                 "A dead satellite at {:.0} km re-enters in {} (mean sun; {} at solar max, {} at solar min; {} following the cycle from now)",
                 alt,
                 fmt_years(m),
                 fmt_years(lo),
                 fmt_years(hi),
                 fmt_years(cy)
-            ))
-            .small());
+            ));
             let ok = cy <= 5.0;
             ui.label(
                 RichText::new(if ok {

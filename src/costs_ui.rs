@@ -176,7 +176,7 @@ impl App {
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.label(RichText::new(format!("{} · {} satellites · {} – {}", self.cost_model.name, r.fleet, self.cost_model.first_year, self.cost_model.first_year + self.cost_model.horizon_years as i32 - 1)).strong());
+                ui.horizontal(|ui| { ui.label(RichText::new(format!("{} · {} satellites · {} – {}", self.cost_model.name, r.fleet, self.cost_model.first_year, self.cost_model.first_year + self.cost_model.horizon_years as i32 - 1)).strong()); crate::provenance::chip(ui, "costs"); });
                 let opt = |x: Option<f64>| x.map(fmt_money).unwrap_or_else(|| "–".into());
                 let tiles: Vec<(String, String)> = vec![
                     (format!("{}-year programme cost", self.cost_model.horizon_years), fmt_money(r.total)),

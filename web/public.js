@@ -19,10 +19,10 @@ function estimate() {
   const t = last.telescope, n = Math.max(1, +$("tel").value || 1), e = Math.max(1, +$("exp").value || 1);
   // Background-limited scaling from the server's physical 1-telescope, 60 s limit.
   const lim = t.lim_1tel_60s + 1.25 * Math.log10(n * e / 60);
-  $("estimate").textContent =
+  $("estimate").replaceChildren(basisChip("depth"), " ",
     `Stacking ${n} × ${t.aperture_cm} cm telescopes for ${fmtDur(e)} each ≈ the light grasp of a ` +
     `${(t.aperture_cm * Math.sqrt(n) / 100).toFixed(2)} m aperture; estimated 5σ depth V ≈ ${lim.toFixed(1)} ` +
-    `(dark sky, soft estimate; the result page computes it exactly). Field of view ${t.fov_deg}° per telescope.`;
+    `(dark sky, noise-limited; the result page computes it exactly). Field of view ${Number(t.fov_deg).toFixed(2)}° per telescope.`);
 }
 
 function renderDefence(s) {
@@ -35,7 +35,7 @@ function renderDefence(s) {
     (d.radiant_elong_deg < 60 ? "out of the daytime sky, where telescopes on the ground cannot look. " : "through the night sky. ") +
     "FACET searches for it, and once found, dozens of telescopes track it to pin down where it will strike. " +
     "Below: what FACET adds, compared with ground-based telescopes alone.";
-  const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
+  const t = (l, v) => tileB(l, v, "defence");
   $("pd_tiles").replaceChildren(
     t("warning time with FACET", a.warning_s == null ? "–" : fmtDur(a.warning_s)),
     t("warning time, ground only", b.warning_s == null ? (d.state === "impacted" ? "none" : "–") : fmtDur(b.warning_s)),
@@ -48,9 +48,9 @@ function renderWhy(s) {
   const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
   $("why_text").textContent = `Compared with the same number of identical telescopes at ${g.sites} of the world's good observatory sites: on the ground, telescopes only work at night, in clear weather, through the air.`;
   $("why_tiles").replaceChildren(
-    t("of the time FACET is observing", `${Math.round(100 * g.facet_duty)} %`),
-    t("for a telescope on the ground", `${Math.round(100 * g.ground_duty)} %`),
-    t("ground telescopes to match one FACET telescope", `≈ ${g.equivalent_ground_telescopes.toFixed(0)}`));
+    tileB("of the time FACET is observing", `${Math.round(100 * g.facet_duty)} %`, "duty"),
+    tileB("for a telescope on the ground", `${Math.round(100 * g.ground_duty)} %`, "ground_equiv"),
+    tileB("ground telescopes to match one FACET telescope", `≈ ${g.equivalent_ground_telescopes.toFixed(0)}`, "ground_equiv"));
 }
 
 function fmtSpan(s) {
@@ -64,13 +64,13 @@ function renderAllSky(s) {
   const n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
   const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
   const [p60, p300, p3600] = a.passes;
-  $("as_time").textContent = fmtSpan(p60.seconds);
+  $("as_time").replaceChildren(fmtSpan(p60.seconds), " ", basisChip("allsky_estimate"));
   $("as_head").textContent = `for FACET's ${n(a.eyes)} telescopes to photograph every part of the sky that isn't hidden by the Sun or Moon right now: ${n(a.available_deg2)} square degrees, ${n(a.fields)} overlapping fields, one minute each, down to magnitude ${p60.depth_v.toFixed(1)}.`;
   $("as_tiles").replaceChildren(
-    t("complete passes of the sky per day", n(a.per_day_60s)),
-    t(`to go deeper: 5 minutes per field (to mag ${p300.depth_v.toFixed(1)})`, fmtSpan(p300.seconds)),
-    t(`an hour per field (to mag ${p3600.depth_v.toFixed(1)})`, fmtSpan(p3600.seconds)),
-    t("of raw images per one-minute pass", `${a.tb_per_pass_60s.toFixed(1)} TB`));
+    tileB("complete passes of the sky per day", n(a.per_day_60s), "allsky_estimate"),
+    tileB(`to go deeper: 5 minutes per field (to mag ${p300.depth_v.toFixed(1)})`, fmtSpan(p300.seconds), "allsky_estimate"),
+    tileB(`an hour per field (to mag ${p3600.depth_v.toFixed(1)})`, fmtSpan(p3600.seconds), "allsky_estimate"),
+    tileB("of raw images per one-minute pass", `${a.tb_per_pass_60s.toFixed(1)} TB`, "allsky_data"));
   $("as_stages").replaceChildren(...a.stages.map(r => el("tr", r.n === s.shell.n ? { class: "me" } : {},
     el("td", {}, `${n(r.n)}${r.n === s.shell.n ? " (now)" : ""}`),
     el("td", { class: "num" }, fmtSpan(r.s60)),
@@ -79,7 +79,7 @@ function renderAllSky(s) {
   const sv = s.survey, m = $("as_meas");
   const last = sv && sv.history && sv.history.length ? sv.history[sv.history.length - 1] : null;
   m.hidden = !last;
-  if (last) m.textContent = `Measured in this simulation, not estimated: the fleet's last complete pass of the sky took ${fmtSpan(last.seconds)} (95 % of it in ${fmtSpan(last.t95)}), with ${Math.round(last.eyes_mean).toLocaleString()} telescopes working on average${sv.overhead_per_tile_s != null ? ` and ${Math.round(sv.overhead_per_tile_s)} s of slewing, settling and losses per field` : ""}.`;
+  if (last) m.replaceChildren(basisChip("allsky_measured"), " ", `Measured in this simulation, not estimated: the fleet's last complete pass of the sky took ${fmtSpan(last.seconds)} (95 % of it in ${fmtSpan(last.t95)}), with ${Math.round(last.eyes_mean).toLocaleString()} telescopes working on average${sv.overhead_per_tile_s != null ? ` and ${Math.round(sv.overhead_per_tile_s)} s of slewing, settling and losses per field` : ""}.`);
   $("as_note").textContent = `How the estimate is worked out: fields × (exposure + ${a.overhead_s.toFixed(0)} s to slew and settle) ÷ (telescopes × the share of time they actually spend observing, ${Math.round(100 * a.duty)} %${a.duty_measured ? " as measured in this run, after slews, the South Atlantic Anomaly and Earthshine" : ", assumed until this run has measured it"}). It assumes the whole fleet is given to the job; with a typical ${Math.round(100 * a.survey_share)} % of telescopes surveying and the rest doing requested science, a one-minute pass takes ${fmtSpan(a.survey_share_60s)}. The part of the sky behind the Sun comes into view as the Earth orbits: the entire celestial sphere is covered within about ${Math.round(a.whole_sphere_days)} days. The Earth blocks each telescope's view but never the fleet's: every patch of sky is above the horizon for many satellites at once.`;
 }
 
@@ -88,10 +88,10 @@ function renderPublic(s) {
   const f = (x) => Math.round(x).toLocaleString();
   const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
   $("pub_tiles").replaceChildren(
-    t("images for the public a year", p.images_per_year >= 1e6 ? `${(p.images_per_year / 1e6).toFixed(1)} million` : f(p.images_per_year)),
-    t("typical wait from request to image", p.median_wait_s == null ? "–" : fmtSpan(p.median_wait_s)),
-    t("classroom sessions a day", f(p.classroom_sessions_per_day)),
-    t("citizen-science measurements a day", f(p.citizen_measurements_per_day)));
+    tileB("images for the public a year", p.images_per_year >= 1e6 ? `${(p.images_per_year / 1e6).toFixed(1)} million` : f(p.images_per_year), "public_service"),
+    tileB("typical wait from request to image", p.median_wait_s == null ? "–" : fmtSpan(p.median_wait_s), "public_service"),
+    tileB("classroom sessions a day", f(p.classroom_sessions_per_day), "public_service"),
+    tileB("citizen-science measurements a day", f(p.citizen_measurements_per_day), "public_service"));
   $("pub_segs").replaceChildren(...p.segments.map(g => el("tr", {},
     el("td", {}, g.segment), el("td", { class: "num" }, f(g.submitted_per_day)), el("td", { class: "num" }, f(g.completed_per_day)))));
   $("pub_stages").replaceChildren(...p.stages.map(r => el("tr", r.n === s.shell.n ? { class: "me" } : {},
@@ -105,10 +105,10 @@ function renderNeos(s) {
   const f = (x) => Number(x).toLocaleString();
   const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
   $("neo_tiles").replaceChildren(
-    t("known near-Earth asteroids", f(n.known)),
-    t("potentially hazardous", f(n.pha)),
-    t(`observable by one FACET telescope right now (brighter than mag ${n.lim_1tel_60s.toFixed(1)} in one minute)`, f(n.visible_1tel)),
-    t(`observable with 16 telescopes stacked (to mag ${n.lim_16tel.toFixed(1)})`, f(n.visible_16tel)));
+    tileB("known near-Earth asteroids", f(n.known), "neo_catalogue"),
+    tileB("potentially hazardous", f(n.pha), "neo_catalogue"),
+    tileB(`observable by one FACET telescope right now (brighter than mag ${n.lim_1tel_60s.toFixed(1)} in one minute)`, f(n.visible_1tel), "neo_visible"),
+    tileB(`observable with 16 telescopes stacked (to mag ${n.lim_16tel.toFixed(1)})`, f(n.visible_16tel), "neo_visible"));
   const size = (h) => Math.round(1329e3 / Math.sqrt(0.14) * Math.pow(10, -h / 5));
   $("neo_ca").replaceChildren(...n.approaches.slice(0, 8).map(a => el("tr", {},
     el("td", {}, a.name + (a.pha ? " (hazardous)" : "")),
@@ -119,16 +119,23 @@ function renderNeos(s) {
   $("neo_note").textContent = `Orbits: the IAU Minor Planet Center's list of known near-Earth asteroids. Positions are computed in this simulation from each orbit without the planets' pull, so close-approach dates and distances are approximate (typically within hours and 10–20 %); sizes assume a typical reflectivity. ${n.bright_but_in_keepout.toLocaleString()} more asteroids are bright enough right now but too close to the Sun or Moon to observe.`;
 }
 
+let legendDone = false;
+function renderLegend() {
+  if (legendDone || !PROV) return; legendDone = true;
+  $("basis_legend").replaceChildren(...PROV.bases.map(b => el("div", {}, basisChip0(b.basis), " ", b.meaning)));
+}
+function basisChip0(basis) { return el("span", { class: `basis b-${basis}` }, basis); }
+
 function renderScience(s) {
   const sc = s.science; if (!sc) return;
   const d = sc.per_day, n = (x) => Number(x).toLocaleString(undefined, { maximumFractionDigits: 0 });
   const tile = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
   $("sci_since").textContent = `· ${fmtDur(sc.elapsed_s)} simulated`;
   $("sci_tiles").replaceChildren(
-    tile("observations completed per day", n(d.completed)),
-    tile("finished in time to be useful", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`),
-    tile("of the time working telescopes are observing", `${(100 * (sc.efficiency.integrating_pct - (sc.efficiency.earthshine_pct || 0)) / Math.max(1, 100 - sc.efficiency.hold_pct)).toFixed(0)} %`),
-    tile("research teams served", `${sc.investigators_served}`));
+    tileB("observations completed per day", n(d.completed), "science"),
+    tileB("finished in time to be useful", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`, "science"),
+    tileB("of the time working telescopes are observing", `${(100 * (sc.efficiency.integrating_pct - (sc.efficiency.earthshine_pct || 0)) / Math.max(1, 100 - sc.efficiency.hold_pct)).toFixed(0)} %`, "duty"),
+    tileB("research teams served", `${sc.investigators_served}`, "science"));
   $("sci_cases").replaceChildren(...sc.cases.map(c => {
     const fin = c.completed + c.expired;
     return el("tr", {}, el("td", {}, c.label), el("td", { class: "num" }, n(c.completed)),
@@ -140,6 +147,7 @@ function renderScience(s) {
 
 function render(s) {
   last = s;
+  if (s.provenance) { PROV = s.provenance; renderLegend(); }
   $("clock").textContent = `${s.utc} · ${s.playing ? (s.rate === 1 ? "real time" : `${s.rate}× speed`) : "paused"}`;
   map.setStatus(s);
   const st = $("stats"); st.replaceChildren(

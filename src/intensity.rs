@@ -375,7 +375,7 @@ impl App {
 
     pub fn ii_panel(&mut self, ui: &mut egui::Ui) {
         use egui::{Color32, RichText, Stroke};
-        ui.label(RichText::new("Intensity interferometry").strong());
+        ui.horizontal(|ui| { ui.label(RichText::new("Intensity interferometry").strong()); crate::provenance::chip(ui, "ii_snr"); crate::provenance::chip(ui, "ii_fit"); });
         let c = &mut self.ii.cfg;
         ui.checkbox(&mut c.on, "two satellite clusters, planes ~90° apart (assumed design)");
         if !c.on {
@@ -427,7 +427,7 @@ impl App {
         );
         match ii.fit {
             Some((t, e)) => {
-                ui.label(RichText::new(format!("Fitted diameter {t:.3} ± {e:.3} mas (published ~{theta:.2} mas)")).small().strong());
+                crate::provenance::line(ui, "ii_fit", format!("Fitted diameter {t:.3} ± {e:.3} mas (published ~{theta:.2} mas)"));
             }
             None => {
                 ui.label(RichText::new("Not enough baselines measured yet for a fit.").small().weak());
@@ -580,7 +580,7 @@ impl App {
 
     pub fn fuel_panel(&mut self, ui: &mut egui::Ui) {
         use egui::RichText;
-        ui.label(RichText::new("Propulsion and propellant").strong());
+        ui.horizontal(|ui| { ui.label(RichText::new("Propulsion and propellant").strong()); crate::provenance::chip(ui, "fuel"); });
         let c = &mut self.fuel;
         egui::ComboBox::from_id_source("prop").selected_text(PROPULSION[c.propulsion].0).show_ui(ui, |ui| {
             for (k, p) in PROPULSION.iter().enumerate() {

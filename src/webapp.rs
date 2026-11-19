@@ -766,7 +766,7 @@ impl App {
     }
 
     pub fn defence_panel(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Planetary defence exercise").strong());
+        ui.horizontal(|ui| { ui.label(RichText::new("Planetary defence exercise").strong()); crate::provenance::chip(ui, "defence"); });
         let mut sr = self.search_share * 100.0;
         ui.add(egui::Slider::new(&mut sr, 0.0..=50.0).text("% of fleet held for NEO search"))
             .on_hover_text("Telescopes the science programme may not use; they keep surveying and can discover new objects.");
@@ -900,20 +900,20 @@ impl App {
         let j = self.traffic.json(raw, self.shell.len());
         let d = &j["data"];
         let f = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0);
-        ui.label(RichText::new(format!(
+        crate::provenance::line(ui, "downlink", format!(
             "Demand {:.1} TB/day ({}) · relay {:.0} TB/day · ground {:.0} TB/day",
             f(&d["demand_tb_day"]), self.traffic.cfg.product.label(), f(&d["relay_cap_tb_day"]), f(&d["dtg_cap_tb_day"])
-        )).small());
+        ));
         let s = &j["streaks"];
-        ui.label(RichText::new(format!(
+        crate::provenance::line(ui, "streaks", format!(
             "Streaked frames without avoidance {:.2} % · avoidance costs {:.3} % of integration",
             f(&s["streaked_pct"]), f(&s["avoidance_cost_pct"])
-        )).small());
+        ));
         let cj = &j["conjunctions"]["per_day"];
-        ui.label(RichText::new(format!(
+        crate::provenance::line(ui, "conjunctions", format!(
             "Notices {:.1}/day · high-risk {:.2}/day · manoeuvres {:.2}/day",
             f(&cj["notices"]), f(&cj["high_risk"]), f(&cj["manoeuvres"])
-        )).small());
+        ));
     }
 
     pub fn science_panel(&mut self, ui: &mut egui::Ui) {
@@ -932,19 +932,19 @@ impl App {
         let e = &s["efficiency"];
         let d = &s["per_day"];
         let f = |v: &serde_json::Value| v.as_f64().unwrap_or(0.0);
-        ui.label(RichText::new(format!(
+        crate::provenance::line(ui, "duty", format!(
             "Open shutter {:.1} % ({:.1} % pointed science) · overhead {:.1} % · idle {:.1} %",
             f(&e["integrating_pct"]), f(&e["pointed_science_pct"]), f(&e["overhead_pct"]), f(&e["idle_pct"])
-        )).small());
-        ui.label(RichText::new(format!(
+        ));
+        crate::provenance::line(ui, "science", format!(
             "Per day: {:.0} requests done · {:.0} telescope-h · {:.0} m²·deg²·h étendue-time · {:.1} TB raw",
             f(&d["completed"]), f(&d["tel_h"]), f(&d["etendue_m2deg2h"]), f(&d["tb"])
-        )).small());
-        ui.label(RichText::new(format!(
+        ));
+        crate::provenance::line(ui, "science", format!(
             "On-time {} · {} done, {} expired · {}/{} teams served",
             s["on_time_pct"].as_f64().map(|p| format!("{p:.1} %")).unwrap_or_else(|| "-".into()),
             s["completed"], s["expired"], s["investigators_served"], s["investigators"]
-        )).small());
+        ));
     }
 
     pub fn publish_status(&mut self, now: Instant) {
@@ -1030,6 +1030,7 @@ impl App {
             "public": self.public_json(),
             "interferometry": self.ii_json(),
             "fuel": self.fuel_budget(),
+            "provenance": crate::provenance::json(),
             "optics": {
                 "budget": crate::optics::blur_budget(&self.obs_params, self.obs_params.exp_s.min(self.obs_params.sub_max_s)),
                 "focal_mm": self.obs_params.focal_mm,

@@ -105,13 +105,13 @@ impl Hardware {
         1.03 * self.wavelength_nm * 1e-9 / (self.aperture_cm / 100.0) * ARCSEC
     }
     /// Pointing jitter (RMS, arcsec) that applies for a given sub-frame
-    /// length: short registered frames freeze most of it.
-    pub fn jitter_for(&self, sub_s: f64) -> f64 {
-        if sub_s < 1.0 {
-            self.jitter_arcsec.min(0.25)
-        } else {
-            self.jitter_arcsec
-        }
+    /// length. The full figure applies at every frame length: there is no
+    /// "lucky imaging" credit. Removing jitter by registering short frames
+    /// needs a jitter power spectrum, enough stars per frame to centroid,
+    /// and read-noise-limited stacking, none of which is modelled, so an
+    /// earlier 0.25″ cap for sub-second frames was taken out (review item 2).
+    pub fn jitter_for(&self, _sub_s: f64) -> f64 {
+        self.jitter_arcsec
     }
     /// The full Fourier-optics PSF (incl. jitter) for a sub-frame length.
     pub fn psf(&self, sub_s: f64) -> std::sync::Arc<crate::optics::Psf> {

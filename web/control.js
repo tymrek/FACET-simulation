@@ -354,19 +354,19 @@ function renderEnvironment(s) {
   const pol = { pause: "detectors safed inside", flag: "exposing through it (flagged)", off: "ignored" }[e.policy];
   $("en_head").textContent = `· ${s.shell.alt_km} km, ${s.shell.inc_deg}° shell`;
   $("en_saa").replaceChildren(
-    tile("in the anomaly now", `${e.in_saa_now.toLocaleString()}`, `${pol} · threshold ${e.threshold} p/cm²/s (>10 MeV)`),
-    tile("orbit average", e.orbit_saa_pct == null ? "–" : `${e.orbit_saa_pct.toFixed(1)} %`, "share of each satellite's time inside"),
-    tile("fleet time lost", `${e.saa_lost_pct.toFixed(1)} %`, "exposure time lost to safed detectors this run"),
-    tile("false transients", `${Math.round(e.candidates_per_day).toLocaleString()}/day`, `single-frame particle hits that look star-like; ${e.coincidences_per_day.toFixed(0)}/day pass a 2-telescope check, ${e.coincidences3_per_day.toExponential(1)}/day a 3-telescope check`),
-    tile("proton fluence", `${e.fluence_per_sat_yr.toExponential(1)}`, "p/cm² per satellite per year (detector damage budget)"),
+    tile("in the anomaly now", `${e.in_saa_now.toLocaleString()}`, `${pol} · threshold ${e.threshold} p/cm²/s (>10 MeV)`, "saa"),
+    tile("orbit average", e.orbit_saa_pct == null ? "–" : `${e.orbit_saa_pct.toFixed(1)} %`, "share of each satellite's time inside", "saa"),
+    tile("fleet time lost", `${e.saa_lost_pct.toFixed(1)} %`, "exposure time lost to safed detectors this run", "saa"),
+    tile("false transients", `${Math.round(e.candidates_per_day).toLocaleString()}/day`, `single-frame particle hits that look star-like; ${e.coincidences_per_day.toFixed(0)}/day pass a 2-telescope check, ${e.coincidences3_per_day.toExponential(1)}/day a 3-telescope check`, "saa"),
+    tile("proton fluence", `${e.fluence_per_sat_yr.toExponential(1)}`, "p/cm² per satellite per year (detector damage budget)", "saa"),
   );
   const L = e.lifetime || {};
   $("en_life").replaceChildren(
-    tile("Earthshine loss", e.earthshine_on ? `${e.earthshine_lost_pct.toFixed(1)} %` : "off", `of exposure time (dark-sky equivalent) · ${e.earthshine_now} telescopes badly affected now`),
-    tile("sunlight stray-light loss", `${(e.sunlight_lost_pct || 0).toFixed(1)} %`, `of exposure time (dark-sky equivalent) · ${e.sunlight_now || 0} telescopes badly affected now`),
-    tile("passive lifetime", fmtYears(L.mean_yr), `mean sun · ${fmtYears(L.solar_max_yr)} at solar max, ${fmtYears(L.solar_min_yr)} at solar min`),
-    tile("following the cycle", fmtYears(L.cycle_yr), L.cycle_yr != null && L.cycle_yr <= 5 ? "meets a 5-year disposal rule passively" : `needs a ${e.disposal_dv_ms == null ? "–" : e.disposal_dv_ms.toFixed(0)} m/s disposal burn for a 5-year rule`),
-    tile("ballistic coefficient", `${e.ballistic_m2_kg.toFixed(4)}`, "C_D·A/m, m²/kg"),
+    tile("Earthshine loss", e.earthshine_on ? `${e.earthshine_lost_pct.toFixed(1)} %` : "off", `of exposure time (dark-sky equivalent) · ${e.earthshine_now} telescopes badly affected now`, "earthshine"),
+    tile("sunlight stray-light loss", `${(e.sunlight_lost_pct || 0).toFixed(1)} %`, `of exposure time (dark-sky equivalent) · ${e.sunlight_now || 0} telescopes badly affected now`, "stray_loss"),
+    tile("passive lifetime", fmtYears(L.mean_yr), `mean sun · ${fmtYears(L.solar_max_yr)} at solar max, ${fmtYears(L.solar_min_yr)} at solar min`, "lifetime"),
+    tile("following the cycle", fmtYears(L.cycle_yr), L.cycle_yr != null && L.cycle_yr <= 5 ? "meets a 5-year disposal rule passively" : `needs a ${e.disposal_dv_ms == null ? "–" : e.disposal_dv_ms.toFixed(0)} m/s disposal burn for a 5-year rule`, "lifetime"),
+    tile("ballistic coefficient", `${e.ballistic_m2_kg.toFixed(4)}`, "C_D·A/m, m²/kg", "lifetime"),
   );
   const ko = s.shell.sun_excl_deg;
   $("en_keep").replaceChildren(...(e.keepout || []).map(r => el("tr", Math.abs(r.keepout_deg - ko) < 0.5 ? { class: "me" } : {},
@@ -389,11 +389,11 @@ function renderResilience(s) {
   const r = s.resilience, g = s.ground; if (!r) return;
   const last = r.series.length ? r.series[r.series.length - 1] : null;
   $("rs_tiles").replaceChildren(
-    tile("fleet alive", `${(100 * r.alive_frac).toFixed(1)} %`, `${r.failed} failed now · ${r.total_failed} failures, ${r.total_replaced} replaced so far`),
-    tile("science output, last hour", last ? `${Math.round(100 * last[2])} %` : "–", "integration per satellite-hour, relative to the healthy fleet"),
-    tile("observations, last hour", last ? `${Math.round(100 * last[3])} %` : "–", "completed requests, relative to the healthy fleet"),
-    tile("random failures", `${r.rate_pct_yr} %/yr`),
-    tile("replacement", r.replace_days > 0 ? `after ${r.replace_days} d` : "none"),
+    tile("fleet alive", `${(100 * r.alive_frac).toFixed(1)} %`, `${r.failed} failed now · ${r.total_failed} failures, ${r.total_replaced} replaced so far`, "resilience"),
+    tile("science output, last hour", last ? `${Math.round(100 * last[2])} %` : "–", "integration per satellite-hour, relative to the healthy fleet", "resilience"),
+    tile("observations, last hour", last ? `${Math.round(100 * last[3])} %` : "–", "completed requests, relative to the healthy fleet", "resilience"),
+    tile("random failures", `${r.rate_pct_yr} %/yr`, "", "resilience"),
+    tile("replacement", r.replace_days > 0 ? `after ${r.replace_days} d` : "none", "", "resilience"),
   );
   drawResilience($("rs_chart"), r);
   if (g) {
@@ -441,14 +441,14 @@ function renderTraffic(s) {
   $("tr_counts").textContent = `Starlink ${t.counts.starlink.toLocaleString()} at ${t.config.starlink_alt_km} km · OneWeb ${t.counts.oneweb} at 1,200 km · ${t.counts.other.toLocaleString()} other objects within ±${t.config.other_band_km} km of FACET (assumed)`;
   const pct = x => `${(x * 100).toFixed(x < 0.01 ? 2 : 0)} %`;
   $("tr_data").replaceChildren(
-    tile("raw data / day", `${d.raw_tb_day.toFixed(1)} TB`, "16-bit full frames from the science ledger"),
-    tile("downlinked / day", `${d.demand_tb_day.toFixed(1)} TB`, d.product_label),
-    tile("relay capacity", t.config.relay ? `${fmtNum(d.relay_cap_tb_day)} TB/day` : "off", `Starlink optical relay (assumed service): ${t.config.relay_gbps} Gb/s per FACET terminal, ${pct(d.relay_linked_frac)} of satellites linked, mean range ${Math.round(d.relay_mean_range_km)} km`),
-    tile("ground-station capacity", `${fmtNum(d.dtg_cap_tb_day)} TB/day`, `${t.config.stations} stations × ${t.config.antennas_per_station} antennas × ${t.config.station_gbps} Gb/s × 70 % (assumed)`),
-    tile("alert latency via relay", d.relay_latency_ms == null ? "–" : `${Math.round(d.relay_latency_ms)} ms`, "FACET → Starlink → gateway → operations (model)"),
-    tile("wait for a ground pass", fmtDur(d.dtg_median_wait_s), `median; a satellite is in view of a station ${pct(d.dtg_in_view_frac)} of the time`),
-    tile("capacity margin", `${d.margin.toFixed(d.margin < 10 ? 1 : 0)}×`, "(relay + ground) / downlinked volume"),
-    tile("on-board storage fills", d.storage_fill_days == null ? "never" : fmtDur(d.storage_fill_days * 86400), `${t.config.storage_tb} TB per satellite (assumed)`),
+    tile("raw data / day", `${d.raw_tb_day.toFixed(1)} TB`, "16-bit full frames from the science ledger", "downlink"),
+    tile("downlinked / day", `${d.demand_tb_day.toFixed(1)} TB`, d.product_label, "downlink"),
+    tile("relay capacity", t.config.relay ? `${fmtNum(d.relay_cap_tb_day)} TB/day` : "off", `Starlink optical relay (assumed service): ${t.config.relay_gbps} Gb/s per FACET terminal, ${pct(d.relay_linked_frac)} of satellites linked, mean range ${Math.round(d.relay_mean_range_km)} km`, "downlink"),
+    tile("ground-station capacity", `${fmtNum(d.dtg_cap_tb_day)} TB/day`, `${t.config.stations} stations × ${t.config.antennas_per_station} antennas × ${t.config.station_gbps} Gb/s × 70 % (assumed)`, "downlink"),
+    tile("alert latency via relay", d.relay_latency_ms == null ? "–" : `${Math.round(d.relay_latency_ms)} ms`, "FACET → Starlink → gateway → operations (model)", "downlink"),
+    tile("wait for a ground pass", fmtDur(d.dtg_median_wait_s), `median; a satellite is in view of a station ${pct(d.dtg_in_view_frac)} of the time`, "downlink"),
+    tile("capacity margin", `${d.margin.toFixed(d.margin < 10 ? 1 : 0)}×`, "(relay + ground) / downlinked volume", "downlink"),
+    tile("on-board storage fills", d.storage_fill_days == null ? "never" : fmtDur(d.storage_fill_days * 86400), `${t.config.storage_tb} TB per satellite (assumed)`, "downlink"),
   );
   $("tr_products").replaceChildren(...d.products.map(p => el("tr", { class: p.selected ? "sel" : "" },
     el("td", {}, p.label), el("td", { class: "num" }, p.tb_day.toFixed(1)),
@@ -456,23 +456,23 @@ function renderTraffic(s) {
     el("td", { class: "num" + (p.dtg_util > 1 ? " warn" : "") }, pct(p.dtg_util)))));
   const pk = st.per_1000_frames;
   $("tr_streaks").replaceChildren(
-    tile("frames that would be streaked", `${st.streaked_pct.toFixed(2)} %`, `sampled ${fmtNum(st.frames)} exposures`),
-    tile("avoidance", st.avoidance ? "ON" : "OFF", "Exposures are gated around predicted crossings"),
-    tile("integration lost to gating", `${st.avoidance_cost_pct.toFixed(2)} %`),
-    tile("Starlink / 1000 frames", pk.starlink.toFixed(1), "below FACET: only when pointing low, toward the limb"),
-    tile("OneWeb / 1000 frames", pk.oneweb.toFixed(1), "above FACET: crosses upward-looking fields"),
-    tile("FACET / 1000 frames", pk.facet.toFixed(1), "FACET's own neighbours"),
+    tile("frames that would be streaked", `${st.streaked_pct.toFixed(2)} %`, `sampled ${fmtNum(st.frames)} exposures`, "streaks"),
+    tile("avoidance", st.avoidance ? "ON" : "OFF", "Exposures are gated around predicted crossings", "streaks"),
+    tile("integration lost to gating", `${st.avoidance_cost_pct.toFixed(2)} %`, "", "streaks"),
+    tile("Starlink / 1000 frames", pk.starlink.toFixed(1), "below FACET: only when pointing low, toward the limb", "streaks"),
+    tile("OneWeb / 1000 frames", pk.oneweb.toFixed(1), "above FACET: crosses upward-looking fields", "streaks"),
+    tile("FACET / 1000 frames", pk.facet.toFixed(1), "FACET's own neighbours", "streaks"),
   );
   $("tr_streak_note").textContent = st.avoidance
     ? "Crossings are predicted from published ephemerides; the shutter closes or the sub-frame is dropped for the few seconds a satellite is in the field."
     : "Avoidance is off: streaked frames are delivered and must be masked downstream.";
   $("tr_conj").replaceChildren(
-    tile("close approaches < 5 km / day", fmtNum(pd.approaches_5km, 1)),
-    tile("notices / day", fmtNum(pd.notices, 1), "miss < 1 km or Pc ≥ 1e-6"),
-    tile("high risk / day", fmtNum(pd.high_risk, 2), "Pc ≥ 1e-5"),
-    tile("manoeuvres / day", fmtNum(pd.manoeuvres, 2), `Pc ≥ ${t.config.pc_manoeuvre.toExponential(0)}`),
-    tile("Δv per satellite per year", `${c.dv_per_sat_year_ms.toFixed(2)} m/s`),
-    tile("closest approach", c.stats.closest_km == null ? "–" : `${Math.round(c.stats.closest_km * 1000)} m`),
+    tile("close approaches < 5 km / day", fmtNum(pd.approaches_5km, 1), "", "conjunctions"),
+    tile("notices / day", fmtNum(pd.notices, 1), "miss < 1 km or Pc ≥ 1e-6", "conjunctions"),
+    tile("high risk / day", fmtNum(pd.high_risk, 2), "Pc ≥ 1e-5", "conjunctions"),
+    tile("manoeuvres / day", fmtNum(pd.manoeuvres, 2), `Pc ≥ ${t.config.pc_manoeuvre.toExponential(0)}`, "conjunctions"),
+    tile("Δv per satellite per year", `${c.dv_per_sat_year_ms.toFixed(2)} m/s`, "", "conjunctions"),
+    tile("closest approach", c.stats.closest_km == null ? "–" : `${Math.round(c.stats.closest_km * 1000)} m`, "", "conjunctions"),
   );
   const nowJd = s.jd;
   $("tr_notices").replaceChildren(...c.upcoming.map(n => el("tr", { class: `lvl-${n.level}` },
@@ -487,20 +487,20 @@ function renderTraffic(s) {
 const USE = [["programme", "Science programme", "#4fa3ff"], ["public", "Public requests", "#5fe0a0"], ["stare", "STARE", "#c58bff"],
              ["director", "Director target", "#ffd166"], ["survey", "Zenith survey", "#7c8aa5"], ["neo_sweep", "NEO sweep", "#ff9f6e"]];
 function fmtNum(x, d = 0) { return x === null || x === undefined ? "–" : Number(x).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d }); }
-function tile(label, value, hint) { return el("div", { class: "tile", title: hint || "" }, el("div", { class: "tv" }, value), el("div", { class: "tl" }, label)); }
+function tile(label, value, hint, key) { return el("div", { class: "tile", title: hint || "" }, el("div", { class: "tv" }, value), el("div", { class: "tl" }, label, key ? " " : "", key ? basisChip(key) : "")); }
 function renderScience(s) {
   const sc = s.science; if (!sc) return;
   const e = sc.efficiency, d = sc.per_day;
   $("sci_since").textContent = `since ${sc.since_utc.slice(0, 16)} UTC · ${fmtDur(sc.elapsed_s)} simulated` + (s.programme ? ` · demand ${s.programme.load.toFixed(2)}× capacity · ${s.programme.investigators} teams` : "");
   $("sci_tiles").replaceChildren(
-    tile("requests completed / day", fmtNum(d.completed), "Programme requests finished per simulated day"),
-    tile("on time", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`, "Completed before the science case's deadline, of all completed + expired"),
-    tile("open-shutter efficiency", `${e.integrating_pct.toFixed(1)} %`, "Satellite time spent integrating (any use)"),
-    tile("pointed science", `${e.pointed_science_pct.toFixed(1)} %`, "Satellite time integrating on requests, STARE and director targets"),
-    tile("telescope-hours / day", fmtNum(d.tel_h), "Integration delivered per day, all uses"),
-    tile("étendue × time / day", `${fmtNum(d.etendue_m2deg2h)} m²·deg²·h`, "Σ collecting area × field of view × integration time: the standard survey-speed figure of merit"),
-    tile("raw data / day", `${d.tb.toFixed(1)} TB`, "16-bit full frames before compression: sizes the downlink"),
-    tile("teams served", `${sc.investigators_served} / ${sc.investigators}`, "Investigator teams with at least one completed request"),
+    tile("requests completed / day", fmtNum(d.completed), "Programme requests finished per simulated day", "science"),
+    tile("on time", sc.on_time_pct === null ? "–" : `${sc.on_time_pct.toFixed(1)} %`, "Completed before the science case's deadline, of all completed + expired", "science"),
+    tile("open-shutter efficiency", `${e.integrating_pct.toFixed(1)} %`, "Satellite time spent integrating (any use)", "duty"),
+    tile("pointed science", `${e.pointed_science_pct.toFixed(1)} %`, "Satellite time integrating on requests, STARE and director targets", "duty"),
+    tile("telescope-hours / day", fmtNum(d.tel_h), "Integration delivered per day, all uses", "science"),
+    tile("étendue × time / day", `${fmtNum(d.etendue_m2deg2h)} m²·deg²·h`, "Σ collecting area × field of view × integration time: the standard survey-speed figure of merit", "science"),
+    tile("raw data / day", `${d.tb.toFixed(1)} TB`, "16-bit full frames before compression: sizes the downlink", "allsky_data"),
+    tile("teams served", `${sc.investigators_served} / ${sc.investigators}`, "Investigator teams with at least one completed request", "science"),
   );
   const tot = 100;
   const segs = USE.map(([k, , c]) => [sc.use_h[k] * 3600 / Math.max(1, sc.elapsed_s * (s.shell.n || 1)) * 100, c]);
@@ -531,6 +531,7 @@ function kvRows(tbl, rows) {
 
 function render(s) {
   last = s;
+  if (s.provenance) PROV = s.provenance;
   const [d, t] = s.utc.split(" ");
   $("utc").textContent = `${t} UTC`;
   const doy = Math.floor((Date.parse(d + "T00:00:00Z") - Date.parse(d.slice(0, 4) + "-01-01T00:00:00Z")) / 86400000) + 1;

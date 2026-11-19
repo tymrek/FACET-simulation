@@ -158,3 +158,8 @@ h2 select.tiny { width: auto; display: inline-block; padding: 2px 6px; }
 .allsky .bignum { font-size: 44px; font-weight: 700; color: #7fd0ff; line-height: 1; white-space: nowrap; }
 .allsky .bigtxt { flex: 1 1 280px; font-size: 14px; }
 .allsky tr.me td { color: #7fd0ff; font-weight: 600; }
+
+/* provenance chips */
+.basis { display: inline-block; font-size: 9.5px; letter-spacing: .06em; text-transform: uppercase; padding: 0 5px; border-radius: 3px; border: 1px solid currentColor; vertical-align: 1px; cursor: help; white-space: nowrap; font-weight: 500; }
+.b-simulated { color: #5ac88c; } .b-modelled { color: #6eaaff; } .b-assumed { color: #ffaa46; } .b-data { color: #c8c8c8; }
+.basislegend div { margin: 4px 0; font-size: 12px; }
