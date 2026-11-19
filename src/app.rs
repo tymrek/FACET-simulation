@@ -118,6 +118,7 @@ pub struct App {
     pub env: crate::environment::Environment,
     pub survey: crate::survey::Survey,
     pub neo: crate::neo::NeoSky,
+    pub public: crate::public::Public,
     pub cost_window_open: bool,
     /// Presentation mode requests from the controls / command line.
     pub present_open: bool,
@@ -225,6 +226,7 @@ impl App {
             env: Default::default(),
             survey: crate::survey::Survey { show: true, ..Default::default() },
             neo: crate::neo::NeoSky { show: true, ..Default::default() },
+            public: Default::default(),
             cost_window_open: false,
             present_open: false,
             presenting: false,
@@ -305,6 +307,8 @@ impl App {
                 "--no-target" => self.target = None,
                 "--target-eyes" => self.obs_params.target_eyes = val().parse().unwrap_or(25),
                 "--click-target" => self.click_target = true,
+                "--no-public-demand" => self.public.cfg.on = false,
+                "--public-users" => self.public.cfg.population = val().parse().unwrap_or(20_000),
                 "--no-programme" => self.gen.on = false,
                 "--costs" => self.cost_window_open = true,
                 "--present" => self.present_deck = Some(val()),
@@ -499,6 +503,7 @@ impl App {
         // STARE campaigns first (director commitments), then the public queue
         // on its share of the shell.
         self.programme_tick(dt_sim);
+        self.public_tick(dt_sim);
         prof("programme_tick");
         self.stare_assign();
         prof("stare_assign");
@@ -816,6 +821,8 @@ impl App {
         self.survey_panel(ui);
         ui.separator();
         self.neo_panel(ui);
+        ui.separator();
+        self.public_panel(ui);
         ui.separator();
         self.environment_panel(ui);
         ui.separator();

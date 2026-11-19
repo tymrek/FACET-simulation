@@ -22,6 +22,7 @@ mod neo;
 mod obs;
 mod optics;
 mod present;
+mod public;
 mod programme;
 mod resilience;
 mod server;

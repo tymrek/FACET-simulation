@@ -83,6 +83,23 @@ function renderAllSky(s) {
   $("as_note").textContent = `How the estimate is worked out: fields × (exposure + ${a.overhead_s.toFixed(0)} s to slew and settle) ÷ (telescopes × the share of time they actually spend observing, ${Math.round(100 * a.duty)} %${a.duty_measured ? " as measured in this run, after slews, the South Atlantic Anomaly and Earthshine" : ", assumed until this run has measured it"}). It assumes the whole fleet is given to the job; with a typical ${Math.round(100 * a.survey_share)} % of telescopes surveying and the rest doing requested science, a one-minute pass takes ${fmtSpan(a.survey_share_60s)}. The part of the sky behind the Sun comes into view as the Earth orbits: the entire celestial sphere is covered within about ${Math.round(a.whole_sphere_days)} days. The Earth blocks each telescope's view but never the fleet's: every patch of sky is above the horizon for many satellites at once.`;
 }
 
+function renderPublic(s) {
+  const p = s.public, c = $("pub_card"); c.hidden = !p || !p.on || !p.days_measured; if (c.hidden) return;
+  const f = (x) => Math.round(x).toLocaleString();
+  const t = (l, v) => el("div", { class: "tile" }, el("div", { class: "tv" }, v), el("div", { class: "tl" }, l));
+  $("pub_tiles").replaceChildren(
+    t("images for the public a year", p.images_per_year >= 1e6 ? `${(p.images_per_year / 1e6).toFixed(1)} million` : f(p.images_per_year)),
+    t("typical wait from request to image", p.median_wait_s == null ? "–" : fmtSpan(p.median_wait_s)),
+    t("classroom sessions a day", f(p.classroom_sessions_per_day)),
+    t("citizen-science measurements a day", f(p.citizen_measurements_per_day)));
+  $("pub_segs").replaceChildren(...p.segments.map(g => el("tr", {},
+    el("td", {}, g.segment), el("td", { class: "num" }, f(g.submitted_per_day)), el("td", { class: "num" }, f(g.completed_per_day)))));
+  $("pub_stages").replaceChildren(...p.stages.map(r => el("tr", r.n === s.shell.n ? { class: "me" } : {},
+    el("td", {}, `${r.n.toLocaleString()}${r.n === s.shell.n ? " (now)" : ""}`), el("td", { class: "num" }, f(r.users_served)))));
+  const live = p.live.submitted ? ` Separately, real visitors to this site have sent ${p.live.submitted} request${p.live.submitted === 1 ? "" : "s"} (${p.live.completed} delivered).` : "";
+  $("pub_note").textContent = `The users are modelled: ${f(p.population)} people a month (an assumption), split between casual visitors, amateur astronomers, classrooms and citizen scientists with assumed habits. Their requests are real to the simulation: each is scheduled and observed by the fleet in the ${Math.round(100 * p.public_share)} % of telescope time set aside for the public, so the waits and deliveries are measured, not assumed. The public time is ${Math.round(100 * p.pool_utilisation)} % used; the last table scales that to each build-out stage at the same mix.${live}`;
+}
+
 function renderNeos(s) {
   const n = s.neos, c = $("neo_card"); c.hidden = !n; if (!n) return;
   const f = (x) => Number(x).toLocaleString();
@@ -140,6 +157,7 @@ function render(s) {
   renderWhy(s);
   renderAllSky(s);
   renderNeos(s);
+  renderPublic(s);
   const q = $("queue"); q.replaceChildren();
   const open = s.requests.filter(r => ["pending", "approved", "observing"].includes(r.state));
   const recent = s.requests.filter(r => r.state === "done").slice(0, 10);

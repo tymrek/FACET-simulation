@@ -449,6 +449,40 @@ last few percent are tiles hugging the Sun and Moon keep-out edges. The
 option *free telescopes tile during Science operations* runs the same
 survey on idle telescopes instead of the zenith stare.
 
+## Public engagement
+
+A modelled public user base (`src/public.rs`) sends requests through the same
+queue and fleet as everyone else, in the public share of telescope time.
+
+* **Assumed adoption** (adjustable; to be anchored later against comparable
+  programmes): 20,000 monthly active users (`--public-users N`), split
+  55 % casual visitors (1.2 visits a month, 1–2 requests, one telescope,
+  60 s, mostly the Moon, planets and Messier objects), 25 % amateur
+  astronomers (8 visits, 3 requests, 4 telescopes × 300 s, galaxies and
+  clusters), 10 % classrooms (4 sessions a month in term-time school hours,
+  8 requests, 2 × 120 s) and 10 % citizen scientists (12 visits, 5 requests,
+  8 × 300 s, real variable stars and real NEOs). Requests arrive mostly in
+  local evenings across three population centres; interest spikes during
+  very close asteroid approaches and defence exercises. Fair-use quotas
+  per user per day; a request not delivered within 48 h is dropped.
+* **Measured, not assumed:** waits, deliveries, turn-aways (quota, queue full,
+  gave up waiting) and how full the public share runs, because every request
+  is scheduled and observed by the simulated fleet.
+* **Reported** (panel, public site, presentation variables
+  `{public_images_year}`, `{public_requests_day}`, `{public_wait}`,
+  `{public_classrooms_day}`, `{public_citizen_day}`): requests and images a
+  day and a year, median wait, users over 30 days and the share returning,
+  classroom sessions, citizen-science measurements, and the number of
+  monthly users each build-out stage could serve at the same mix.
+* Requests from real visitors to the public site are counted separately as
+  the "live" line, never mixed into the modelled figures. `--no-public-demand`
+  switches the model off.
+
+Typical result at 1,000 telescopes with a 25 % public share: ~9,600 requests
+a day, ≈ 3.5 million images a year, median wait ~10 min, public time
+70–90 % used, i.e. room for roughly 23,000 monthly users at this mix. The
+30-day user figures settle after the first simulated month.
+
 ## Catalogues
 
 * **Stars:** HYG v4.1, 108,071 stars to V 10 with 443 proper names. The sky

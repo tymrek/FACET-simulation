@@ -5,9 +5,9 @@
 - All-sky survey mode: the fleet tiles the sky; passes measured live.
 - Real star, deep-sky and variable-star catalogues; programme on real targets.
 - Known near-Earth asteroids (MPC orbits): sky view, visibility, close approaches.
+- Public engagement model and metrics.
 
 ## Simulation
-- Public engagement metrics (requests, unique users, returns).
 - Optics rework (delivered FWHM ~2.7″ is worse than ground seeing).
 - Interferometry tier.
 

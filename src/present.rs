@@ -909,6 +909,15 @@ impl App {
         let n = self.shell.len();
         v.push(("fleet", format!("{n}")));
         v.push(("public_share", format!("{:.0} %", 100.0 * self.public_share)));
+        {
+            let j = self.public_json();
+            let f = |k: &str| j[k].as_f64().unwrap_or(0.0);
+            v.push(("public_images_year", format!("{:.1} million", f("images_per_year") / 1e6)));
+            v.push(("public_requests_day", format!("{:.0}", f("submitted_per_day"))));
+            v.push(("public_wait", j["median_wait_s"].as_f64().map(crate::allsky::fmt_span).unwrap_or("–".into())));
+            v.push(("public_classrooms_day", format!("{:.0}", f("classroom_sessions_per_day"))));
+            v.push(("public_citizen_day", format!("{:.0}", f("citizen_measurements_per_day"))));
+        }
         let sci = self.science.summary(&self.gen.investigators);
         let f = |x: &serde_json::Value| x.as_f64().unwrap_or(0.0);
         v.push(("completed_per_day", format!("{:.0}", f(&sci["per_day"]["completed"]))));

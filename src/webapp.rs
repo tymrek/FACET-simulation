@@ -548,6 +548,7 @@ impl App {
         if self.science.since_utc.is_empty() {
             self.science = crate::programme::Science::new(astro::format_utc(self.jd));
             self.env.reset_stats();
+            self.public.reset();
         }
         if dt_sim <= 0.0 {
             return;
@@ -1026,6 +1027,7 @@ impl App {
             "allsky": self.allsky_json(),
             "survey": self.survey_json(),
             "neos": self.neo_json(),
+            "public": self.public_json(),
             "ground": self.resil.ground,
             "utc": astro::format_utc(self.jd),
             "jd": self.jd,
