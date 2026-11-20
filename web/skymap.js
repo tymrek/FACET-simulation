@@ -302,7 +302,7 @@ class ResultViewer {
         el("h2", {}, this.base === "/api/campaign" ? `${r.target} · latest frame (${r.utc.slice(11)})` : `Request #${r.id}: ${r.target} ${r.final ? "· final" : "· live stack"}`),
         el("button", { onclick: () => this.close() }, "Close")),
       el("div", { class: "figs" },
-        fig(`${this.base}/${id}/full.png${q}${bust}`, `Full field ${h.fov_deg}° · ${im.full.arcsec_per_px}″/px (binned ×${im.full.bin}) · ${im.orientation}`),
+        fig(`${this.base}/${id}/full.png${q}${bust}`, `Full field ${Number(h.fov_deg).toFixed(2)}° · ${im.full.arcsec_per_px}″/px (binned ×${im.full.bin}) · ${im.orientation}`),
         fig(`${this.base}/${id}/crop.png${q}${bust}`, `Centre ${im.crop.width_arcmin}′ · ${im.crop.arcsec_per_px}″/px (${im.crop.resampled})`)),
       el("div", { class: "kvs" },
         el("div", {}, el("h3", {}, "Result"), kv([
@@ -351,10 +351,10 @@ class ResultViewer {
           ["Telescopes requested", h.telescopes_requested],
           ["Aperture", `${h.aperture_cm} cm, ${Math.round(h.obstruction * 100)} % obstruction, f/${h.f_ratio} (${h.focal_mm} mm)`],
           ["Detector", h.sensor],
-          ["Pixel scale / FOV", `${h.pixel_scale_arcsec}″ · ${h.fov_deg}°`],
+          ["Pixel scale / FOV", `${Number(h.pixel_scale_arcsec).toFixed(3)}″ · ${Number(h.fov_deg).toFixed(2)}°`],
           ["QE × optics", `${h.qe} × ${h.throughput}`],
           ["Read noise / dark", `${h.read_noise_e} e⁻ · ${h.dark_e_s} e⁻/s`],
-          ["Pointing jitter", `${h.jitter_arcsec_rms}″ RMS`],
+          ["Pointing jitter", `${Number(h.jitter_arcsec_rms).toFixed(2)}″ RMS`],
         ]))),
       el("ul", { class: "note" }, ...r.notes.map(n => el("li", {}, n))),
     );

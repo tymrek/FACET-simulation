@@ -1215,6 +1215,7 @@ impl App {
             },
             "ground": self.resil.ground,
             "utc": astro::format_utc(self.jd),
+            "build": crate::app::BUILD,
             "jd": self.jd,
             "playing": self.playing,
             "rate": self.rate,

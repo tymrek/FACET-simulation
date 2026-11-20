@@ -142,6 +142,7 @@ function renderScience(s) {
 function render(s) {
   last = s;
   if (s.provenance) { PROV = s.provenance; renderLegend(); }
+  if (s.build) $("build").textContent = `build ${s.build}`;
   $("clock").textContent = `${s.utc} · ${s.playing ? (s.rate === 1 ? "real time" : `${s.rate}× speed`) : "paused"}`;
   map.setStatus(s);
   const st = $("stats"); st.replaceChildren(

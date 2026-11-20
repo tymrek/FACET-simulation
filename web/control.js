@@ -533,6 +533,7 @@ function kvRows(tbl, rows) {
 function render(s) {
   last = s;
   if (s.provenance) PROV = s.provenance;
+  if (s.build && $("build")) $("build").textContent = `build ${s.build}`;
   try { renderHeadlines(s); } catch (e) { console.log("headlines", e); }
   const [d, t] = s.utc.split(" ");
   $("utc").textContent = `${t} UTC`;

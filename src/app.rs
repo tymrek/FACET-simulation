@@ -52,6 +52,9 @@ pub struct Show {
     pub saa: bool,
 }
 
+/// Version and git commit of this build ("+" if built from uncommitted changes).
+pub const BUILD: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("FACET_GIT"), ")");
+
 pub struct App {
     pub stars: Vec<Star>,
     pub names: Vec<NamedStar>,
@@ -1041,6 +1044,7 @@ impl App {
             .small()
             .weak(),
         );
+        ui.label(RichText::new(format!("FACET simulator {}", BUILD)).small().weak());
         ui.label(RichText::new("Stars: HYG v4.1 (CC BY-SA 4.0). Deep sky: OpenNGC (CC BY-SA 4.0). NEOs: IAU Minor Planet Center. Coastlines: Natural Earth.").small().weak());
     }
 

@@ -172,3 +172,5 @@ h2 select.tiny { width: auto; display: inline-block; padding: 2px 6px; }
 .tabbar .tab { background: none; border: 1px solid transparent; border-bottom: none; color: var(--muted); padding: 7px 14px; font: inherit; font-size: 13px; cursor: pointer; border-radius: 6px 6px 0 0; }
 .tabbar .tab:hover { color: #dfe6f2; }
 .tabbar .tab.on { color: #e6f0ff; border-color: var(--line); background: rgba(255,255,255,.04); }
+
+header .build { margin-left: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }

@@ -47,6 +47,8 @@
 - [x] Tabbed controls, headline strip, saved scenarios, target search (desktop).
 - [x] Director console: headline strip, tabbed lower sections.
 - [x] All-sky survey tail in Science operations (kept progress, search radius, tail fallback).
+- [ ] Extended deep-sky objects in result images: galaxies, nebulae and clusters are
+      not rendered (an M31 request shows only the field's stars). Needed before demos.
 - [ ] Moving targets: track NEOs and planets as they move when chosen from search.
 
 ## Build and platform
