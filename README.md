@@ -531,9 +531,12 @@ scheduled run:
 with fields = observable area ÷ field area × 1.1 (tile overlap) and duty the
 dark-sky-equivalent observing share measured in the run (after slews, the
 South Atlantic Anomaly and Earthshine). The Earth blocks each telescope's view
-but never the fleet's. Typical results with the default ~1.1 deg² field, 60 s per field, 15 s
-overhead and ~72 % duty: about 66 min at 1,000 telescopes and about 7 min at
-10,000 (to V ≈ 20.3), ~4.6 TB raw per pass. The card also shows 5-minute and
+but never the fleet's. The overhead per field is 30 s, calibrated against the
+measured survey below (it was 15 s, which read 1.2–1.8 times fast). Typical
+results with the default ~1.1 deg² field, 60 s per field and ~70 % duty:
+about 77 min at 1,000 telescopes (measured: 73–82 min) and about 8 min at
+10,000 (measured: 95 % in ~8 min, the full pass in 10.5–12), to V ≈ 20.7;
+~4.2 TB raw per pass. The card also shows 5-minute and
 1-hour passes for each build-out stage, and the time with a typical 20 % of
 the fleet surveying.
 

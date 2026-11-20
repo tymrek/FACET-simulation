@@ -686,7 +686,9 @@ impl App {
                     }
                     continue;
                 }
-                stack_count += 1;
+                if obs::job_tag(a.job) == obs::TAG_STACK {
+                    stack_count += 1;
+                }
                 if (stack && drawn > 0) || drawn > 6000 {
                     continue;
                 }
@@ -864,7 +866,7 @@ impl App {
                         &painter,
                         p + egui::vec2(18.0, 30.0),
                         Align2::LEFT_TOP,
-                        format!("{}° FOV, stacking ×{} locked", self.obs_params.fov_deg, stack_count),
+                        format!("{:.2}° field, stacking ×{} locked", self.obs_params.fov_deg, stack_count),
                         11.0,
                         Color32::from_gray(160),
                     );

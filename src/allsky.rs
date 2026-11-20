@@ -10,12 +10,20 @@
 //! * fields = observable area / field area × 1.1 (10 % tile overlap);
 //! * duty = measured dark-sky-equivalent integration per working
 //!   satellite-second, so slews, the South Atlantic Anomaly and Earthshine
-//!   are already charged (0.75 is used until the run has measured it).
+//!   are already charged (0.75 is used until the run has measured it);
+//! * overhead = TILE_OVERHEAD_S per field, calibrated against the measured
+//!   all-sky survey (survey.rs): with it the estimate for 1,000 telescopes
+//!   is ~77 min against 73-82 min measured, and for 10,000 ~8 min, the
+//!   measured time to 95 % (the last few tiles near the keep-out edges take
+//!   the full pass to ~11 min). The earlier 15 s overhead read ~1.2-1.8x fast.
 
 use crate::app::App;
 
 pub const SKY_DEG2: f64 = 41_252.96;
 const OVERLAP: f64 = 1.1;
+/// Telescope time per field beyond the exposure when tiling (slew between
+/// neighbouring tiles, settle, acquire), calibrated to the measured survey.
+pub const TILE_OVERHEAD_S: f64 = 30.0;
 /// Share of the fleet assumed free for surveying in normal operations.
 pub const SURVEY_SHARE: f64 = 0.2;
 
@@ -62,7 +70,7 @@ impl App {
         let hw = crate::imaging::Hardware::from_obs(o);
         let pass = |exp: f64| Pass {
             exp_s: exp,
-            seconds: fields * (exp + o.overhead_s) / (eyes as f64 * duty),
+            seconds: fields * (exp + TILE_OVERHEAD_S) / (eyes as f64 * duty),
             depth_v: crate::imaging::point_lim_mag(&hw, exp, exp.min(o.sub_max_s).max(1.0), 22.0),
         };
         let passes: Vec<Pass> = [60.0, 300.0, 3600.0].iter().map(|&e| pass(e)).collect();
@@ -74,7 +82,7 @@ impl App {
             eyes,
             duty,
             duty_measured: measured,
-            overhead_s: o.overhead_s,
+            overhead_s: TILE_OVERHEAD_S,
             passes,
             per_day_60s: 86_400.0 / p60,
             survey_share_60s: p60 / SURVEY_SHARE,
@@ -84,7 +92,7 @@ impl App {
             stages: [100usize, 500, 1000, 5000, 10_000]
                 .iter()
                 .map(|&n| {
-                    let t = |e: f64| fields * (e + o.overhead_s) / (n as f64 * duty);
+                    let t = |e: f64| fields * (e + TILE_OVERHEAD_S) / (n as f64 * duty);
                     (n, t(60.0), t(300.0), t(3600.0))
                 })
                 .collect(),
