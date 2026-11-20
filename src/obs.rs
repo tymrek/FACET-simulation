@@ -772,8 +772,11 @@ pub fn assign_queue(
                         _ => return None,
                     }
                 }
+                // Mid-way through an all-sky tile: take it only if no truly idle
+                // telescope is about as close (0.3 in 1 − cos ≈ 45° of slew).
+                let tiling = if pt == TAG_ALLSKY && !mine { 0.3 } else { 0.0 };
                 // 1 − cos: same ordering as the slew angle, without acos.
-                Some((i, mine, 1.0 - st_ref.att[i].dir.dot(it.dir) + extra + if busy { 10.0 } else { 0.0 }))
+                Some((i, mine, 1.0 - st_ref.att[i].dir.dot(it.dir) + extra + tiling + if busy { 10.0 } else { 0.0 }))
             };
             if pool_idx.len() > 4096 {
                 pool_idx.par_iter().filter_map(f).collect()

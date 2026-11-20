@@ -40,6 +40,7 @@
 ## Usability
 - [x] Tabbed controls, headline strip, saved scenarios, target search (desktop).
 - [x] Director console: headline strip, tabbed lower sections.
+- [x] All-sky survey tail in Science operations (kept progress, search radius, tail fallback).
 - [ ] Moving targets: track NEOs and planets as they move when chosen from search.
 
 ## Build and platform

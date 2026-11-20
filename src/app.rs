@@ -363,6 +363,7 @@ impl App {
                 }
                 "--no-public-demand" => self.public.cfg.on = false,
                 "--no-handover" => self.handover = false,
+                "--survey-in-queue" => self.survey.in_queue = true,
                 "--scenario" => {
                     let q = val();
                     match crate::ui_shell::find_scenario(&q) {

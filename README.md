@@ -541,23 +541,37 @@ the fleet surveying.
 
 `--mode allsky`, or **All-sky survey → Dedicate the fleet** in the controls,
 makes the fleet actually tile the sky (`src/survey.rs`). The sphere is cut
-into ~45,500 fixed 1° tiles (rings of declination, ~10 % overlap). Each free
-telescope takes the nearest undone tile it can see within 75° of its zenith
-and 32° of its current pointing, slews, settles and integrates through the
-attitude model; only locked, dark-sky-equivalent integration counts, so
-slews, the South Atlantic Anomaly, Earthshine and sunward stray light all
-cost what they cost. Telescopes in the anomaly hand their tiles back; a
-closer free telescope may take over a tile whose claimant is still slewing.
-A pass is complete when every tile is done or inside a keep-out. The sky
-view shows coverage filling in; the panel, status API and public site report
-each pass's time and the time to 95 %.
+into fixed tiles one field of view across (rings of declination, ~10 %
+overlap; 41,172 at the default 1.05° field). Each free telescope takes the
+nearest undone tile it can see within 75° of its zenith and 32° of its
+current pointing, slews, settles and integrates through the attitude model;
+only locked, dark-sky-equivalent integration counts, so slews, the South
+Atlantic Anomaly, Earthshine and sunward stray light all cost what they
+cost. Once fewer than 8,000 tiles remain, a telescope with nothing within
+32° may take the best visible tile anywhere (up to 64 such searches per
+step), so the tail doesn't strand. Telescopes in the anomaly, or pulled away
+by other work, hand their tiles back **with the integration so far kept**:
+an interrupted exposure is read out and stacked with whoever resumes the
+tile (an assumption). A closer free telescope may take over a tile whose
+claimant is still slewing. A pass is complete when every tile is done or
+inside a keep-out. The sky view shows coverage filling in; the panel, status
+API and public site report each pass's time and the time to 95 %.
 
-Measured with defaults: **1,000 telescopes: ~75 min per full pass, 95 % in
-~67 min; 10,000 telescopes: ~13–15 min per full pass, 95 % in ~8 min**, at
-~79 s of telescope time per field (60 s exposure + ~19 s overhead). The
-last few percent are tiles hugging the Sun and Moon keep-out edges. The
-option *free telescopes tile during Science operations* runs the same
-survey on idle telescopes instead of the zenith stare.
+Measured with defaults (dedicated fleet): **1,000 telescopes: 73–82 min per
+full pass, 95 % in 64–73 min; 10,000 telescopes: 10.5–12 min per full pass
+(occasionally up to 17), 95 % in ~8 min**, at ~83 s of telescope time per
+field (60 s exposure + overhead). The last few percent are tiles near the
+Sun and Moon keep-out edges.
+
+The option *free telescopes tile during Science operations*
+(`--survey-in-queue`) runs the same survey on telescopes the queue isn't
+using. The queue takes a telescope that is mid-tile only when no idle one
+is about as close. At 10,000 satellites with the default science load
+(~110,000 requests a day, 99 %+ meeting their requirements) the leftover
+telescopes complete a full pass every 2.1–2.8 h (95 % in ~1.9 h). Before
+these fixes that mode never finished: interruptions reset tiles to zero
+(15 million telescope-seconds discarded in 30 h), and a search-radius bug
+meant telescopes only looked 18° away, not 32°.
 
 ## Public engagement
 

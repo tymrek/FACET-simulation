@@ -31,6 +31,10 @@ const MAX_SLEW_DEG: f64 = 32.0;
 /// A free telescope this much closer may take over a tile whose claimant has
 /// not started integrating, deg.
 const STEAL_MARGIN_DEG: f64 = 8.0;
+/// Tail search beyond the slew cap: at most this many telescopes per step,
+/// once fewer than `TAIL_LIST_MAX` tiles remain.
+const MAX_FALLBACKS_PER_STEP: usize = 64;
+const TAIL_LIST_MAX: usize = 8000;
 
 #[derive(Default)]
 pub struct Tiling {
@@ -114,6 +118,11 @@ pub struct Survey {
     /// zenith stare).
     pub in_queue: bool,
     pub show: bool,
+    /// Undone, unblocked tiles, kept once few remain (refreshed with the
+    /// blocked count) so idle telescopes can reach the tail beyond the slew cap.
+    pub left: Vec<u32>,
+    /// Tiles handed back part-done (their integration is kept).
+    pub resumed_n: u64,
 }
 
 impl Survey {
@@ -144,6 +153,7 @@ impl Survey {
         self.busy_s = 0.0;
         self.tiles_completed = 0;
         self.t95 = None;
+        self.left.clear();
     }
     pub fn reset(&mut self, jd: f64) {
         self.restart(jd);
@@ -156,8 +166,15 @@ impl Survey {
         let t = self.tile_of[i];
         if t != NONE {
             if self.claimed_by[t as usize] == i as u32 {
+                // Keep the integration so far: an interrupted exposure is read
+                // out early and stacked with whoever resumes the tile (an
+                // ASSUMPTION; discarding it threw away most of the survey's
+                // time in Science operations, where the queue keeps pulling
+                // survey telescopes away).
                 self.claimed_by[t as usize] = NONE;
-                self.progress[t as usize] = 0.0;
+                if self.progress[t as usize] > 0.0 {
+                    self.resumed_n += 1;
+                }
             }
             self.tile_of[i] = NONE;
         }
@@ -195,6 +212,7 @@ impl App {
         let cos_lim = self.obs.cos_lim;
         let s = &mut self.survey;
         let mut eyes = 0;
+        let mut fallbacks = 0;
         // Telescopes whose detectors are safed in the South Atlantic Anomaly
         // can't integrate: they give their tiles back rather than sit on them.
         let safed = self.env.cfg.saa_policy == crate::environment::SaaPolicy::Pause;
@@ -225,8 +243,12 @@ impl App {
             let rhat = self.obs.rhat[i];
             let cos_za = rad(MAX_ZA_DEG).cos();
             let mut best: Option<(f64, usize)> = None;
-            let mut radius = 4.0 * s.tiling.step_deg;
-            while best.is_none() && radius <= MAX_SLEW_DEG {
+            let mut search_r = 4.0 * s.tiling.step_deg;
+            loop {
+                // Search out to exactly the cap on the last round (doubling
+                // alone stepped 18° → 36° and never searched 18–32°).
+                let radius_now = search_r.min(MAX_SLEW_DEG);
+                let radius = radius_now;
                 let r0 = s.tiling.ring_of(dec - radius);
                 let r1 = s.tiling.ring_of(dec + radius);
                 for r in r0..=r1 {
@@ -261,7 +283,30 @@ impl App {
                         }
                     }
                 }
-                radius *= 2.0;
+                if best.is_some() || radius_now >= MAX_SLEW_DEG {
+                    break;
+                }
+                search_r = radius_now * 2.0;
+            }
+            // The tail: nothing within the cap, but tiles remain somewhere this
+            // telescope can see. A long slew beats idling at the zenith.
+            if best.is_none() && !s.left.is_empty() && fallbacks < MAX_FALLBACKS_PER_STEP {
+                fallbacks += 1;
+                for &k in &s.left {
+                    let k = k as usize;
+                    if s.done[k] || s.claimed_by[k] != NONE {
+                        continue;
+                    }
+                    let d = s.tiling.dirs[k];
+                    let cz = d.dot(rhat);
+                    if cz <= cos_lim.max(cos_za) {
+                        continue;
+                    }
+                    let c = -(here.angle(d) + ZA_WEIGHT * cz.clamp(-1.0, 1.0).acos());
+                    if best.map_or(true, |b| c > b.0) && ok(d) {
+                        best = Some((c, k));
+                    }
+                }
             }
             if let Some((_, k)) = best {
                 let prev = s.claimed_by[k];
@@ -326,6 +371,12 @@ impl App {
                 .enumerate()
                 .filter(|(k, d)| !done[*k] && obs::sky_blocked(o, **d, sun, moon).is_some())
                 .count();
+            let remaining = s.tiles().saturating_sub(s.n_done + s.n_blocked);
+            s.left = if remaining <= TAIL_LIST_MAX {
+                (0..s.tiles()).filter(|&k| !s.done[k] && obs::sky_blocked(o, s.tiling.dirs[k], sun, moon).is_none()).map(|k| k as u32).collect()
+            } else {
+                Vec::new()
+            };
             if s.t95.is_none() && s.n_done as f64 >= 0.95 * (s.tiles() - s.n_blocked) as f64 {
                 s.t95 = Some((self.jd - s.pass_start_jd) * 86_400.0);
             }
@@ -366,6 +417,56 @@ impl App {
             "history": s.history,
             "last_pass_s": s.history.last().map(|h| h.seconds),
             "last_t95_s": s.history.last().map(|h| h.t95),
+            "remaining_detail": self.survey_remaining_detail(),
+        })
+    }
+
+    /// Where the untiled, unblocked tiles are (by Sun elongation), and what
+    /// the telescopes holding tiles are doing.
+    pub fn survey_remaining_detail(&self) -> serde_json::Value {
+        let s = &self.survey;
+        if s.tiles() == 0 {
+            return serde_json::Value::Null;
+        }
+        let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
+        let o = &self.obs_params;
+        let n = self.obs.job.len();
+        let mut bins = [0u32; 18];
+        let list: Box<dyn Iterator<Item = usize>> = if s.left.is_empty() { Box::new(0..s.tiles()) } else { Box::new(s.left.iter().map(|&k| k as usize)) };
+        for k in list {
+            let d = s.tiling.dirs[k];
+            if s.done[k] || obs::sky_blocked(o, d, sun, moon).is_some() {
+                continue;
+            }
+            bins[((deg(d.angle(sun)) / 10.0) as usize).min(17)] += 1;
+        }
+        // What the telescopes holding tiles are doing.
+        use crate::attitude::Phase;
+        let (mut sl, mut se, mut lk, mut eff_sum, mut el_sum) = (0u32, 0u32, 0u32, 0.0f64, 0.0f64);
+        for i in 0..n {
+            if job_tag(self.obs.job[i]) != TAG_ALLSKY {
+                continue;
+            }
+            match self.obs.att[i].phase() {
+                Phase::Slewing => sl += 1,
+                Phase::Settling | Phase::Acquiring => se += 1,
+                Phase::Locked => {
+                    lk += 1;
+                    eff_sum += self.env.shine.get(i).copied().unwrap_or(1.0) as f64;
+                    el_sum += deg(self.obs.att[i].dir.angle(sun));
+                }
+                _ => {}
+            }
+        }
+        serde_json::json!({
+            "released_part_done": s.resumed_n,
+            "holders_slewing": sl,
+            "holders_settling": se,
+            "holders_locked": lk,
+            "locked_mean_efficiency": if lk > 0 { eff_sum / lk as f64 } else { 0.0 },
+            "locked_mean_sun_elongation": if lk > 0 { el_sum / lk as f64 } else { 0.0 },
+            "by_sun_elongation_10deg": bins,
+
         })
     }
 
