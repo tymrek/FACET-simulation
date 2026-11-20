@@ -189,7 +189,10 @@ function render(s) {
 }
 
 async function poll() {
-  try { const r = await fetch("/api/status"); if (r.ok) render(await r.json()); }
+  // Ask for this browser's own requests by id, so they stay listed (with
+  // their results) after they finish, however busy the queue is.
+  const ids = mine();
+  try { const r = await fetch("/api/status" + (ids.length ? `?mine=${ids.join(",")}` : "")); if (r.ok) render(await r.json()); }
   catch { $("clock").textContent = "simulator offline"; }
 }
 setInterval(poll, 1000); poll();

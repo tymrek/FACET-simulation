@@ -27,6 +27,9 @@ const MAX_BODY: u64 = 8 * 1024;
 const MAX_OPEN_PER_IP: usize = 5;
 const MAX_OPEN_TOTAL: usize = 500;
 const MAX_KEPT: usize = 2000;
+/// Closed requests from real visitors kept beyond MAX_KEPT, newest first, so
+/// their results stay reachable while the programme churns.
+const MAX_KEPT_VISITOR: usize = 500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -342,20 +345,30 @@ pub struct Shared {
 }
 
 impl Shared {
-    /// Bound memory: drop the oldest closed requests.
+    /// Bound memory: drop the oldest closed requests, but keep the most
+    /// recent closed requests from real visitors (and the director): their
+    /// results are what people come back for. Programme and modelled public
+    /// requests (no submitting address) go first.
     pub fn prune(&mut self) {
-        if self.requests.len() > MAX_KEPT {
-            let excess = self.requests.len() - MAX_KEPT;
-            let mut removed = 0;
-            self.requests.retain(|r| {
-                if removed < excess && !r.state.is_open() {
-                    removed += 1;
-                    false
-                } else {
-                    true
-                }
-            });
+        if self.requests.len() <= MAX_KEPT {
+            return;
         }
+        let visitor = |r: &ObsRequest| r.programme.is_none() && !r.ip.is_empty();
+        // Closed visitor requests, newest by completion first: keep the top N.
+        let mut closed_v: Vec<(u64, f64)> =
+            self.requests.iter().filter(|r| !r.state.is_open() && visitor(r)).map(|r| (r.id, r.obs_jd.max(r.submit_jd))).collect();
+        closed_v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let keep_v: std::collections::HashSet<u64> = closed_v.iter().take(MAX_KEPT_VISITOR).map(|x| x.0).collect();
+        let excess = self.requests.len() - MAX_KEPT;
+        let mut removed = 0;
+        self.requests.retain(|r| {
+            if removed < excess && !r.state.is_open() && !keep_v.contains(&r.id) {
+                removed += 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Append to the operations event log. level: "info" | "good" | "warn".
@@ -834,14 +847,23 @@ fn static_route(path: &str, director: bool) -> Option<(&'static str, &'static st
     }
 }
 
-fn requests_json(sh: &Shared, director: bool) -> serde_json::Value {
+fn requests_json(sh: &Shared, director: bool, always: &[u64]) -> serde_json::Value {
     let mut list: Vec<&ObsRequest> = sh.requests.iter().collect();
     // Open public/director requests first (they may need approval), then the
     // science programme by priority, then closed ones, newest first.
     list.sort_by_key(|r| (!r.state.is_open(), r.programme.is_some(), std::cmp::Reverse(r.priority), std::cmp::Reverse(if r.state.is_open() { 0 } else { r.id })));
-    let v: Vec<serde_json::Value> = list
+    // The first 400, plus any the caller asked for by id (a visitor's own
+    // requests), which would otherwise drop off the list once they finish.
+    let mut chosen: Vec<&ObsRequest> = list.iter().take(400).copied().collect();
+    for id in always.iter().take(50) {
+        if !chosen.iter().any(|r| r.id == *id) {
+            if let Some(r) = sh.requests.iter().find(|r| r.id == *id) {
+                chosen.push(r);
+            }
+        }
+    }
+    let v: Vec<serde_json::Value> = chosen
         .iter()
-        .take(400)
         .map(|r| {
             let mut j = serde_json::to_value(r).unwrap_or_default();
             j["required_s"] = serde_json::json!(r.required_s());
@@ -861,11 +883,14 @@ fn requests_json(sh: &Shared, director: bool) -> serde_json::Value {
     serde_json::Value::Array(v)
 }
 
-fn status_with(sh: &Shared, director: bool) -> String {
+fn status_with(sh: &Shared, director: bool, url: &str) -> String {
     // status_json is an object; splice requests (and director extras) in.
     let mut v: serde_json::Value =
         serde_json::from_str(&sh.status_json).unwrap_or_else(|_| serde_json::json!({}));
-    v["requests"] = requests_json(sh, director);
+    let mine: Vec<u64> = query_param(url, "mine")
+        .map(|m| m.split(',').filter_map(|x| x.trim().parse().ok()).collect())
+        .unwrap_or_default();
+    v["requests"] = requests_json(sh, director, &mine);
     v["auto_approve"] = serde_json::json!(sh.auto_approve);
     v["campaigns"] = serde_json::Value::Array(
         sh.campaigns
@@ -1057,7 +1082,7 @@ fn control_loop(server: Server, shared: SharedRef) {
                 send(req, 200, "application/json", s)
             }
             (Method::Get, "/api/status") => {
-                let s = status_with(&shared.lock().unwrap(), true);
+                let s = status_with(&shared.lock().unwrap(), true, req.url());
                 send(req, 200, "application/json", s)
             }
             (Method::Get, p) if p.starts_with("/api/result/") => {
@@ -1214,7 +1239,7 @@ fn public_loop(server: Server, shared: SharedRef) {
                 send(req, 200, "application/json", s)
             }
             (Method::Get, "/api/status") => {
-                let s = status_with(&shared.lock().unwrap(), false);
+                let s = status_with(&shared.lock().unwrap(), false, req.url());
                 send(req, 200, "application/json", s)
             }
             (Method::Get, p) if p.starts_with("/api/result/") => {
