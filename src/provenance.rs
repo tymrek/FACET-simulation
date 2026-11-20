@@ -92,6 +92,7 @@ pub const HEADLINES: &[(&str, Basis, &str)] = &[
     // Interferometry and propulsion
     ("ii_snr", Modelled, "Hanbury Brown–Twiss SNR with assumed timing jitter, synchronisation, throughput and channel count."),
     ("ii_fit", Simulated, "Angular diameter fitted to |V|² samples the simulated cluster accumulates, with noise from the modelled SNR."),
+    ("twin", Simulated, "Angular diameter fitted to |V|² samples twin-telescope satellites accumulate as they observe; SNR from the intensity-interferometry model with an assumed boom, metrology and published approximate diameters."),
     ("fuel", Modelled, "Rocket equation over drag make-up, an assumed collision-avoidance allowance, disposal and cluster keeping, with a 25 % margin."),
     // Operations
     ("resilience", Simulated, "Fleet output with random failures and replacement at an assumed rate and delay, run through the simulated scheduler."),

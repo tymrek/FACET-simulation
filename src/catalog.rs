@@ -197,6 +197,32 @@ pub fn load_names() -> Vec<NamedStar> {
 }
 
 /// Coastline polylines as (lon, lat) degrees.
+/// B−V of the catalogue star nearest `dir` (within 0.1°) whose magnitude is
+/// within 0.5 of `mag`; 0 if none. For named stars, whose list has no colour.
+pub fn bv_near(dir: V3, mag: f32) -> f32 {
+    static STARS: std::sync::OnceLock<Vec<Star>> = std::sync::OnceLock::new();
+    let stars = STARS.get_or_init(load_stars);
+    let cmin = (0.1f64).to_radians().cos();
+    stars
+        .iter()
+        .filter(|s| (s.mag - mag).abs() < 0.5 && s.dir.dot(dir) > cmin)
+        .max_by(|a, b| a.dir.dot(dir).partial_cmp(&b.dir.dot(dir)).unwrap())
+        .map(|s| s.ci)
+        .unwrap_or(0.0)
+}
+
+/// Cached `bv_near` for a named star.
+pub fn bv_named(name: &str, dir: V3, mag: f32) -> f32 {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, f32>>> = std::sync::OnceLock::new();
+    let c = CACHE.get_or_init(Default::default);
+    if let Some(&v) = c.lock().unwrap().get(name) {
+        return v;
+    }
+    let v = bv_near(dir, mag);
+    c.lock().unwrap().insert(name.to_string(), v);
+    v
+}
+
 pub fn load_coast() -> Vec<Vec<(f32, f32)>> {
     let b = COAST_BIN;
     let n = u32_at(b, 0) as usize;

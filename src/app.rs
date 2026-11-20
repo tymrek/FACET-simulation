@@ -137,6 +137,7 @@ pub struct App {
     /// Handover-aware scheduling for event windows (off: plain greedy queue,
     /// for comparison).
     pub handover: bool,
+    pub twin: crate::twin::Twin,
     pub present_deck: Option<String>,
     pub cost_msg: Option<String>,
     pub science: crate::programme::Science,
@@ -254,6 +255,7 @@ impl App {
             scenario_saving: false,
             scenario_save_name: String::new(),
             handover: true,
+            twin: Default::default(),
             present_deck: None,
             cost_msg: None,
             traffic: crate::traffic::Traffic::new(Default::default(), jd0_for_traffic(), 550.0),
@@ -363,6 +365,12 @@ impl App {
                 }
                 "--no-public-demand" => self.public.cfg.on = false,
                 "--no-handover" => self.handover = false,
+                "--twins" => {
+                    self.twin.cfg.on = true;
+                    if let Ok(p) = val().parse::<f64>() {
+                        self.twin.cfg.pct = p.clamp(1.0, 5.0);
+                    }
+                }
                 "--survey-in-queue" => self.survey.in_queue = true,
                 "--scenario" => {
                     let q = val();
@@ -547,6 +555,7 @@ impl App {
         self.bodies = astro::bodies(self.jd);
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
         let target = self.target_dir();
+        self.twin_prepare();
         obs::update(
             &mut self.obs,
             &self.obs_params,
@@ -585,6 +594,7 @@ impl App {
         self.survey_credit(dt_sim);
         self.neo_tick();
         self.ii_step(dt_sim);
+        self.twin_step(dt_sim);
         self.queue_credit();
         prof("queue_credit");
         self.science_account(dt_sim);

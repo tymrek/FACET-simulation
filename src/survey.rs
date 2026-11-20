@@ -218,7 +218,7 @@ impl App {
         let safed = self.env.cfg.saa_policy == crate::environment::SaaPolicy::Pause;
         for i in 0..n {
             let in_saa = safed && self.env.in_saa.get(i).copied().unwrap_or(false);
-            let free = job_tag(self.obs.job[i]) == TAG_SURVEY && !self.obs.hold[i] && !in_saa;
+            let free = job_tag(self.obs.job[i]) == TAG_SURVEY && !self.obs.off.get(i).copied().unwrap_or(false) && !in_saa;
             if !free {
                 s.release(i);
                 continue;

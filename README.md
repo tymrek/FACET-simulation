@@ -625,7 +625,10 @@ SNR = A α n |V|² √(m Δf / 2) √T: collecting area, detection efficiency
 (**assumed** 0.35), spectral photon flux density, spectral channels
 (**assumed** 4) and electronic bandwidth from the combined timing error
 (**assumed** 50 ps detector jitter, 10 ps clock sync over the laser links,
-1 cm position knowledge; ≈ 70 ps). The star is a uniform disk; noisy
+1 cm position knowledge; ≈ 70 ps). Photon flux is taken at the observing
+wavelength (450 nm), from the star's V magnitude and its catalogue B−V,
+interpolated linearly between B (440 nm) and V (550 nm), so red stars are
+not credited with blue light they don't emit. The star is a uniform disk; noisy
 measurements are binned by baseline and the diameter fitted by least
 squares. Targets: twelve bright stars with approximate published diameters
 (0.5–6 mas), from Mirzam and Bellatrix to Sirius. Clusters stop when the
@@ -639,6 +642,35 @@ about 0.02 SNR per √s per pair at |V|² = 1; after ~5 hours on target the
 fit is typically 0.5–0.7 ± 0.2 mas. Why clusters and not the whole shell:
 a star's signal vanishes at a baseline of ~1.22 λ/θ (tens to hundreds of
 metres for bright stars), while shell neighbours are hundreds of km apart.
+
+## Twin-telescope satellites
+
+Stars larger than ~5 mas are resolved out at every cluster baseline:
+Betelgeuse (~45 mas) has its first visibility null at 1.22 λ/θ ≈ 2.5 m at
+450 nm, and separate satellites can't fly that close. **Interferometry →
+Twin-telescope satellites** (or `--twins <percent>`) builds a share of the
+fleet (slider, **1–5 %**, default 1 %) as twins: two apertures on one
+spacecraft, a rigid boom apart (**assumed**, 0.5–3 m, default 1.5 m).
+They are taken out of the shared imaging pool, point at their own target
+through the normal attitude model, and stop for the Earth, keep-outs and
+the South Atlantic Anomaly like any other satellite (`src/twin.rs`).
+
+Rolling the spacecraft turns the baseline through every position angle, so
+no formation flying is needed. Each spectral channel (400–700 nm,
+log-spaced) samples a different spatial frequency, baseline ÷ wavelength,
+so one fixed boom measures several points of the visibility curve at once.
+Signal-to-noise uses the cluster model with a shared on-board clock (no
+inter-satellite sync error) and 1 mm boom metrology (**assumed**), and each
+channel's photon flux from V and B−V. Targets: Betelgeuse, Antares, Gacrux,
+Arcturus, Aldebaran and Pollux, with approximate published uniform-disk
+diameters.
+
+Example: 1,000 satellites, 1 % twins (10), 1.5 m boom, Betelgeuse: about
+25 twin-hours on target in 5 simulated hours, and a fitted diameter of
+46 ± 1.3 mas against 45 assumed. The blue channels contribute little
+because Betelgeuse is red. Not modelled: the twin bus's mass, cost and
+drag (a second spacecraft design), limb darkening and surface spots, which
+dominate real Betelgeuse visibilities, and the star's variability.
 
 ## Propellant budget
 

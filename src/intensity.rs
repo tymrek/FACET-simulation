@@ -47,6 +47,20 @@ pub const STARS: [(&str, f64); 12] = [
 ];
 
 const LAMBDA_M: f64 = 450e-9;
+
+/// Magnitude at wavelength `lambda_nm` from V and B−V, interpolating
+/// linearly between B (440 nm) and V (550 nm) and extrapolating outside.
+/// A first-order colour correction (ASSUMED), so red stars are not credited
+/// with blue photons they don't have.
+pub fn mag_at(v: f64, bv: f64, lambda_nm: f64) -> f64 {
+    v + bv * (550.0 - lambda_nm) / 110.0
+}
+
+/// A named star's magnitude at the cluster wavelength (450 nm).
+pub fn star_mag_450(s: &crate::catalog::NamedStar) -> (f64, f64) {
+    let bv = crate::catalog::bv_named(&s.name, s.dir, s.mag) as f64;
+    (mag_at(s.mag as f64, bv, 450.0), bv)
+}
 const C: f64 = 299_792_458.0;
 
 #[derive(Clone, Serialize)]
@@ -120,7 +134,7 @@ impl Default for Ii {
     }
 }
 
-fn bessel_j1(x: f64) -> f64 {
+pub(crate) fn bessel_j1(x: f64) -> f64 {
     // Abramowitz & Stegun polynomial approximations.
     let ax = x.abs();
     if ax < 8.0 {
@@ -281,7 +295,7 @@ impl App {
             self.ii.reset_data();
         }
         let Some(star) = self.names.iter().find(|s| s.name == name) else { return };
-        let (sdir, vmag) = (star.dir, star.mag as f64);
+        let (sdir, vmag) = (star.dir, star_mag_450(star).0);
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
         let o = self.obs_params.clone();
         let hw = crate::imaging::Hardware::from_obs(&o);
@@ -412,12 +426,17 @@ impl App {
                     .color(if cl.observing { Color32::from_rgb(120, 220, 140) } else { Color32::GRAY }),
             );
         }
-        let vmag = self.names.iter().find(|s| s.name == name).map(|s| s.mag as f64).unwrap_or(1.0);
+        let (vmag, m450, bv) = self
+            .names
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| { let (m, bv) = star_mag_450(s); (s.mag as f64, m, bv) })
+            .unwrap_or((1.0, 1.0, 0.0));
         let hw = crate::imaging::Hardware::from_obs(&self.obs_params);
-        let k = ii.k_rate(hw.area_cm2() / 1e4, hw.ph0, vmag);
+        let k = ii.k_rate(hw.area_cm2() / 1e4, hw.ph0, m450);
         ui.label(
             RichText::new(format!(
-                "{name}, V {vmag:.2}: one pair reaches SNR {:.2} per √s at |V|² = 1 ({:.0} ps timing) · on target {:.1} h, {:.0} pair-hours",
+                "{name}, V {vmag:.2}, B−V {bv:+.2} (≈ {m450:.2} at 450 nm): one pair reaches SNR {:.2} per √s at |V|² = 1 ({:.0} ps timing) · on target {:.1} h, {:.0} pair-hours",
                 k,
                 ii.tau_s() * 1e12,
                 ii.on_target_s / 3600.0,

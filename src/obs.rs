@@ -335,6 +335,12 @@ pub struct ObsState {
     pub new_slews: Vec<(usize, u64, f64)>,
     /// Satellites in safe hold (excluded from all tasking).
     pub hold: Vec<bool>,
+    /// Satellites reserved for their own programme (twin-telescope
+    /// interferometers), and where they point (None: idle at zenith).
+    pub reserved: Vec<bool>,
+    pub twin_dir: Option<V3>,
+    /// hold || reserved: not available to the shared schedulers.
+    pub off: Vec<bool>,
 }
 
 pub const TAG_SURVEY: u64 = 1;
@@ -346,6 +352,8 @@ pub const TAG_QUEUE: u64 = 5;
 pub const TAG_STARE: u64 = 6;
 /// All-sky survey tile.
 pub const TAG_ALLSKY: u64 = 7;
+/// Twin-telescope satellites on their interferometry target.
+pub const TAG_TWIN: u64 = 8;
 pub fn job(tag: u64, v: u64) -> u64 {
     (tag << 56) | (v & ((1 << 56) - 1))
 }
@@ -492,6 +500,21 @@ pub fn update(
     st.pointing.clear();
     st.pointing.resize(n, None);
     st.n_target_visible = 0;
+    st.reserved.resize(n, false);
+    st.off.clear();
+    st.off.extend((0..n).map(|i| st.hold.get(i).copied().unwrap_or(false) || st.reserved[i]));
+    // Twin-telescope satellites first: their own target, nothing else.
+    if let Some(d) = st.twin_dir {
+        if sky_blocked(o, d, sun, moon).is_none() {
+            for i in 0..n {
+                if st.reserved[i] && !st.hold.get(i).copied().unwrap_or(false) && d.dot(st.rhat[i]) > cos_lim {
+                    st.pointing[i] = Some(d);
+                    st.job[i] = job(TAG_TWIN, 0);
+                    st.fine[i] = true; // a bright star is its own guide source
+                }
+            }
+        }
+    }
     st.max_baseline_km = 0.0;
     st.target_blocked_by = None;
 
@@ -501,7 +524,7 @@ pub fn update(
         Mode::Survey => {
             for i in 0..n {
                 let z = st.rhat[i];
-                if !st.hold[i] && ok(z) {
+                if !st.off[i] && ok(z) {
                     st.pointing[i] = Some(z);
                     st.job[i] = job(TAG_SURVEY, 0);
                     st.fine[i] = guide(z);
@@ -512,7 +535,7 @@ pub fn update(
             if let Some(t) = target {
                 st.target_blocked_by = sky_blocked(o, t, sun, moon);
                 let mut visible: Vec<usize> = if st.target_blocked_by.is_none() {
-                    (0..n).filter(|&i| !st.hold[i] && t.dot(st.rhat[i]) > cos_lim).collect()
+                    (0..n).filter(|&i| !st.off[i] && t.dot(st.rhat[i]) > cos_lim).collect()
                 } else {
                     Vec::new()
                 };
@@ -609,7 +632,7 @@ pub fn update(
                 let band = ((i as f64 * 0.754_877_666_2).fract() - 0.5) * o.neo_band_deg;
                 let el = rad((elong + band).max(o.sun_excl_deg));
                 let d = sun.rot_axis(perp, el).rot_axis(sun, az).unit();
-                if !st.hold[i] && ok(d) && d.dot(st.rhat[i]) > cos_lim {
+                if !st.off[i] && ok(d) && d.dot(st.rhat[i]) > cos_lim {
                     st.pointing[i] = Some(d);
                     st.job[i] = job(TAG_NEO, i as u64);
                     st.fine[i] = guide(d);
@@ -625,7 +648,7 @@ pub fn update(
     if matches!(mode, Mode::Stack | Mode::Mosaic | Mode::Queue | Mode::AllSky) {
         for i in 0..n {
             let z = st.rhat[i];
-            if st.pointing[i].is_none() && !st.hold[i] && ok(z) {
+            if st.pointing[i].is_none() && !st.off[i] && ok(z) {
                 st.pointing[i] = Some(z);
                 st.job[i] = job(TAG_SURVEY, 0);
                 st.fine[i] = guide(z);
@@ -698,7 +721,7 @@ pub fn assign_queue(
     let mut used = 0usize;
     let mut free = taken.iter().filter(|t| !**t).count();
     // Telescopes this pool may use at all (not taken, held or on STARE).
-    let mut pool_idx: Vec<usize> = (0..n).filter(|&i| !taken[i] && !st.hold[i] && job_tag(st.job[i]) != TAG_STARE).collect();
+    let mut pool_idx: Vec<usize> = (0..n).filter(|&i| !taken[i] && !st.off[i] && job_tag(st.job[i]) != TAG_STARE).collect();
     let mut by_job: std::collections::HashMap<u64, Vec<usize>> = std::collections::HashMap::new();
     for (i, &pj) in st.prev_job.iter().enumerate() {
         if job_tag(pj) == TAG_QUEUE {
@@ -729,7 +752,7 @@ pub fn assign_queue(
                 // an outgoing member stays locked until its replacement (which
                 // already counts as healthy while it slews) has locked on.
                 let keep = healthy < it.want || (it.continuous && st.att[i].phase() == crate::attitude::Phase::Locked);
-                if keep && used < budget && !taken[i] && !st.hold[i] && job_tag(st.job[i]) != TAG_STARE && it.dir.dot(st.rhat[i]) > st.cos_lim {
+                if keep && used < budget && !taken[i] && !st.off[i] && job_tag(st.job[i]) != TAG_STARE && it.dir.dot(st.rhat[i]) > st.cos_lim {
                     taken[i] = true;
                     st.pointing[i] = Some(it.dir);
                     st.job[i] = me;
@@ -899,7 +922,7 @@ pub fn assign_stare(
         };
         // 1. Keep current members while they can still see the target.
         for i in 0..n {
-            if st.prev_job[i] != me || taken[i] || st.hold[i] {
+            if st.prev_job[i] != me || taken[i] || st.off[i] {
                 continue;
             }
             if let Some(tts) = loss_time(st, shell, i, it.dir) {
@@ -920,7 +943,7 @@ pub fn assign_stare(
                 (0..n)
                     .into_par_iter()
                     .filter_map(|i| {
-                        if taken[i] || st_ref.hold[i] {
+                        if taken[i] || st_ref.off[i] {
                             return None;
                         }
                         let pj = st_ref.prev_job[i];

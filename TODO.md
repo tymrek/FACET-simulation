@@ -32,6 +32,12 @@
 ## Simulation
 - Interferometry follow-ups: limb-darkened and oblate star models; closure
   of the third-order correlation for phase; cluster size optimisation per star.
+- [x] Twin-telescope satellites (1–5 % of the fleet, boom 0.5–3 m) for large stars.
+- [x] Interferometry photon flux at the observing wavelength from B−V.
+- [ ] Twin bus in the cost model and drag/propellant (wider, heavier spacecraft).
+- [ ] Twin observing queue: several large stars, not one fixed target.
+- [ ] On a rigid boom, amplitude (Michelson) interferometry becomes realistic:
+      revisit the parked ladder's first rung with the twin bus.
 
 ## Identity
 - Motion logo (B ↔ C gem): port into the app as start-up splash and the

@@ -67,6 +67,7 @@ pub struct Scenario {
     pub public_users: usize,
     pub saa_policy: String,
     pub handover: bool,
+    pub twin: crate::twin::TwinCfg,
 }
 
 impl Default for Scenario {
@@ -85,6 +86,7 @@ impl Default for Scenario {
             public_users: 20_000,
             saa_policy: "pause".into(),
             handover: true,
+            twin: Default::default(),
         }
     }
 }
@@ -193,6 +195,7 @@ impl App {
             }
             .into(),
             handover: self.handover,
+            twin: self.twin.cfg.clone(),
         }
     }
 
@@ -214,6 +217,7 @@ impl App {
             _ => SaaPolicy::Pause,
         };
         self.handover = s.handover;
+        self.twin.cfg = s.twin.clone();
         self.scenario_name = s.name.clone();
     }
 
@@ -305,7 +309,8 @@ impl App {
         let mut it: Vec<(String, String, &'static str)> = Vec::new();
         let n = self.shell.len();
         let failed = self.resil.n_failed();
-        it.push(("Fleet".into(), if failed > 0 { format!("{} sats ({failed} failed)", n) } else { format!("{n} satellites") }, "build_out"));
+        let twins = if self.twin.cfg.on { format!(", {} twins", self.twin.n_twins) } else { String::new() };
+        it.push(("Fleet".into(), if failed > 0 { format!("{n} sats ({failed} failed{twins})") } else if twins.is_empty() { format!("{n} satellites") } else { format!("{n} satellites ({})", &twins[2..]) }, "build_out"));
         match self.science.duty() {
             Some(d) => it.push(("Observing".into(), format!("{:.0} % of the time", 100.0 * d), "duty")),
             None => it.push(("Observing".into(), "measuring…".into(), "duty")),
@@ -428,6 +433,8 @@ impl App {
                     Tab::Environment => self.environment_panel(ui),
                     Tab::Interferometry => {
                         self.ii_panel(ui);
+                        ui.separator();
+                        self.twin_panel(ui);
                         ui.separator();
                         self.fuel_panel(ui);
                     }

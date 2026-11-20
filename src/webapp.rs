@@ -1199,6 +1199,7 @@ impl App {
             "neos": self.neo_json(),
             "public": self.public_json(),
             "interferometry": self.ii_json(),
+            "twin": self.twin_json(),
             "fuel": self.fuel_budget(),
             "provenance": crate::provenance::json(),
             "photometry": crate::imaging::precision_json(&self.obs_params),
