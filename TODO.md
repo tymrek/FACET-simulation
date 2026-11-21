@@ -50,8 +50,13 @@
 - [x] Extended deep-sky objects in result images (src/deepsky.rs): OpenNGC galaxies,
       globular and open clusters, planetary nebulae, nebulae and SNRs drawn as models
       scaled to catalogue size, shape, PA and magnitude; internal structure procedural.
-- [ ] Public "mosaic this object" option: tile a target larger than the field (M31 needs
-      ~3 × 2 pointings), sized from the catalogue extent, with a stitched result.
+- [x] Public mosaics (src/mosaic.rs): tiles a catalogue object larger than the field on an
+      RA/Dec grid with 10 % overlap, shares the telescopes between tiles, approves/rejects
+      as a group, and serves a stitched overview at /api/mosaic/{group}.
+- [ ] Mosaic follow-ups: roll the grid to the object's major axis (fewer tiles for
+      inclined galaxies); overview at full depth per tile instead of the shallowest.
+- [ ] Galaxy models from catalogue axis ratios: near edge-on galaxies with big halos
+      (M104, M82) come out as inclined spirals; OpenNGC "S?" types are drawn as spirals.
 - [ ] Moving targets: track NEOs and planets as they move when chosen from search.
 
 ## Build and platform

@@ -119,6 +119,8 @@ pub struct ObsRequest {
     /// Scheduling requirement and its bookkeeping (programme cases).
     #[serde(skip)]
     pub sched: Sched,
+    /// Tile of a public mosaic (see mosaic.rs).
+    pub mosaic: Option<crate::mosaic::Mosaic>,
 }
 
 /// Per-request state for science requirements beyond telescope-seconds.
@@ -342,6 +344,8 @@ pub struct Shared {
     pub coast_json: String,
     pub campaigns: Vec<Campaign>,
     pub next_cid: u64,
+    /// Current telescope field side, degrees (for mosaic planning).
+    pub field_deg: f64,
 }
 
 impl Shared {
@@ -651,6 +655,79 @@ fn handle_campaign(shared: SharedRef, req: Request, path: String) {
 /// Renders are CPU-heavy: do one at a time.
 static RENDER_LOCK: Mutex<()> = Mutex::new(());
 
+/// The render spec for a request's current data, and its cache key.
+fn result_spec(r: &ObsRequest) -> Option<((u64, u32), crate::imaging::Spec)> {
+    let hw = r.hw?;
+    if r.progress_s <= 0.0 {
+        return None;
+    }
+    let done = r.state == ReqState::Done;
+    let required = r.required_s();
+    // Quantise live stacks to 5 % steps so repeated polls hit the cache.
+    let bucket = if done { u32::MAX } else { ((r.progress_s / required * 20.0).floor() as u32).max(1) };
+    let total = if done { r.progress_s } else { (bucket as f64 / 20.0 * required).min(r.progress_s.max(1e-6)) };
+    // Telescopes differ: scale to nominal-equivalent time.
+    let total = if r.sched.eff_s > 0.0 { total * r.sched.eff_s / r.progress_s } else { total };
+    Some((
+        (r.id, bucket),
+        crate::imaging::Spec {
+            id: r.id,
+            target_name: r.target_name.clone(),
+            dir: r.dir,
+            body: r.body,
+            jd: r.obs_jd,
+            total_s: total,
+            required_s: required,
+            telescopes: r.telescopes,
+            exposure_s: r.exposure_s,
+            hw: {
+                let mut hw = hw;
+                if let Some(j) = r.eff_jitter() {
+                    hw.jitter_arcsec = j;
+                }
+                hw
+            },
+            done,
+            fine_frac: if r.progress_s > 0.0 { r.fine_s / r.progress_s } else { 1.0 },
+            response_s: r.response_s(),
+            full_lock_s: r.full_lock_s(),
+            slews: r.slews,
+            mean_slew_deg: if r.slews > 0 { r.slew_deg_sum / r.slews as f64 } else { 0.0 },
+            agility: r.agility,
+        },
+    ))
+}
+
+/// Render through the cache, one render at a time; `post` adjusts a fresh render.
+fn render_cached(
+    shared: &SharedRef,
+    key: (u64, u32),
+    spec: &crate::imaging::Spec,
+    post: impl FnOnce(crate::imaging::Output) -> crate::imaging::Output,
+) -> Arc<crate::imaging::Output> {
+    if let Some(o) = shared.lock().unwrap().results.get(key) {
+        return o;
+    }
+    let _g = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Another thread may have rendered it while we waited.
+    if let Some(o) = shared.lock().unwrap().results.get(key) {
+        return o;
+    }
+    let o = Arc::new(post(crate::imaging::render(spec)));
+    shared.lock().unwrap().results.put(key, o.clone());
+    o
+}
+
+fn send_output(req: Request, out: &crate::imaging::Output, part: &str) {
+    match part {
+        "" => json(req, 200, out.report.clone()),
+        "full.png" => send_bytes(req, "image/png", out.full_png.clone()),
+        "crop.png" => send_bytes(req, "image/png", out.crop_png.clone()),
+        "psf.png" => send_bytes(req, "image/png", out.psf_png.clone()),
+        _ => err(req, 404, "not found"),
+    }
+}
+
 /// Serve `/api/result/{id}[/full.png|/crop.png]`. Runs on its own thread.
 fn handle_result(shared: SharedRef, req: Request, path: String) {
     let rest = path.trim_start_matches("/api/result/");
@@ -664,71 +741,111 @@ fn handle_result(shared: SharedRef, req: Request, path: String) {
             drop(sh);
             return err(req, 404, "no such request");
         };
-        let (Some(hw), true) = (r.hw, r.progress_s > 0.0) else {
+        let Some(s) = result_spec(r) else {
             drop(sh);
             return err(req, 404, "no data yet: the request has not been observed");
         };
-        let done = r.state == ReqState::Done;
-        let required = r.required_s();
-        // Quantise live stacks to 5 % steps so repeated polls hit the cache.
-        let bucket = if done { u32::MAX } else { ((r.progress_s / required * 20.0).floor() as u32).max(1) };
-        let total = if done { r.progress_s } else { (bucket as f64 / 20.0 * required).min(r.progress_s.max(1e-6)) };
-        // Telescopes differ: scale to nominal-equivalent time.
-        let total = if r.sched.eff_s > 0.0 { total * r.sched.eff_s / r.progress_s } else { total };
-        (
-            (id, bucket),
-            crate::imaging::Spec {
-                id,
-                target_name: r.target_name.clone(),
-                dir: r.dir,
-                body: r.body,
-                jd: r.obs_jd,
-                total_s: total,
-                required_s: required,
-                telescopes: r.telescopes,
-                exposure_s: r.exposure_s,
-                hw: {
-                    let mut hw = hw;
-                    if let Some(j) = r.eff_jitter() {
-                        hw.jitter_arcsec = j;
-                    }
-                    hw
-                },
-                done,
-                fine_frac: if r.progress_s > 0.0 { r.fine_s / r.progress_s } else { 1.0 },
-                response_s: r.response_s(),
-                full_lock_s: r.full_lock_s(),
-                slews: r.slews,
-                mean_slew_deg: if r.slews > 0 { r.slew_deg_sum / r.slews as f64 } else { 0.0 },
-                agility: r.agility,
-            },
-        )
+        s
     };
     let (key, spec) = spec;
-    let cached = shared.lock().unwrap().results.get(key);
-    let out = match cached {
-        Some(o) => o,
-        None => {
-            let _g = RENDER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            // Another thread may have rendered it while we waited.
-            let again = shared.lock().unwrap().results.get(key);
-            match again {
-                Some(o) => o,
-                None => {
-                    let o = Arc::new(crate::imaging::render(&spec));
-                    shared.lock().unwrap().results.put(key, o.clone());
-                    o
+    let out = render_cached(&shared, key, &spec, |o| o);
+    send_output(req, &out, part)
+}
+
+/// Serve `/api/mosaic/{group}[/full.png|/crop.png]`: the stitched overview of
+/// a mosaic, rendered over the whole footprint at the depth of its shallowest
+/// tile, with cells that were not observed greyed out.
+fn handle_mosaic(shared: SharedRef, req: Request, path: String) {
+    let rest = path.trim_start_matches("/api/mosaic/");
+    let (id_s, part) = rest.split_once('/').unwrap_or((rest, ""));
+    let Ok(group) = id_s.parse::<u64>() else {
+        return err(req, 400, "bad id");
+    };
+    let prep = {
+        let sh = shared.lock().unwrap();
+        let tiles: Vec<&ObsRequest> = sh.requests.iter().filter(|r| r.mosaic.as_ref().is_some_and(|m| m.group == group)).collect();
+        let Some(m) = tiles.first().and_then(|r| r.mosaic.clone()) else {
+            drop(sh);
+            return err(req, 404, "no such mosaic");
+        };
+        let started = tiles.iter().filter(|r| r.hw.is_some() && r.progress_s > 0.0).count();
+        if started < tiles.len() {
+            let msg = format!("no overview yet: {started} of {} tiles observed so far", tiles.len());
+            drop(sh);
+            return err(req, 404, &msg);
+        }
+        // The shallowest tile sets the depth.
+        let Some(shallow) = tiles
+            .iter()
+            .min_by(|a, b| (a.progress_s / a.required_s()).partial_cmp(&(b.progress_s / b.required_s())).unwrap_or(std::cmp::Ordering::Equal))
+        else {
+            drop(sh);
+            return err(req, 404, "no such mosaic");
+        };
+        let Some((_, mut spec)) = result_spec(shallow) else {
+            drop(sh);
+            return err(req, 404, "no data yet");
+        };
+        let done = tiles.iter().all(|r| r.state == ReqState::Done);
+        let frac = (shallow.progress_s / shallow.required_s()).min(1.0);
+        let bucket = if done { u32::MAX } else { ((frac * 20.0).floor() as u32).max(1) };
+        let span = crate::mosaic::Plan::span_deg(m.cols, m.rows, m.step_deg, m.field_deg);
+        spec.id = group;
+        spec.target_name = m.object.clone();
+        spec.dir = V3::from_radec(m.ra_deg.to_radians(), m.dec_deg.to_radians());
+        spec.hw.fov_deg = span;
+        spec.done = done;
+        spec.slews = tiles.iter().map(|r| r.slews).sum();
+        let observed: Vec<(u32, u32)> = tiles.iter().filter_map(|r| r.mosaic.as_ref().map(|x| (x.col, x.row))).collect();
+        ((group | 1 << 62, bucket), spec, m, observed, span, tiles.len())
+    };
+    let (key, spec, m, observed, span, n) = prep;
+    let out = render_cached(&shared, key, &spec, |mut o| {
+        // Grey out grid cells that no tile covers.
+        let mut dec = png::Decoder::new(std::io::Cursor::new(o.full_png.clone()));
+        dec.set_transformations(png::Transformations::IDENTITY);
+        if let Ok(mut rd) = dec.read_info() {
+            let mut buf = vec![0u8; rd.output_buffer_size()];
+            if let Ok(info) = rd.next_frame(&mut buf) {
+                if info.color_type == png::ColorType::Grayscale && info.width == info.height {
+                    let w = info.width as usize;
+                    buf.truncate(w * w);
+                    crate::mosaic::mask_unobserved(&mut buf, w, span, &m, &observed);
+                    o.full_png = crate::imaging::encode_png(w, w, &buf);
                 }
             }
         }
-    };
-    match part {
-        "" => json(req, 200, out.report.clone()),
-        "full.png" => send_bytes(req, "image/png", out.full_png.clone()),
-        "crop.png" => send_bytes(req, "image/png", out.crop_png.clone()),
-        "psf.png" => send_bytes(req, "image/png", out.psf_png.clone()),
-        _ => err(req, 404, "not found"),
-    }
+        let note = format!(
+            "Mosaic overview: {n} tiles of {:.0}′ on a {} × {} grid ({:.0} % overlap) covering {:.0}′ × {:.0}′. \
+             The overview is drawn at the depth of the shallowest tile and a coarser pixel scale than the tiles; \
+             each tile's full-resolution result is under its own request.{}",
+            m.field_deg * 60.0,
+            m.cols,
+            m.rows,
+            crate::mosaic::OVERLAP * 100.0,
+            ((m.cols - 1) as f64 * m.step_deg + m.field_deg) * 60.0,
+            ((m.rows - 1) as f64 * m.step_deg + m.field_deg) * 60.0,
+            if (n as u32) < m.cols * m.rows { " Grid cells outside the object were not observed and are greyed out." } else { "" }
+        );
+        if let Some(a) = o.report["notes"].as_array_mut() {
+            a.insert(0, serde_json::json!(note));
+        }
+        // The overview is rendered as one wide frame: put the hardware table
+        // back to one telescope's field.
+        let ps = o.report["hardware"]["pixel_scale_arcsec"].as_f64().unwrap_or(0.0);
+        o.report["hardware"]["fov_deg"] = serde_json::json!(m.field_deg);
+        if let (Some(sensor), true) = (o.report["hardware"]["sensor"].as_str().map(str::to_string), ps > 0.0) {
+            if let Some((_, rest)) = sensor.split_once(" px across") {
+                o.report["hardware"]["sensor"] = serde_json::json!(format!("{:.0} px across{rest}", m.field_deg * 3600.0 / ps));
+            }
+        }
+        o.report["mosaic"] = serde_json::json!({
+            "group": m.group, "tiles": n, "cols": m.cols, "rows": m.rows,
+            "field_deg": m.field_deg, "span_deg": span, "overlap": crate::mosaic::OVERLAP,
+        });
+        o
+    });
+    send_output(req, &out, part)
 }
 
 fn send_bytes(req: Request, ctype: &str, body: Vec<u8>) {
@@ -855,7 +972,7 @@ fn requests_json(sh: &Shared, director: bool, always: &[u64]) -> serde_json::Val
     // The first 400, plus any the caller asked for by id (a visitor's own
     // requests), which would otherwise drop off the list once they finish.
     let mut chosen: Vec<&ObsRequest> = list.iter().take(400).copied().collect();
-    for id in always.iter().take(50) {
+    for id in always.iter().take(100) {
         if !chosen.iter().any(|r| r.id == *id) {
             if let Some(r) = sh.requests.iter().find(|r| r.id == *id) {
                 chosen.push(r);
@@ -923,6 +1040,8 @@ struct Submit {
     telescopes: Option<u32>,
     exposure_s: Option<f64>,
     note: Option<String>,
+    /// Tile a catalogue object larger than one field.
+    mosaic: Option<bool>,
 }
 
 fn handle_submit(shared: &SharedRef, mut req: Request) {
@@ -936,7 +1055,14 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
     };
     let mut sh = shared.lock().unwrap();
     let open_total = sh.requests.iter().filter(|r| r.state.is_open() && r.programme.is_none()).count();
-    let open_ip = sh.requests.iter().filter(|r| r.state.is_open() && r.ip == ip).count();
+    // A mosaic counts once towards the per-visitor limit.
+    let open_ip = sh
+        .requests
+        .iter()
+        .filter(|r| r.state.is_open() && r.ip == ip)
+        .map(|r| r.mosaic.as_ref().map_or(r.id, |m| m.group))
+        .collect::<std::collections::HashSet<u64>>()
+        .len();
     if open_total >= MAX_OPEN_TOTAL {
         drop(sh);
         return err(req, 503, "queue full, try later");
@@ -1013,20 +1139,96 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         submit_jd: sh.jd_now,
         case_idx: None,
         inv_idx: None,
+        mosaic: None,
     };
-    let msg = format!(
-        "Request #{} from {}: {} ({} × {:.0} s){}",
-        r.id, r.submitter, r.target_name, r.telescopes, r.exposure_s,
-        if state == ReqState::Approved { " · auto-approved" } else { " · awaiting approval" }
-    );
-    sh.requests.push(r);
+    // A mosaic: one request per tile, the telescopes shared between tiles.
+    let mut reqs = vec![r];
+    if sub.mosaic == Some(true) {
+        let plan = match &sub.target {
+            Some(t) if body_idx.is_none() => match crate::catalog::find_dso(t) {
+                Some(d) if d.dir.angle(dir) < 1e-3 => crate::mosaic::plan_object(d, sh.field_deg),
+                _ => Err("mosaics are for catalogue deep-sky objects (galaxies, nebulae, clusters)".into()),
+            },
+            _ => Err("mosaics are for catalogue deep-sky objects (galaxies, nebulae, clusters)".into()),
+        };
+        let plan = match plan {
+            Ok(p) => p,
+            Err(e) => {
+                sh.next_id -= 1;
+                drop(sh);
+                return err(req, 400, &format!("mosaic: {e}"));
+            }
+        };
+        let n = plan.tiles.len() as u32;
+        let per = telescopes.div_ceil(n).max(1);
+        let t = reqs.pop().unwrap();
+        let (ra0, dec0) = (t.ra_deg, t.dec_deg);
+        for (k, &(col, row, d)) in plan.tiles.iter().enumerate() {
+            let mut x = t.clone();
+            x.id = id + k as u64;
+            x.target_name = format!("{} · tile {}/{}", t.target_name, k + 1, n);
+            x.dir = d;
+            let (ra, dec) = d.to_radec();
+            x.ra_deg = ra.to_degrees();
+            x.dec_deg = dec.to_degrees();
+            x.telescopes = per;
+            x.mosaic = Some(crate::mosaic::Mosaic {
+                group: id,
+                index: k as u32,
+                n,
+                cols: plan.cols,
+                rows: plan.rows,
+                col,
+                row,
+                object: t.target_name.clone(),
+                ra_deg: ra0,
+                dec_deg: dec0,
+                field_deg: sh.field_deg,
+                step_deg: plan.step_deg,
+            });
+            reqs.push(x);
+        }
+        sh.next_id = id + n as u64;
+    }
+    let ids: Vec<u64> = reqs.iter().map(|r| r.id).collect();
+    let mosaic_json = reqs[0].mosaic.as_ref().map(|m| serde_json::json!({
+        "group": m.group, "n": m.n, "cols": m.cols, "rows": m.rows, "telescopes_per_tile": reqs[0].telescopes,
+    }));
+    let r = &reqs[0];
+    let msg = match &r.mosaic {
+        Some(m) => format!(
+            "Request #{} from {}: mosaic of {} ({} tiles, {} × {:.0} s each){}",
+            r.id, r.submitter, m.object, m.n, r.telescopes, r.exposure_s,
+            if state == ReqState::Approved { " · auto-approved" } else { " · awaiting approval" }
+        ),
+        None => format!(
+            "Request #{} from {}: {} ({} × {:.0} s){}",
+            r.id, r.submitter, r.target_name, r.telescopes, r.exposure_s,
+            if state == ReqState::Approved { " · auto-approved" } else { " · awaiting approval" }
+        ),
+    };
+    sh.requests.extend(reqs);
     sh.log("info", msg);
     sh.prune();
     drop(sh);
-    json(req, 201, serde_json::json!({ "id": id, "state": state }));
+    json(req, 201, serde_json::json!({ "id": id, "ids": ids, "state": state, "mosaic": mosaic_json }));
 }
 
 fn apply_request_cmd(sh: &mut Shared, id: u64, action: &str, priority: Option<i32>, telescopes: Option<u32>) -> Result<(), &'static str> {
+    // Approve, reject and cancel act on a whole mosaic: its tiles go together.
+    let group = sh.requests.iter().find(|r| r.id == id).and_then(|r| r.mosaic.as_ref().map(|m| m.group));
+    if let (Some(g), "approve" | "reject" | "cancel") = (group, action) {
+        let ids: Vec<u64> = sh.requests.iter().filter(|r| r.mosaic.as_ref().is_some_and(|m| m.group == g)).map(|r| r.id).collect();
+        let mut any = false;
+        for t in ids {
+            any |= apply_one(sh, t, action, priority, telescopes).is_ok();
+        }
+        return if any { Ok(()) } else { Err("not valid in this state") };
+    }
+    apply_one(sh, id, action, priority, telescopes)
+}
+
+fn apply_one(sh: &mut Shared, id: u64, action: &str, priority: Option<i32>, telescopes: Option<u32>) -> Result<(), &'static str> {
     let jd = sh.jd_now;
     let r = sh.requests.iter_mut().find(|r| r.id == id).ok_or("no such request")?;
     if let Some(p) = priority {
@@ -1089,6 +1291,11 @@ fn control_loop(server: Server, shared: SharedRef) {
                 let sh = shared.clone();
                 let p = p.to_string();
                 std::thread::spawn(move || handle_result(sh, req, p));
+            }
+            (Method::Get, p) if p.starts_with("/api/mosaic/") => {
+                let sh = shared.clone();
+                let p = p.to_string();
+                std::thread::spawn(move || handle_mosaic(sh, req, p));
             }
             (Method::Get, p) if p.starts_with("/api/campaign/") => {
                 let sh = shared.clone();
@@ -1246,6 +1453,11 @@ fn public_loop(server: Server, shared: SharedRef) {
                 let sh = shared.clone();
                 let p = p.to_string();
                 std::thread::spawn(move || handle_result(sh, req, p));
+            }
+            (Method::Get, p) if p.starts_with("/api/mosaic/") => {
+                let sh = shared.clone();
+                let p = p.to_string();
+                std::thread::spawn(move || handle_mosaic(sh, req, p));
             }
             (Method::Get, p) if p.starts_with("/api/campaign/") => {
                 let sh = shared.clone();

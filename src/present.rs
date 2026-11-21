@@ -900,6 +900,7 @@ impl App {
             submit_jd: self.jd,
             case_idx: None,
             inv_idx: None,
+            mosaic: None,
         });
         sh.log("info", format!("Public request #{id}: {name}, {telescopes} × {exposure_s:.0} s (presentation)"));
     }

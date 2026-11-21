@@ -80,6 +80,7 @@ impl App {
             inspect_json: "{}".into(),
             campaigns: Vec::new(),
             next_cid: 1,
+            field_deg: self.obs_params.fov_deg,
             coast_json: {
                 let lines: Vec<Vec<[f32; 2]>> = self
                     .coast
@@ -806,6 +807,7 @@ impl App {
                 submit_jd: t0,
                 case_idx: Some(d.case),
                 inv_idx: Some(d.inv),
+                mosaic: None,
             });
         }
         sh.prune();
@@ -1282,6 +1284,7 @@ impl App {
         let mut sh = web.lock().unwrap();
         sh.status_json = status.to_string();
         sh.jd_now = self.jd;
+        sh.field_deg = self.obs_params.fov_deg;
         if let Some(f) = fleet {
             sh.fleet_json = f;
         }

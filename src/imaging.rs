@@ -755,7 +755,7 @@ fn galaxy_counts(v: f64) -> f64 {
     10f64.powf(0.45 * (v - 20.0) + 2.6)
 }
 
-fn encode_png(w: usize, h: usize, px: &[u8]) -> Vec<u8> {
+pub(crate) fn encode_png(w: usize, h: usize, px: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     {
         let mut enc = png::Encoder::new(&mut out, w as u32, h as u32);
@@ -1408,7 +1408,7 @@ mod deepsky_render {
     fn render_showcase() {
         let jd = 2_461_358.5;
         let hw = Hardware::from_obs(&crate::obs::ObsParams::default());
-        for q in ["M31", "M42", "M57", "M13", "M51", "M45", "M8", "M1", "M104", "M27"] {
+        for q in ["M31", "M87", "M104", "M51", "M101", "M82", "M33", "M42", "M13", "M57"] {
             let d = crate::catalog::find_dso(q).unwrap();
             let spec = Spec {
                 id: 7, target_name: d.name(), dir: d.dir, body: None, jd, total_s: 60_000.0, required_s: 60_000.0,

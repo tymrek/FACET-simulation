@@ -5,7 +5,28 @@ const mine = () => { try { return JSON.parse(localStorage.getItem(mineKey) || "[
 let last = null;
 const viewer = new ResultViewer($("result"));
 const streamViewer = new ResultViewer($("result"), "", "/api/campaign");
-const viewBtn = (r) => r.has_result ? el("button", { class: "view", onclick: () => { streamViewer.close(); viewer.show(r.id); } }, r.state === "done" ? "Result" : "Live stack") : "";
+const mosaicViewer = new ResultViewer($("result"), "", "/api/mosaic");
+const closeAll = () => { streamViewer.close(); viewer.close(); mosaicViewer.close(); };
+const viewBtn = (r) => r.has_result ? el("button", { class: "view", onclick: () => { closeAll(); viewer.show(r.id); } }, r.state === "done" ? "Result" : "Live stack") : "";
+
+// One row for a whole mosaic in "Your requests": overall progress, the
+// stitched overview once every tile has data, and each tile's own result.
+function mosaicRow(tiles) {
+  const m = tiles[0].mosaic, req = tiles.reduce((a, r) => a + r.required_s, 0), got = tiles.reduce((a, r) => a + Math.min(r.progress_s, r.required_s), 0);
+  const done = tiles.filter(r => r.state === "done").length, started = tiles.filter(r => r.has_result).length;
+  const open = tiles.some(r => ["pending", "approved", "observing"].includes(r.state));
+  const state = done === tiles.length ? "done" : open ? (tiles.some(r => r.state === "observing") ? "observing" : tiles[0].state) : tiles[0].state;
+  const pct = Math.min(100, 100 * got / Math.max(1e-9, req));
+  const sorted = [...tiles].sort((a, b) => a.mosaic.index - b.mosaic.index);
+  return el("tr", {},
+    el("td", {}, `#${m.group} ${m.object}`, el("div", { class: "small muted" }, `mosaic: ${tiles.length} tiles (${m.cols} × ${m.rows} grid), ${tiles[0].telescopes} telescopes each`)),
+    el("td", {}, el("span", { class: `state ${state}` }, state), el("div", { class: "small muted" }, `${done}/${tiles.length} tiles done`)),
+    el("td", {}, el("div", { class: "bar", title: `${pct.toFixed(1)}%` }, el("div", { style: `width:${pct}%` }))),
+    el("td", {},
+      started === tiles.length ? el("button", { class: "view", onclick: () => { closeAll(); mosaicViewer.show(m.group); } }, done === tiles.length ? "Mosaic" : "Live mosaic") : "",
+      el("div", { class: "small" }, ...sorted.filter(r => r.has_result).map(r =>
+        el("a", { href: "#", style: "margin-right:6px", onclick: (ev) => { ev.preventDefault(); closeAll(); viewer.show(r.id); } }, `tile ${r.mosaic.index + 1}`)))));
+}
 
 const map = new SkyMap($("sky"), (ra, dec) => {
   $("target").value = ""; $("ra").value = ra.toFixed(3); $("dec").value = dec.toFixed(3); estimate();
@@ -172,9 +193,14 @@ function render(s) {
   }
   if (!q.children.length) q.append(el("tr", {}, el("td", { class: "muted small", colspan: 8 }, "The queue is empty. Be the first!")));
   const ids = mine(), m = $("mine"); m.replaceChildren();
+  const groups = new Map();
   for (const r of s.requests.filter(r => ids.includes(r.id))) {
-    m.append(el("tr", {}, el("td", {}, `#${r.id} ${r.target_name}`), stateCell(r), progressCell(r), el("td", {}, viewBtn(r))));
+    if (r.mosaic) {
+      if (!groups.has(r.mosaic.group)) { groups.set(r.mosaic.group, []); m.append(el("tr", { "data-group": r.mosaic.group })); }
+      groups.get(r.mosaic.group).push(r);
+    } else m.append(el("tr", {}, el("td", {}, `#${r.id} ${r.target_name}`), stateCell(r), progressCell(r), el("td", {}, viewBtn(r))));
   }
+  for (const [g, tiles] of groups) m.querySelector(`tr[data-group="${g}"]`).replaceWith(mosaicRow(tiles));
   if (!m.children.length) m.append(el("tr", {}, el("td", { class: "muted small" }, "None yet from this browser.")));
   const streams = (s.campaigns || []).filter(c => c.active);
   $("streams").replaceChildren(...(streams.length ? streams.map(c => {
@@ -184,7 +210,7 @@ function render(s) {
         el("b", {}, c.target_name), el("span", { class: "muted small" }, c.paused ? " · paused" : ` · ${c.locked_now} telescopes watching · new frame every ${fmtDur(c.frame_s)}`)),
       el("div", { class: "small muted" }, c.paused ? `Paused: ${c.target_name} is too close to the ${String(c.blocked).startsWith("Sun") ? "Sun" : "Moon"} to observe safely. The stream resumes automatically.`
         : c.blocked ? c.blocked : any !== null ? `on target ${any.toFixed(2)} % of the time since ${c.started_utc.slice(0, 16)} UTC` : "acquiring…"),
-      el("div", { class: "btns" }, c.has_frame ? el("button", { class: "view", onclick: () => { viewer.close(); streamViewer.show(c.id); } }, "Watch") : ""));
+      el("div", { class: "btns" }, c.has_frame ? el("button", { class: "view", onclick: () => { closeAll(); streamViewer.show(c.id); } }, "Watch") : ""));
   }) : [el("div", { class: "muted small" }, "No live streams right now.")]));
   estimate();
 }
@@ -202,6 +228,7 @@ setInterval(poll, 1000); poll();
 $("form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const body = { submitter: $("who").value, telescopes: +$("tel").value, exposure_s: +$("exp").value, note: $("note").value };
+  if ($("mosaic").checked) body.mosaic = true;
   if ($("target").value.trim()) body.target = $("target").value.trim();
   else if ($("ra").value !== "" && $("dec").value !== "") { body.ra_deg = +$("ra").value; body.dec_deg = +$("dec").value; }
   const msg = $("msg");
@@ -209,12 +236,17 @@ $("form").addEventListener("submit", async (ev) => {
     const r = await fetch("/api/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json();
     if (!r.ok) { msg.className = "msg small warn"; msg.textContent = j.error || "rejected"; return; }
-    const ids = mine(); ids.push(j.id); localStorage.setItem(mineKey, JSON.stringify(ids.slice(-50)));
-    msg.className = "msg small"; msg.textContent = `Request #${j.id} submitted (${j.state}).`;
+    const ids = mine(); ids.push(...(j.ids || [j.id])); localStorage.setItem(mineKey, JSON.stringify(ids.slice(-100)));
+    msg.className = "msg small";
+    msg.textContent = j.mosaic
+      ? `Mosaic #${j.id} submitted (${j.state}): ${j.mosaic.n} tiles on a ${j.mosaic.cols} × ${j.mosaic.rows} grid, ${j.mosaic.telescopes_per_tile} telescopes per tile.`
+      : `Request #${j.id} submitted (${j.state}).`;
     poll();
   } catch { msg.className = "msg small warn"; msg.textContent = "Could not reach the simulator."; }
 });
 // Shareable link: /?result=<id>
 { const rid = new URLSearchParams(location.search).get("result"); if (rid) viewer.show(+rid); }
+// Shareable mosaic link: /?mosaic=<group id>
+{ const mid = new URLSearchParams(location.search).get("mosaic"); if (mid) mosaicViewer.show(+mid); }
 // Shareable live-stream link: /?stream=<campaign id>
 { const sid = new URLSearchParams(location.search).get("stream"); if (sid) streamViewer.show(+sid); }

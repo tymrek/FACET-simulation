@@ -290,7 +290,7 @@ class ResultViewer {
       r = await res.json();
       if (!res.ok) { this.box.hidden = false; this.box.replaceChildren(el("h2", {}, `Request #${id}`), el("p", { class: "muted" }, r.error)); return; }
     } catch { return; }
-    if (r.final && this.base === "/api/result") clearInterval(this.timer);
+    if (r.final && this.base !== "/api/campaign") clearInterval(this.timer);
     const bust = `${q ? "&" : "?"}t=${Date.now()}`;
     const kv = (rows) => el("table", { class: "kv" }, ...rows.filter(([, v]) => v !== null && v !== undefined && v !== "")
       .map(([k, v]) => el("tr", {}, el("th", {}, k), el("td", {}, v))));

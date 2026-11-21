@@ -107,6 +107,8 @@
           <div><label for="tel">Telescopes (stacked)</label><input id="tel" type="number" min="1" max="1000" value="10"></div>
           <div><label for="exp">Exposure each (s)</label><input id="exp" type="number" min="1" max="86400" value="300"></div>
         </div>
+        <label class="check"><input id="mosaic" type="checkbox"> Mosaic the whole object</label>
+        <div class="small muted" id="mosaic_hint">For galaxies, nebulae and clusters larger than one field (M31, M42, M45 …): the object is tiled with overlapping fields and the telescopes are shared between the tiles. You get every tile plus a stitched overview.</div>
         <label for="note">Note to the observatory (optional)</label>
         <textarea id="note" rows="2" maxlength="200"></textarea>
         <div class="btns"><button class="primary" type="submit">Submit request</button></div>

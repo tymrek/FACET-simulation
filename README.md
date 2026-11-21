@@ -709,7 +709,19 @@ with cold gas ~32 kg.
   nebulae as shells, nebulae and SNRs as fractal texture. Bright cores
   shorten the sub-frames like planets do. Internal structure is
   illustrative, not a real image; the result notes say so, and flag targets
-  larger than the field (M31 is 178′ across against a 77′ field).
+  larger than the field. Galaxy models follow the OpenNGC Hubble type:
+  ellipticals as pure r^1/4 profiles, S0 as bulge plus disc, spirals with
+  bulge fraction by stage (a → d), arms, and a bar for SB/SAB, irregulars
+  as clumpy discs.
+* **Mosaics:** a public request can tick "Mosaic the whole object" for a
+  catalogue object larger than one field. It is tiled on an RA/Dec-aligned
+  grid of fields with 10 % overlap covering the catalogue ellipse (M31:
+  6 tiles on a 2 × 3 grid; M42: 2), at most 16 tiles, with the requested
+  telescopes shared between tiles. The tiles are ordinary requests that the
+  director approves, rejects or cancels as one; "Your requests" shows the
+  mosaic as one row with each tile's result and a stitched overview
+  (`/api/mosaic/{group}`), drawn over the whole footprint at the depth of
+  the shallowest tile with any unobserved grid cells greyed out.
 * **Variable stars:** 5,221 HYG variables with magnitude ranges.
 * **Science programme on real objects:** cluster and nearby-galaxy requests
   pick real clusters and galaxies brighter than 11th magnitude; supernova

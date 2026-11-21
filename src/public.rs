@@ -402,6 +402,7 @@ impl App {
                         submit_jd: jd,
                         case_idx: None,
                         inv_idx: None,
+                        mosaic: None,
                     });
                 }
             }

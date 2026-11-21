@@ -24,6 +24,7 @@ mod obs;
 mod optics;
 mod present;
 mod deepsky;
+mod mosaic;
 mod provenance;
 mod twin;
 mod ui_shell;

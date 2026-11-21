@@ -57,6 +57,14 @@ pub struct Model {
     pub seed: u64,
     /// Spiral structure strength (0 for smooth discs).
     arms: f64,
+    /// Bulge-to-total light ratio (galaxies).
+    bt: f64,
+    /// Bar strength (SB / SAB spirals) and its angle in the disc plane, rad.
+    bar: f64,
+    bar_angle: f64,
+    /// Elliptical (no disc) or irregular (clumpy, armless disc).
+    elliptical: bool,
+    irregular: bool,
     /// A nebula with its own star cluster (OpenNGC "Cl+N", e.g. M42).
     cluster_too: bool,
     /// Integral of `sb` over the plane, arcsec² (so flux × sb / norm is per arcsec²).
@@ -124,14 +132,51 @@ impl Model {
             }
             None => return None,
         };
-        // Spiral structure: large, not too edge-on, not round (round large
-        // galaxies are more often ellipticals; this is a heuristic).
-        let arms = if kind == Kind::Galaxy && major > 3.0 && q > 0.25 && q < 0.92 { 0.55 } else if kind == Kind::Galaxy && major > 3.0 && q >= 0.92 { 0.3 } else { 0.0 };
+        // Morphology from the OpenNGC Hubble type; without one, a size and
+        // axis-ratio heuristic.
+        let h = d.hubble.as_deref().unwrap_or("").trim();
+        let elliptical = kind == Kind::Galaxy && (h.starts_with('E') || h.starts_with("cD") || h.starts_with("dE"));
+        let lenticular = kind == Kind::Galaxy && (h.starts_with("S0") || h.starts_with("SA0") || h.starts_with("SB0") || h.starts_with("SAB0"));
+        let irregular = kind == Kind::Galaxy && (h.starts_with('I') || h.ends_with('m'));
+        let spiral = kind == Kind::Galaxy && h.starts_with('S') && !lenticular && !irregular;
+        let stage = h.trim_start_matches("SAB").trim_start_matches("SA").trim_start_matches("SB").trim_start_matches('S').chars().next();
+        let bt = if elliptical {
+            1.0
+        } else if lenticular {
+            0.55
+        } else if spiral {
+            match stage {
+                Some('a') => 0.4,
+                Some('b') => 0.25,
+                Some('c') => 0.12,
+                Some('d') => 0.05,
+                _ => 0.25,
+            }
+        } else if irregular {
+            0.0
+        } else if a > 300.0 {
+            0.3
+        } else {
+            0.4
+        };
+        let big = major > 3.0;
+        let arms = if kind != Kind::Galaxy || !big || elliptical || lenticular || irregular {
+            0.0
+        } else if q < 0.25 {
+            0.0
+        } else if spiral || h.is_empty() {
+            if q >= 0.92 && h.is_empty() { 0.3 } else { 0.55 }
+        } else {
+            0.0
+        };
+        let bar = if h.starts_with("SB") { 1.0 } else if h.starts_with("SAB") { 0.5 } else { 0.0 };
         let cluster_too = d.kind == "Cl+N";
-        Some(Model { name: d.name(), kind, dir: d.dir, mag, a, q, pa, seed, arms, cluster_too, norm: 0.0 })
+        let bar_angle = (seed % 1000) as f64 / 1000.0 * PI;
+        Some(Model { name: d.name(), kind, dir: d.dir, mag, a, q, pa, seed, arms, bt, bar, bar_angle, elliptical, irregular, cluster_too, norm: 0.0 })
     }
 
     /// `from_dso` with the normalisation integral computed.
+    #[cfg(test)]
     pub fn from_dso_normed(d: &Dso) -> Option<Model> {
         let mut m = Self::from_dso(d)?;
         m.norm = m.integrate();
@@ -165,17 +210,25 @@ impl Model {
         let a = self.a;
         match self.kind {
             Kind::Galaxy => {
+                if self.elliptical {
+                    // de Vaucouleurs r^1/4 law, R25 ≈ 2.5 effective radii.
+                    let re = (a / 2.5).max(1.0);
+                    let soft = 0.6;
+                    let r = (u * u + (v / self.q).powi(2) + soft * soft).sqrt();
+                    return (-7.669 * ((r / re).powf(0.25) - 1.0)).exp() / (22.67 * re * re * self.q);
+                }
                 let rs = a / 3.2;
                 let re = (0.06 * a).max(1.0);
                 let qb = self.q.max(0.6);
                 let soft = 0.6;
                 let rb = (u * u + (v / qb).powi(2) + soft * soft).sqrt();
-                let bulge = (-7.669 * ((rb / re).powf(0.25) - 1.0)).exp() / (re * re * qb);
-                let rd = (u * u + (v / self.q).powi(2)).sqrt();
-                let mut disc = (-rd / rs).exp() / (rs * rs * self.q);
+                let bulge = (-7.669 * ((rb / re).powf(0.25) - 1.0)).exp() / (22.67 * re * re * qb);
+                let (ud, vd) = (u, v / self.q); // disc-plane coordinates
+                let rd = (ud * ud + vd * vd).sqrt();
+                let mut disc = (-rd / rs).exp() / (2.0 * PI * rs * rs * self.q);
                 let mut tau = 0.0;
                 if self.arms > 0.0 {
-                    let th = (v / self.q).atan2(u);
+                    let th = vd.atan2(ud);
                     let x = rd / rs;
                     let pitch = 15f64.to_radians();
                     let phase = 2.0 * (th - (x + 0.15).ln() / pitch.tan()) + (self.seed % 628) as f64 / 100.0;
@@ -185,12 +238,25 @@ impl Model {
                     disc *= 1.0 + self.arms * win * (1.6 * arm - 0.35 + 0.8 * (clumps - 0.5) * arm);
                     tau += 0.9 * self.arms * win * (0.5 + 0.5 * (phase - 0.7).cos()).powi(10) * (0.7 + 0.6 * clumps);
                 }
+                if self.irregular {
+                    // Clumpy, lopsided star formation instead of arms.
+                    let c = fbm(self.seed, ud / (0.25 * rs), vd / (0.25 * rs), 4);
+                    disc *= (0.25 + 1.5 * c * c).max(0.0) * (1.0 + 0.3 * (ud / (2.0 * rs)).tanh());
+                }
+                let mut bar = 0.0;
+                if self.bar > 0.0 {
+                    let (sb, cb) = self.bar_angle.sin_cos();
+                    let p = ud * cb + vd * sb;
+                    let w = -ud * sb + vd * cb;
+                    let (l, t) = (1.2 * rs, 0.3 * rs);
+                    bar = (-(p / l).powi(2) - (w / t).powi(2)).exp() / (PI * l * t * self.q);
+                }
                 if self.q < 0.35 {
                     // Edge-on: a dust lane along the major axis.
                     tau += 1.2 * (-(v / (0.06 * a * self.q.max(0.1) * 3.0)).powi(2)).exp() * (1.0 - smooth(0.6 * a, 1.1 * a, u.abs()));
                 }
-                let bt = if a > 300.0 { 0.3 } else { 0.4 };
-                (bt * bulge / 22.67 + (1.0 - bt) * disc / (2.0 * PI)) * (-tau).exp()
+                let fbar = 0.12 * self.bar;
+                (self.bt * bulge + (1.0 - self.bt - fbar).max(0.0) * disc + fbar * bar) * (-tau).exp()
             }
             Kind::Globular => {
                 let rt = a.max(2.0);
@@ -356,6 +422,15 @@ mod tests {
         assert!(along > 2.0 * across, "along {along} across {across}");
         // The bulge dominates the very centre.
         assert!(m.sb(0.0, 0.0) > 20.0 * m.sb(r * s, r * c));
+    }
+
+    #[test]
+    fn hubble_types_set_the_model() {
+        let get = |q: &str| Model::from_dso(crate::catalog::find_dso(q).unwrap()).unwrap();
+        let (m110, m31, m87) = (get("M110"), get("M31"), get("M87"));
+        assert!(m110.elliptical && m110.arms == 0.0, "M110 is a dwarf elliptical");
+        assert!(m87.elliptical);
+        assert!(!m31.elliptical && m31.arms > 0.0 && (m31.bt - 0.25).abs() < 1e-9, "M31 is an Sb spiral");
     }
 
     #[test]

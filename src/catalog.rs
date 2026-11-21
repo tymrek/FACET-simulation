@@ -46,6 +46,8 @@ pub struct Dso {
     pub pa: Option<f32>,
     pub messier: Option<String>,
     pub common: Option<String>,
+    /// Hubble morphological type for galaxies (OpenNGC), e.g. "Sb", "E", "SABc".
+    pub hubble: Option<String>,
 }
 
 impl Dso {
@@ -104,6 +106,7 @@ pub fn dso() -> &'static [Dso] {
                     pa: num(f[7]),
                     messier: opt(f[8]),
                     common: opt(f[9]),
+                    hubble: f.get(10).and_then(|s| opt(s)),
                 })
             })
             .collect()
