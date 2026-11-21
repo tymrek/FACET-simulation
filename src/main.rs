@@ -23,6 +23,7 @@ mod neo;
 mod obs;
 mod optics;
 mod present;
+mod deepsky;
 mod provenance;
 mod twin;
 mod ui_shell;

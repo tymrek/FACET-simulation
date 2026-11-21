@@ -433,6 +433,44 @@ impl Frame {
             }
         }
     }
+    /// A catalogue deep-sky object (deepsky::Model) of total `flux` e⁻/s.
+    /// Returns whether any of it fell in the frame.
+    fn add_model(&mut self, m: &crate::deepsky::Model, flux: f64) -> bool {
+        if m.kind == crate::deepsky::Kind::OpenCluster {
+            return false; // member stars only
+        }
+        let Some((cx, cy)) = self.project(m.dir) else { return false };
+        let r = m.extent() / self.scale;
+        let x0 = (cx - r).floor().max(0.0) as usize;
+        let x1 = ((cx + r).ceil().max(0.0) as usize).min(self.w);
+        let y0 = (cy - r).floor().max(0.0) as usize;
+        let y1 = ((cy + r).ceil().max(0.0) as usize).min(self.h);
+        if x0 >= x1 || y0 >= y1 {
+            return false;
+        }
+        let k = flux / m.norm() * self.scale * self.scale;
+        // Supersample when the frame is coarse relative to the object.
+        let ss = if r < 40.0 { 3 } else { 1 };
+        let w = self.w;
+        use rayon::prelude::*;
+        let scale = self.scale;
+        self.rate[y0 * w..y1 * w].par_chunks_mut(w).enumerate().for_each(|(jj, row)| {
+            let y = (y0 + jj) as f64;
+            for x in x0..x1 {
+                let mut acc = 0.0;
+                for sy in 0..ss {
+                    for sx in 0..ss {
+                        let px = x as f64 + (sx as f64 + 0.5) / ss as f64;
+                        let py = y + (sy as f64 + 0.5) / ss as f64;
+                        acc += m.sb(-(px - cx) * scale, -(py - cy) * scale);
+                    }
+                }
+                row[x] += k * acc / (ss * ss) as f64;
+            }
+        });
+        true
+    }
+
     /// Exponential-disc galaxy (scale length `rs` arcsec, axis ratio q, angle pa).
     fn add_galaxy(&mut self, x: f64, y: f64, flux: f64, rs: f64, q: f64, pa: f64, sigma: f64) {
         let rs_px = rs / self.scale;
@@ -824,7 +862,26 @@ pub fn render(spec: &Spec) -> Output {
             notes.push(format!("Brightest catalogue star in field: V = {:.1} (saturated core).", s.mag));
         }
     }
+    // Catalogue deep-sky objects reaching the field (not for planet targets,
+    // whose frames are framed on the disc).
+    let dsos = if spec.body.is_none() { crate::deepsky::in_field(center, hw.fov_deg / 2.0) } else { Vec::new() };
+    let mut dso_peak = 0.0f64;
+    for m in &dsos {
+        if m.dir.angle(center) < rad(hw.fov_deg / 2.0) + rad(m.a / 3600.0) {
+            dso_peak = dso_peak.max(zp * 10f64.powf(-0.4 * m.mag) * m.peak_per_arcsec2() * ps * ps);
+        }
+    }
     let mut sub_s = hw.sub_max_s.min(spec.exposure_s).max(0.001);
+    if spec.body.is_none() && dso_peak > 0.0 {
+        let t_sat = 0.7 * hw.full_well_e / (dso_peak + bg_native);
+        if t_sat < sub_s {
+            sub_s = (t_sat * 10.0).floor().max(1.0) / 10.0;
+            notes.push(format!(
+                "Bright extended target: sub-frames shortened to {} so its brightest part stays below 70 % of full well.",
+                fmt_s(sub_s)
+            ));
+        }
+    }
     if spec.body.is_some() && peak_rate_native > 0.0 {
         let t_sat = 0.7 * hw.full_well_e / peak_rate_native;
         if t_sat < sub_s {
@@ -948,6 +1005,32 @@ pub fn render(spec: &Spec) -> Output {
         }
     }
 
+    // Catalogue deep-sky objects
+    let mut drawn: Vec<(String, f64)> = Vec::new();
+    for m in &dsos {
+        let flux = zp * 10f64.powf(-0.4 * m.mag);
+        let mut any = false;
+        for fr in [&mut full, &mut crop] {
+            any |= fr.add_model(m, flux);
+        }
+        let (me, mn) = tangent_basis(m.dir);
+        for (xi, eta, v) in m.members(lim) {
+            let d = (m.dir + me * rad(xi / 3600.0) + mn * rad(eta / 3600.0)).unit();
+            let f = zp * 10f64.powf(-0.4 * v);
+            for fr in [&mut full, &mut crop] {
+                if let Some((x, y)) = fr.project(d) {
+                    if x > -2.0 && y > -2.0 && x < fr.w as f64 + 2.0 && y < fr.h as f64 + 2.0 {
+                        any = true;
+                        fr.add_psf(x, y, f, 0.0);
+                    }
+                }
+            }
+        }
+        if any {
+            drawn.push((m.name.clone(), 2.0 * m.a));
+        }
+    }
+
     // Solar-system bodies in the field
     let mut target_mag = None;
     let mut target_snr = None;
@@ -1040,8 +1123,25 @@ pub fn render(spec: &Spec) -> Output {
             target_mag = Some(s.mag as f64);
         }
     }
-    if matches!(spec.target_name.as_str(), "Orion Nebula (M42)" | "Andromeda (M31)" | "LMC" | "Pleiades (M45)" | "Galactic Centre") {
-        notes.push("Extended deep-sky objects (nebulae, galaxies, clusters) are not modelled yet: the field shows its stars and a synthetic background only.".into());
+    if !drawn.is_empty() {
+        let mut names: Vec<String> = drawn.iter().take(6).map(|d| d.0.clone()).collect();
+        if drawn.len() > 6 {
+            names.push(format!("and {} more", drawn.len() - 6));
+        }
+        notes.push(format!(
+            "Deep-sky objects from the OpenNGC catalogue ({}) are drawn as models scaled to their catalogue size, shape, orientation and brightness. Spiral arms, dust lanes, nebular texture and cluster members are procedural: illustrative, not a real image.",
+            names.join(", ")
+        ));
+        let field_arcsec = hw.fov_deg * 3600.0;
+        if let Some((n, size)) = drawn.iter().find(|d| d.1 > 1.2 * field_arcsec) {
+            notes.push(format!(
+                "{n} ({:.0}′ across) is larger than the field ({:.0}′): this pointing shows its central part. Covering all of it needs a mosaic of several pointings.",
+                size / 60.0,
+                field_arcsec / 60.0
+            ));
+        }
+    } else if matches!(spec.target_name.as_str(), "LMC" | "Galactic Centre") {
+        notes.push("This target is not in the deep-sky catalogue: the field shows its stars and a synthetic background only.".into());
     }
     if spec.fine_frac < 0.999 {
         notes.push(format!(
@@ -1296,5 +1396,30 @@ mod gallery {
         assert!(faint.noise_ppm > faint.sys_ppm, "faint stars are noise-limited");
         assert!((four.sys_ppm * 2.0 - bright.sys_ppm).abs() < 1.0, "floor averages as 1/√N across telescopes");
         assert!(!precision(&h, 8.0, 3600.0, unsaturated_sub(&h, 8.0, 10.0), 22.0, 1).saturated);
+    }
+}
+
+#[cfg(test)]
+mod deepsky_render {
+    use super::*;
+    /// Renders showcase targets to /tmp/dso-*.png (run with --ignored).
+    #[test]
+    #[ignore]
+    fn render_showcase() {
+        let jd = 2_461_358.5;
+        let hw = Hardware::from_obs(&crate::obs::ObsParams::default());
+        for q in ["M31", "M42", "M57", "M13", "M51", "M45", "M8", "M1", "M104", "M27"] {
+            let d = crate::catalog::find_dso(q).unwrap();
+            let spec = Spec {
+                id: 7, target_name: d.name(), dir: d.dir, body: None, jd, total_s: 60_000.0, required_s: 60_000.0,
+                telescopes: 100, exposure_s: 600.0, hw: hw.clone(), done: true, fine_frac: 1.0, response_s: None,
+                full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None,
+            };
+            let t = std::time::Instant::now();
+            let out = render(&spec);
+            std::fs::write(format!("/tmp/dso-{q}-full.png"), &out.full_png).unwrap();
+            std::fs::write(format!("/tmp/dso-{q}-crop.png"), &out.crop_png).unwrap();
+            println!("{q}: {:.1} s; notes: {}", t.elapsed().as_secs_f64(), out.report["notes"]);
+        }
     }
 }

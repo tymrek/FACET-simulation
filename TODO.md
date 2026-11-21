@@ -47,8 +47,11 @@
 - [x] Tabbed controls, headline strip, saved scenarios, target search (desktop).
 - [x] Director console: headline strip, tabbed lower sections.
 - [x] All-sky survey tail in Science operations (kept progress, search radius, tail fallback).
-- [ ] Extended deep-sky objects in result images: galaxies, nebulae and clusters are
-      not rendered (an M31 request shows only the field's stars). Needed before demos.
+- [x] Extended deep-sky objects in result images (src/deepsky.rs): OpenNGC galaxies,
+      globular and open clusters, planetary nebulae, nebulae and SNRs drawn as models
+      scaled to catalogue size, shape, PA and magnitude; internal structure procedural.
+- [ ] Public "mosaic this object" option: tile a target larger than the field (M31 needs
+      ~3 × 2 pointings), sized from the catalogue extent, with a stitched result.
 - [ ] Moving targets: track NEOs and planets as they move when chosen from search.
 
 ## Build and platform

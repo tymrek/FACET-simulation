@@ -701,6 +701,15 @@ with cold gas ~32 kg.
   clusters; squares: nebulae), labelled when zoomed in. Any of them can be a
   target by designation, Messier number or common name (`--target M31`,
   `--target "NGC 7000"`, public requests for "Andromeda Galaxy").
+  Simulated request images draw every catalogue object reaching the field
+  as a model scaled to its catalogue size, axis ratio, position angle and
+  magnitude: galaxies as bulge plus disc (procedural spiral arms and dust
+  for large discs, a dust lane when edge-on), globular clusters as a King
+  profile with resolved stars, open clusters as member stars, planetary
+  nebulae as shells, nebulae and SNRs as fractal texture. Bright cores
+  shorten the sub-frames like planets do. Internal structure is
+  illustrative, not a real image; the result notes say so, and flag targets
+  larger than the field (M31 is 178′ across against a 77′ field).
 * **Variable stars:** 5,221 HYG variables with magnitude ranges.
 * **Science programme on real objects:** cluster and nearby-galaxy requests
   pick real clusters and galaxies brighter than 11th magnitude; supernova
