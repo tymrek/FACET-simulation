@@ -9,9 +9,20 @@
 //! Wiltshire, valid for these km-scale separations). Deputies share the
 //! chief's semi-major axis and inclination and differ only in eccentricity
 //! vector, node and phase, so the J2 perturbation acts on all of them alike
-//! (a J2-invariant formation) and the nested ellipses never cross. Two
-//! clusters sit in planes ~90° apart in node, whose orbit poles are
-//! complementary for uv coverage.
+//! (a J2-invariant formation). Two clusters sit in planes ~90° apart in
+//! node, whose orbit poles are complementary for uv coverage.
+//!
+//! ## Passive safety
+//! Each deputy's relative eccentricity and inclination vectors are parallel
+//! (e/i vector separation, as flown by TerraSAR-X/TanDEM-X; D'Amico &
+//! Montenbruck, JGCD 29(3), 2006): radial −ρ cos(u+φ) and cross-track
+//! ζ sin(u+φ) are never zero together, so every pair keeps a minimum
+//! separation in the radial/cross-track plane whatever happens along-track.
+//! Along-track position is the poorly known, drifting coordinate
+//! (differential drag, navigation error, a deputy that can no longer
+//! thrust), so a drifting member slides past the others instead of into
+//! them. `Ii::safety` reports that minimum for every pair and how fast a
+//! dead deputy drifts clear of its cluster.
 //!
 //! ## Measurement
 //! Every pair of members on the target records |V|² at its projected
@@ -216,7 +227,45 @@ impl Ii {
         let f = k as f64 / n;
         let rho = self.cfg.size_m * (0.15 + 0.85 * f);
         let phi = std::f64::consts::TAU * (k as f64 * 0.382);
-        (rho, phi, rho * 1.2, phi + std::f64::consts::FRAC_PI_2)
+        // Parallel e/i vectors: cross-track in phase with the radial
+        // motion's quadrature (ψ = φ), so radial and cross-track offsets
+        // never vanish together.
+        (rho, phi, rho * 1.2, phi)
+    }
+
+    /// Passive safety of the formation: for every pair of members, the
+    /// minimum separation in the radial/cross-track plane over an orbit
+    /// (which along-track drift cannot reduce) and the nominal minimum 3-D
+    /// separation. Returns (min radial/cross-track m, its pair, nominal min
+    /// 3-D m, all pairs as (i, j, rn_min, d3_min)).
+    pub fn safety(&self) -> (f64, (usize, usize), f64, Vec<(usize, usize, f64, f64)>) {
+        let members = self.cfg.members.clamp(2, 6);
+        let p: Vec<(f64, f64, f64, f64)> = (0..members).map(|m| self.member(m)).collect();
+        let pos = |k: usize, u: f64| {
+            let (rho, phi, zeta, psi) = p[k];
+            [-rho * (u + phi).cos(), 2.0 * rho * (u + phi).sin(), zeta * (u + psi).sin()]
+        };
+        let mut pairs = Vec::new();
+        let (mut best, mut at, mut best3) = (f64::INFINITY, (0, 0), f64::INFINITY);
+        for i in 0..members {
+            for j in i + 1..members {
+                let (mut rn, mut d3) = (f64::INFINITY, f64::INFINITY);
+                for s in 0..720 {
+                    let u = s as f64 / 720.0 * std::f64::consts::TAU;
+                    let (a, b) = (pos(i, u), pos(j, u));
+                    let (dr, dt, dn) = (a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+                    rn = rn.min((dr * dr + dn * dn).sqrt());
+                    d3 = d3.min((dr * dr + dt * dt + dn * dn).sqrt());
+                }
+                if rn < best {
+                    best = rn;
+                    at = (i, j);
+                }
+                best3 = best3.min(d3);
+                pairs.push((i, j, rn, d3));
+            }
+        }
+        (best, at, best3, pairs)
     }
     fn fit_theta(&self) -> Option<(f64, f64)> {
         let used = (0..NBINS).filter(|&k| self.w[k] > 0.0).count();
@@ -374,6 +423,16 @@ impl App {
             .filter(|&k| ii.w[k] > 0.0)
             .map(|k| serde_json::json!({"b_m": bin_centre(k), "v2": ii.wy[k] / ii.w[k], "err": 1.0 / ii.w[k].sqrt()}))
             .collect();
+        let safety = {
+            let (rn, (a, b), d3, _) = ii.safety();
+            let (t_days, drift_m_day, dsma) = self.dead_deputy_drift();
+            serde_json::json!({
+                "concept": "e/i vector separation",
+                "min_radial_crosstrack_m": rn, "pair": [a, b], "min_3d_nominal_m": d3,
+                "dead_deputy_clear_days": t_days, "dead_deputy_drift_m_after_1d": drift_m_day,
+                "dead_deputy_sma_change_m": dsma, "dead_deputy_min_pass_m": rn - dsma,
+            })
+        };
         serde_json::json!({
             "on": ii.cfg.on,
             "star": name,
@@ -384,6 +443,7 @@ impl App {
             "timing_ps": ii.tau_s() * 1e12,
             "bins": bins,
             "clusters": ii.clusters.iter().map(|c| serde_json::json!({"label": c.label, "chief": c.chief, "observing": c.observing, "why": c.why})).collect::<Vec<_>>(),
+            "safety": safety,
         })
     }
 
@@ -416,6 +476,19 @@ impl App {
         }
         if ui.small_button("Clear measurements").clicked() {
             self.ii.reset_data();
+        }
+        {
+            let (rn, (a, b), d3, _) = self.ii.safety();
+            let (t_days, drift_1d, dsma) = self.dead_deputy_drift();
+            let name = |k: usize| if k == 0 { "chief".to_string() } else { format!("deputy {k}") };
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Passive safety").small().strong());
+                crate::provenance::chip(ui, "ii_safety");
+            });
+            ui.label(RichText::new(format!(
+                "e/i vector separation: every pair stays at least {rn:.0} m apart radially and cross-track, whatever the along-track drift (closest: {} and {}); nominal minimum distance {d3:.0} m. A deputy that can no longer thrust (5 % more or less drag) drifts {drift_1d:.0} m along-track in a day and is clear of the cluster in {t_days:.1} days; its orbit drops {dsma:.0} m meanwhile, so it passes the others at ≥ {:.0} m.",
+                name(a), name(b), rn - dsma
+            )).small());
         }
         let ii = &self.ii;
         let (name, theta) = STARS[ii.cfg.star];
@@ -558,6 +631,24 @@ pub struct FuelBudget {
 }
 
 impl App {
+    /// A deputy that can no longer thrust: with an assumed 5 % difference in
+    /// ballistic coefficient it drifts along-track as x ≈ (3/2) Δa t² (Hill
+    /// equations, constant tangential differential acceleration Δa). Returns
+    /// (days until it is twice the cluster size away, metres after one day,
+    /// semi-major-axis change by then in metres, which shifts its
+    /// radial offset by about that much: δa = 2 Δa t / n).
+    pub fn dead_deputy_drift(&self) -> (f64, f64, f64) {
+        let da = 0.05 * self.fuel_budget().drag_dv_yr / (365.25 * 86_400.0);
+        if da <= 0.0 {
+            return (f64::INFINITY, 0.0, 0.0);
+        }
+        let a = (crate::astro::EARTH_RADIUS_KM + self.shell.params.alt_km) * 1e3;
+        let n = (crate::astro::MU_EARTH * 1e9 / a.powi(3)).sqrt();
+        let clear = 2.0 * 2.0 * self.ii.cfg.size_m; // twice the along-track extent 2ρ
+        let t = (clear / (1.5 * da)).sqrt();
+        (t / 86_400.0, 1.5 * da * 86_400f64.powi(2), 2.0 * da * t / n)
+    }
+
     pub fn fuel_budget(&self) -> FuelBudget {
         let c = &self.fuel;
         let alt = self.shell.params.alt_km;
@@ -652,5 +743,39 @@ mod default_tests {
         let ii = super::Ii::default();
         assert_eq!(ii.w.len(), super::NBINS);
         assert!(ii.fit_theta().is_none());
+    }
+}
+
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+
+    #[test]
+    fn every_pair_is_passively_safe() {
+        let mut ii = Ii::default();
+        ii.cfg.members = 6;
+        ii.cfg.size_m = 300.0;
+        let (rn, _, d3, pairs) = ii.safety();
+        assert_eq!(pairs.len(), 15);
+        // Radial/cross-track separation never collapses: at least the
+        // spacing of neighbouring ellipses (0.85 × 300 / 5 = 51 m).
+        assert!(rn > 50.0, "min radial/cross-track {rn}");
+        assert!(d3 >= rn);
+    }
+
+    #[test]
+    fn old_perpendicular_phasing_was_unsafe() {
+        // The previous design (ψ = φ + 90°) put radial and cross-track zeros
+        // together: the radial/cross-track separation of a chief-deputy pair fell to 0.
+        let (rho, phi) = (100.0f64, 0.7f64);
+        let zeta = 1.2 * rho;
+        let min = (0..720)
+            .map(|s| {
+                let u = s as f64 / 720.0 * std::f64::consts::TAU;
+                let (r, n) = (-rho * (u + phi).cos(), zeta * (u + phi + std::f64::consts::FRAC_PI_2).sin());
+                (r * r + n * n).sqrt()
+            })
+            .fold(f64::INFINITY, f64::min);
+        assert!(min < 1.0, "{min}");
     }
 }

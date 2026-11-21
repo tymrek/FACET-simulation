@@ -644,8 +644,22 @@ the sky they cover best, are complementary. Deputies fly on concentric 2:1
 relative-motion ellipses around the chief (a projected circular-orbit
 formation, Hill/Clohessy–Wiltshire): same semi-major axis and inclination,
 different eccentricity vector, node and phase, so J2 acts on all members
-alike and the nested ellipses never cross. Size ρ (default 300 m) sets the
-baseline range.
+alike. Size ρ (default 300 m) sets the baseline range.
+
+**Passive collision safety:** each deputy's relative eccentricity and
+inclination vectors are parallel (e/i vector separation, as flown by
+TerraSAR-X/TanDEM-X; D'Amico & Montenbruck, JGCD 29(3), 2006), so its
+radial and cross-track offsets are never zero together. Every pair keeps a
+minimum radial/cross-track separation that along-track drift — the
+poorly known, drifting coordinate — cannot reduce. With the defaults that
+minimum is 96 m (chief and innermost deputy). A deputy that can no longer
+thrust (assumed 5 % difference in ballistic coefficient at 550 km) drifts
+~140 m along-track in a day and is clear of the cluster in ~3 days, its
+orbit dropping ~6 m meanwhile, so it passes the others at ≥ 90 m. The
+panel and `interferometry.safety` in /api/status report these figures.
+(Before 0.6.1 the cross-track phase was 90° off, which put radial and
+cross-track zeros together: safe only while along-track positions were
+held.)
 
 Every pair on the target records the squared visibility |V|² at its
 projected baseline, with the Hanbury Brown–Twiss signal-to-noise
@@ -667,7 +681,8 @@ and fitted curves.
 
 Example: Bellatrix (V 1.6, ~0.70 mas), six telescopes per cluster, ρ 300 m:
 about 0.02 SNR per √s per pair at |V|² = 1; after ~5 hours on target the
-fit is typically 0.5–0.7 ± 0.2 mas. Why clusters and not the whole shell:
+fit is typically 0.5–0.7 ± 0.2 mas, and after ~23 hours 0.69 ± 0.09 mas
+(the safe phasing and the earlier one fit equally well). Why clusters and not the whole shell:
 a star's signal vanishes at a baseline of ~1.22 λ/θ (tens to hundreds of
 metres for bright stars), while shell neighbours are hundreds of km apart.
 

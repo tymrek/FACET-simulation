@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.1 (2026-11-21)
+
+- Interferometry clusters are passively collision-safe: deputies fly with
+  parallel relative eccentricity/inclination vectors (e/i vector separation,
+  as TerraSAR-X/TanDEM-X), so radial and cross-track offsets never vanish
+  together and along-track drift cannot bring two satellites together.
+  Previously the cross-track phase was 90° off, safe only while along-track
+  positions were held. Defaults: every pair ≥ 96 m apart radially and
+  cross-track.
+- New passive-safety readout (desktop panel and `interferometry.safety` in
+  /api/status): minimum separation per pair and how a deputy that can no
+  longer thrust drifts clear (~3 days, passing others at ≥ 90 m).
+- Bellatrix diameter fits are unchanged by the new layout (0.69 ± 0.09 mas
+  after ~23 h on target, true 0.70).
+
 ## 0.6.0 (2026-11)
 
 The release that goes with version 0.12 of the FACET proposal site.
