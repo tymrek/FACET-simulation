@@ -652,6 +652,11 @@ pub fn update(
                 st.pointing[i] = Some(z);
                 st.job[i] = job(TAG_SURVEY, 0);
                 st.fine[i] = guide(z);
+            } else if mode == Mode::AllSky && st.pointing[i].is_none() && !st.off[i] {
+                // Zenith inside the Sun or Moon keep-out: no zenith stare, but
+                // the all-sky planner can still give it a dark tile elsewhere
+                // in its sky (it checks every tile against the keep-outs).
+                st.job[i] = job(TAG_SURVEY, 0);
             }
         }
     }

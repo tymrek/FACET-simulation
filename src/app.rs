@@ -375,6 +375,7 @@ impl App {
                     }
                 }
                 "--survey-in-queue" => self.survey.in_queue = true,
+                "--survey-polar" => self.survey.polar = true,
                 "--scenario" => {
                     let q = val();
                     match crate::ui_shell::find_scenario(&q) {

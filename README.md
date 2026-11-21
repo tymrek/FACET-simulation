@@ -560,11 +560,36 @@ claimant is still slewing. A pass is complete when every tile is done or
 inside a keep-out. The sky view shows coverage filling in; the panel, status
 API and public site report each pass's time and the time to 95 %.
 
-Measured with defaults (dedicated fleet): **1,000 telescopes: 73–82 min per
-full pass, 95 % in 64–73 min; 10,000 telescopes: 10.5–12 min per full pass
-(occasionally up to 17), 95 % in ~8 min**, at ~83 s of telescope time per
-field (60 s exposure + overhead). The last few percent are tiles near the
-Sun and Moon keep-out edges.
+Measured with defaults (dedicated fleet, 3 passes each): **1,000
+telescopes: 67–73 min per full pass, 95 % in 62–64 min; 10,000 telescopes:
+8.1–9.2 min per full pass, 95 % in ~7 min.** "Dedicated" pauses the science
+programme but keeps the public time share, so at any moment ~17 % of the
+fleet serves public requests and ~9 % is paused in the South Atlantic
+Anomaly; almost none is idle for want of a tile. Telescope time per tile
+(1,000): 5.6 s slewing (7.8° mean), 5.5 s settling and acquiring a guide
+star, ~72 s locked for 60 s of dark-sky-equivalent exposure (Earthshine and
+stray light cost the rest). A pass is therefore throughput-bound — tiles ×
+time per tile ÷ working telescopes — rather than limited by slew paths:
+removing every slew would save ~7 %.
+
+Telescopes whose own zenith is inside the Sun or Moon keep-out (day-side
+satellites, ~16 % of the fleet) take tiles elsewhere in their sky; before
+that fix they sat out, and passes took 76–79 min (1,000) and 10.5–12 min
+(10,000). Each pass record (`survey.history` in /api/status) carries the
+per-phase time per tile, completion times by |Dec| band, and the share of
+the last 5 % of tiles in the polar caps.
+
+**Polar duty** (`--survey-polar`, off by default): the sky beyond the
+shell's turning latitude (±53° by default; about 20 % of the sky) never
+passes overhead, and without help it was most of the tail (30–74 % of the
+last 5 % of tiles). With polar duty, satellites within 8° of the turning
+latitude — the densest part of the shell — take the cap in their own
+hemisphere, searching without duty when no cap tile is in reach, and the
+rest leave the caps until the tail. Measured: the caps then finish early
+and leave the tail, but whole passes are no faster (1,000: 67–73 min, the
+same; 10,000: 9.2–10.1 min, slightly slower), because the pass is
+throughput-bound. Not offered for shells whose zeniths reach within 8° of
+the poles (sun-synchronous).
 
 The option *free telescopes tile during Science operations*
 (`--survey-in-queue`) runs the same survey on telescopes the queue isn't

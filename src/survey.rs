@@ -31,6 +31,11 @@ const MAX_SLEW_DEG: f64 = 32.0;
 /// A free telescope this much closer may take over a tile whose claimant has
 /// not started integrating, deg.
 const STEAL_MARGIN_DEG: f64 = 8.0;
+/// Polar duty: satellites whose zenith is within this many degrees of the
+/// shell's turning latitude take the polar caps (sky beyond that latitude).
+const POLAR_BAND_DEG: f64 = 8.0;
+/// Shells whose zeniths reach within this of the poles have no caps to assign.
+const POLAR_MIN_CAP_DEG: f64 = 8.0;
 /// Tail search beyond the slew cap: at most this many telescopes per step,
 /// once fewer than `TAIL_LIST_MAX` tiles remain.
 const MAX_FALLBACKS_PER_STEP: usize = 64;
@@ -91,6 +96,28 @@ pub struct PassRecord {
     pub eyes_mean: f64,
     /// Time to finish 95 % of the observable tiles, s.
     pub t95: f64,
+    /// Completion times by |declination| band.
+    pub bands: Vec<BandStat>,
+    /// Share of the last 5 % of tiles completed that lie in the polar caps
+    /// (|Dec| beyond the shell's turning latitude).
+    pub tail_in_caps: f64,
+    pub polar: bool,
+    /// Telescope-seconds per completed tile by attitude phase.
+    pub slew_s_per_tile: f64,
+    pub settle_s_per_tile: f64,
+    pub locked_s_per_tile: f64,
+    /// Mean slew per tile, deg.
+    pub slew_deg_per_tile: f64,
+}
+
+#[derive(Clone, Serialize)]
+pub struct BandStat {
+    pub dec_lo: f64,
+    pub dec_hi: f64,
+    pub tiles: usize,
+    pub median_s: f64,
+    pub p95_s: f64,
+    pub last_s: f64,
 }
 
 #[derive(Default)]
@@ -123,6 +150,20 @@ pub struct Survey {
     pub left: Vec<u32>,
     /// Tiles handed back part-done (their integration is kept).
     pub resumed_n: u64,
+    /// Completion time of each tile this pass, s after the pass start (<0 = not done).
+    pub done_at: Vec<f32>,
+    /// Polar duty: satellites near the shell's turning latitude tile the
+    /// polar caps; the rest leave the caps until the tail.
+    pub polar: bool,
+    /// Shell's turning latitude (max |zenith Dec|), deg, set each assignment.
+    pub turn_deg: f64,
+    /// This pass: telescope-seconds of tile holders by attitude phase, and
+    /// total slew angle (deg) between tiles.
+    pub phase_s: [f64; 3],
+    pub slew_deg: f64,
+    /// Telescopes not holding a tile at the last assignment, by reason:
+    /// [in the SAA, taken for other work or off, nothing visible in reach].
+    pub idle_now: [usize; 3],
 }
 
 impl Survey {
@@ -133,6 +174,7 @@ impl Survey {
             self.done = vec![false; nt];
             self.progress = vec![0.0; nt];
             self.claimed_by = vec![NONE; nt];
+            self.done_at = vec![-1.0; nt];
             self.tile_of.clear();
             self.restart(jd);
             self.history.clear();
@@ -146,11 +188,14 @@ impl Survey {
     pub fn restart(&mut self, jd: f64) {
         self.done.iter_mut().for_each(|d| *d = false);
         self.progress.iter_mut().for_each(|p| *p = 0.0);
+        self.done_at.iter_mut().for_each(|t| *t = -1.0);
         self.n_done = 0;
         self.pass_start_jd = jd;
         self.eye_s = 0.0;
         self.blocked_check_jd = 0.0;
         self.busy_s = 0.0;
+        self.phase_s = [0.0; 3];
+        self.slew_deg = 0.0;
         self.tiles_completed = 0;
         self.t95 = None;
         self.left.clear();
@@ -182,6 +227,40 @@ impl Survey {
     pub fn tiles(&self) -> usize {
         self.tiling.dirs.len()
     }
+
+    /// Completion-time statistics by |Dec| band for the pass just finished,
+    /// and the share of the last 5 % of tiles that lie in the polar caps.
+    fn band_stats(&self) -> (Vec<BandStat>, f64) {
+        let turn = self.turn_deg;
+        let edges = [0.0, 30.0, (turn - POLAR_BAND_DEG).max(30.0), turn.max(30.0), 75.0f64.max(turn), 90.0];
+        let mut out = Vec::new();
+        let mut all: Vec<(f32, bool)> = Vec::new();
+        for w in edges.windows(2) {
+            let (lo, hi) = (w[0], w[1]);
+            if hi <= lo {
+                continue;
+            }
+            let mut t: Vec<f32> = (0..self.tiles())
+                .filter(|&k| {
+                    let ad = deg(self.tiling.dirs[k].to_radec().1).abs();
+                    ad >= lo && ad < hi && self.done_at[k] >= 0.0
+                })
+                .map(|k| self.done_at[k])
+                .collect();
+            t.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let q = |f: f64| if t.is_empty() { 0.0 } else { t[((t.len() - 1) as f64 * f) as usize] as f64 };
+            out.push(BandStat { dec_lo: lo, dec_hi: hi, tiles: t.len(), median_s: q(0.5), p95_s: q(0.95), last_s: q(1.0) });
+        }
+        for k in 0..self.tiles() {
+            if self.done_at[k] >= 0.0 {
+                all.push((self.done_at[k], deg(self.tiling.dirs[k].to_radec().1).abs() > turn));
+            }
+        }
+        all.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let tail = &all[(all.len() as f64 * 0.95) as usize..];
+        let share = if tail.is_empty() { 0.0 } else { tail.iter().filter(|x| x.1).count() as f64 / tail.len() as f64 };
+        (out, share)
+    }
 }
 
 impl App {
@@ -206,6 +285,8 @@ impl App {
             return;
         }
         self.survey.ensure(fov, n, jd);
+        let inc = self.shell_params.inc_deg;
+        self.survey.turn_deg = if inc <= 90.0 { inc } else { 180.0 - inc };
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
         let o = self.obs_params.clone();
         let ok = |d: V3| obs::sky_blocked(&o, d, sun, moon).is_none();
@@ -213,13 +294,19 @@ impl App {
         let s = &mut self.survey;
         let mut eyes = 0;
         let mut fallbacks = 0;
+        let mut idle = [0usize; 3];
         // Telescopes whose detectors are safed in the South Atlantic Anomaly
         // can't integrate: they give their tiles back rather than sit on them.
         let safed = self.env.cfg.saa_policy == crate::environment::SaaPolicy::Pause;
+        // Polar caps: sky beyond the shell's turning latitude, never overhead.
+        let turn = s.turn_deg;
+        let caps = s.polar && 90.0 - turn >= POLAR_MIN_CAP_DEG;
+        let tail = !s.left.is_empty();
         for i in 0..n {
             let in_saa = safed && self.env.in_saa.get(i).copied().unwrap_or(false);
             let free = job_tag(self.obs.job[i]) == TAG_SURVEY && !self.obs.off.get(i).copied().unwrap_or(false) && !in_saa;
             if !free {
+                idle[if in_saa { 0 } else { 1 }] += 1;
                 s.release(i);
                 continue;
             }
@@ -236,6 +323,12 @@ impl App {
                 }
                 s.release(i);
             }
+            // Polar duty for satellites near the turning latitude (their
+            // zenith Dec ≈ their latitude): +1 north cap, −1 south, 0 none.
+            // A duty satellite that finds no cap tile in reach searches again
+            // without duty, so it never idles while other sky is left.
+            let zdec = deg(self.obs.rhat[i].to_radec().1);
+            let duty0: i8 = if caps && zdec.abs() > turn - POLAR_BAND_DEG { zdec.signum() as i8 } else { 0 };
             // Nearest undone, unclaimed, visible tile to where we point now.
             let here = self.obs.att[i].dir;
             let (ra, dec) = here.to_radec();
@@ -243,6 +336,10 @@ impl App {
             let rhat = self.obs.rhat[i];
             let cos_za = rad(MAX_ZA_DEG).cos();
             let mut best: Option<(f64, usize)> = None;
+            for duty in [duty0, 0] {
+            if duty != duty0 && (duty0 == 0 || best.is_some()) {
+                break;
+            }
             let mut search_r = 4.0 * s.tiling.step_deg;
             loop {
                 // Search out to exactly the cap on the last round (doubling
@@ -252,6 +349,15 @@ impl App {
                 let r0 = s.tiling.ring_of(dec - radius);
                 let r1 = s.tiling.ring_of(dec + radius);
                 for r in r0..=r1 {
+                    if caps {
+                        let rd = s.tiling.ring_dec[r];
+                        let cap = if rd > turn { 1 } else if rd < -turn { -1 } else { 0 };
+                        // On duty: only the own-hemisphere cap. Off duty: no
+                        // caps until the tail.
+                        if (duty != 0 && cap != duty) || (duty == 0 && cap != 0 && !tail) {
+                            continue;
+                        }
+                    }
                     for k in s.tiling.ring_window(r, ra, radius) {
                         if s.done[k] {
                             continue;
@@ -287,6 +393,7 @@ impl App {
                     break;
                 }
                 search_r = radius_now * 2.0;
+            }
             }
             // The tail: nothing within the cap, but tiles remain somewhere this
             // telescope can see. A long slew beats idling at the zenith.
@@ -324,13 +431,17 @@ impl App {
                 s.claimed_by[k] = i as u32;
                 s.tile_of[i] = k as u32;
                 let d = s.tiling.dirs[k];
+                s.slew_deg += deg(here.angle(d));
                 self.obs.pointing[i] = Some(d);
                 self.obs.job[i] = job(TAG_ALLSKY, k as u64);
                 self.obs.fine[i] = crate::imaging::guide_star_available(d, fov, o.guide_mag);
                 eyes += 1;
+            } else {
+                idle[2] += 1;
             }
         }
         s.eyes_now = eyes;
+        s.idle_now = idle;
     }
 
     /// Credit locked integration to tiles; close the pass when the whole
@@ -346,10 +457,20 @@ impl App {
                 continue;
             }
             s.busy_s += dt;
+            use crate::attitude::Phase;
+            match self.obs.att[i].phase() {
+                Phase::Slewing => s.phase_s[0] += dt,
+                Phase::Settling | Phase::Acquiring => s.phase_s[1] += dt,
+                Phase::Locked => s.phase_s[2] += dt,
+                _ => {}
+            }
             let k = job_val(self.obs.job[i]) as usize;
             s.progress[k] += self.obs.obs_dt[i] as f32;
             if s.progress[k] >= exp && !s.done[k] {
                 s.done[k] = true;
+                if let Some(t) = s.done_at.get_mut(k) {
+                    *t = ((self.jd - s.pass_start_jd) * 86_400.0) as f32;
+                }
                 s.n_done += 1;
                 s.tiles_completed += 1;
                 s.claimed_by[k] = NONE;
@@ -383,7 +504,21 @@ impl App {
             if s.n_done + s.n_blocked >= s.tiles() {
                 let secs = (self.jd - s.pass_start_jd) * 86_400.0;
                 s.pass += 1;
-                let rec = PassRecord { pass: s.pass, seconds: secs, tiles: s.n_done, eyes_mean: s.eye_s / secs.max(1e-9), t95: s.t95.unwrap_or(secs) };
+                let (bands, tail_in_caps) = s.band_stats();
+                let rec = PassRecord {
+                    pass: s.pass,
+                    seconds: secs,
+                    tiles: s.n_done,
+                    eyes_mean: s.eye_s / secs.max(1e-9),
+                    t95: s.t95.unwrap_or(secs),
+                    bands,
+                    tail_in_caps,
+                    polar: s.polar,
+                    slew_s_per_tile: s.phase_s[0] / s.tiles_completed.max(1) as f64,
+                    settle_s_per_tile: s.phase_s[1] / s.tiles_completed.max(1) as f64,
+                    locked_s_per_tile: s.phase_s[2] / s.tiles_completed.max(1) as f64,
+                    slew_deg_per_tile: s.slew_deg / s.tiles_completed.max(1) as f64,
+                };
                 s.history.push(rec);
                 if s.history.len() > 50 {
                     s.history.remove(0);
@@ -405,6 +540,9 @@ impl App {
         serde_json::json!({
             "active": self.survey_active(),
             "in_queue": s.in_queue,
+            "polar": s.polar,
+            "idle_now": { "saa": s.idle_now[0], "other_or_off": s.idle_now[1], "nothing_in_reach": s.idle_now[2] },
+            "turn_deg": s.turn_deg,
             "tiles": s.tiles(),
             "done": s.n_done,
             "blocked": s.n_blocked,
@@ -477,6 +615,8 @@ impl App {
             if ui.selectable_label(self.mode == obs::Mode::AllSky, "Dedicate the fleet").on_hover_text("Every telescope not on a STARE campaign tiles the sky.").clicked() {
                 self.mode = if self.mode == obs::Mode::AllSky { obs::Mode::Queue } else { obs::Mode::AllSky };
             }
+            ui.checkbox(&mut self.survey.polar, "polar duty: satellites near the turning latitude tile the polar caps")
+                .on_hover_text("Sky beyond the shell's turning latitude (53° by default) never passes overhead. Satellites near that latitude, where the shell is densest, take the caps; the rest leave them until the tail.");
             ui.checkbox(&mut self.survey.in_queue, "free telescopes tile during Science operations")
                 .on_hover_text("Idle telescopes tile the sky instead of staring at the zenith.");
         });
