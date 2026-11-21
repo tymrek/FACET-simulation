@@ -1190,6 +1190,8 @@ impl App {
                 "steady_annual": r.steady_annual, "avg_unit_cost": r.avg_unit_cost,
                 "per_tel_hour": r.cost_per_tel_hour, "per_observation": r.cost_per_observation,
                 "per_etendue_hour": r.cost_per_etendue_hour, "per_tb": r.cost_per_tb,
+                // Twin-telescope satellites are priced as ordinary satellites.
+                "twins_not_costed": if self.twin.cfg.on { self.twin.n_twins } else { 0 },
             })
         };
         let status = serde_json::json!({

@@ -101,7 +101,7 @@ pub const HEADLINES: &[(&str, Basis, &str)] = &[
     ("conjunctions", Modelled, "Screening against modelled traffic populations with assumed covariance and Pc thresholds."),
     // Build-out
     ("build_out", Assumed, "Fleet size, launch cadence and deployment stages."),
-    ("costs", Assumed, "Unit, launch and operations prices."),
+    ("costs", Assumed, "Unit, launch and operations prices. Twin-telescope satellites are priced as ordinary satellites (their extra hardware, mass and propellant are not costed)."),
 ];
 
 pub fn get(key: &str) -> Option<(Basis, &'static str)> {

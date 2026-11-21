@@ -65,7 +65,7 @@
 - [ ] Moving targets: track NEOs and planets as they move when chosen from search.
 
 ## Build and platform
-- GitHub CI (build + tests).
+- [x] GitHub CI (build + tests): .github/workflows/ci.yml.
 - Wayland: test on a real compositor; nicer client-side title bar on GNOME.
 
 ## Last

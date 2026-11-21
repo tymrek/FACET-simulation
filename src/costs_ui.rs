@@ -177,6 +177,12 @@ impl App {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.horizontal(|ui| { ui.label(RichText::new(format!("{} · {} satellites · {} – {}", self.cost_model.name, r.fleet, self.cost_model.first_year, self.cost_model.first_year + self.cost_model.horizon_years as i32 - 1)).strong()); crate::provenance::chip(ui, "costs"); });
+                if self.twin.cfg.on {
+                    ui.label(RichText::new(format!(
+                        "Not costed: the {:.0} % of the fleet built as twin-telescope satellites ({} with the current fleet) are priced as ordinary satellites. Their second telescope, boom and wider, heavier bus, and the extra drag and propellant, are not in this model.",
+                        self.twin.cfg.pct, self.twin.n_twins
+                    )).small().color(egui::Color32::from_rgb(230, 170, 60)));
+                }
                 let opt = |x: Option<f64>| x.map(fmt_money).unwrap_or_else(|| "–".into());
                 let tiles: Vec<(String, String)> = vec![
                     (format!("{}-year programme cost", self.cost_model.horizon_years), fmt_money(r.total)),

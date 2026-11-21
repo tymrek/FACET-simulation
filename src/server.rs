@@ -22,6 +22,8 @@ const SKYMAP_JS: &str = include_str!("../web/skymap.js");
 const CONTROL_JS: &str = include_str!("../web/control.js");
 const PUBLIC_JS: &str = include_str!("../web/public.js");
 const STYLE_CSS: &str = include_str!("../web/style.css");
+/// The FACET compound-eye icon (16 and 32 px), as on the proposal site.
+const FAVICON: &[u8] = include_bytes!("../web/favicon.ico");
 
 const MAX_BODY: u64 = 8 * 1024;
 const MAX_OPEN_PER_IP: usize = 5;
@@ -1274,6 +1276,7 @@ fn control_loop(server: Server, shared: SharedRef) {
         let token = shared.lock().unwrap().token.clone();
         match (method, path.as_str()) {
             (Method::Get, "/") => send(req, 200, "text/html; charset=utf-8", CONTROL_HTML.into()),
+            (Method::Get, "/favicon.ico") => send_bytes(req, "image/x-icon", FAVICON.to_vec()),
             (Method::Get, p) if static_route(p, true).is_some() => {
                 let (ct, body) = static_route(p, true).unwrap();
                 send(req, 200, ct, body.into())
@@ -1437,6 +1440,7 @@ fn public_loop(server: Server, shared: SharedRef) {
         let method = req.method().clone();
         match (method, path.as_str()) {
             (Method::Get, "/") => send(req, 200, "text/html; charset=utf-8", PUBLIC_HTML.into()),
+            (Method::Get, "/favicon.ico") => send_bytes(req, "image/x-icon", FAVICON.to_vec()),
             (Method::Get, p) if static_route(p, false).is_some() => {
                 let (ct, body) = static_route(p, false).unwrap();
                 send(req, 200, ct, body.into())
