@@ -124,6 +124,8 @@ pub struct Draft {
     pub inv: usize,
     pub target_name: String,
     pub body: Option<usize>,
+    /// A known near-Earth asteroid (index into neo::all()), tracked.
+    pub neo: Option<usize>,
     pub dir: V3,
     pub telescopes: u32,
     pub exposure_s: f64,
@@ -154,7 +156,7 @@ pub struct Generator {
     serial: u64,
     primed: bool,
     /// Real NEO follow-up targets (direction, name), refreshed by `App::neo_tick`.
-    pub neo_targets: Vec<(V3, String)>,
+    pub neo_targets: Vec<(V3, String, usize)>,
 }
 
 impl Generator {
@@ -268,6 +270,7 @@ impl Generator {
         let cos_mx = rad(moon_excl_deg + 5.0).cos();
         // Real targets where a catalogue exists: (direction, name).
         let ok_dir = |d: V3| d.dot(sun) < cos_ex && d.dot(moon) < cos_mx;
+        let mut neo = None;
         let real: Option<(V3, String)> = match c.key {
             "cluster" => {
                 let l = real_lists();
@@ -291,7 +294,10 @@ impl Generator {
             "neo" => {
                 let t = std::mem::take(&mut self.neo_targets);
                 let idx: Vec<usize> = (0..t.len()).collect();
-                let r = self.pick_from(&idx, |&k| t[k].0, ok_dir).map(|k| (t[k].0, t[k].1.clone()));
+                let r = self.pick_from(&idx, |&k| t[k].0, ok_dir).map(|k| {
+                    neo = Some(t[k].2);
+                    (t[k].0, t[k].1.clone())
+                });
                 self.neo_targets = t;
                 r
             }
@@ -336,7 +342,7 @@ impl Generator {
         let telescopes = self.log_range(c.tel.0 as f64, c.tel.1 as f64 + 0.999).floor() as u32;
         let exposure_s = (self.log_range(c.exp_s.0, c.exp_s.1) / 60.0).round() * 60.0;
         let priority = c.prio.0 + (self.next() % (c.prio.1 - c.prio.0 + 1) as u64) as i32;
-        Draft { case, inv, target_name, body, dir, telescopes: telescopes.max(1), exposure_s: exposure_s.max(60.0), priority }
+        Draft { case, inv, target_name, body, neo, dir, telescopes: telescopes.max(1), exposure_s: exposure_s.max(60.0), priority }
     }
 
     /// Advance the generator by `dt` sim seconds; returns the requests that

@@ -187,7 +187,7 @@ function render(s) {
   const recent = s.requests.filter(r => r.state === "done").slice(0, 10);
   for (const r of [...open, ...recent].slice(0, 60)) {
     q.append(el("tr", { onmouseenter: () => { map.highlight = r.id; map.draw(); } },
-      el("td", {}, r.id), el("td", {}, r.submitter), el("td", {}, r.target_name),
+      el("td", {}, r.id), el("td", {}, r.submitter), el("td", {}, r.target_name, r.moving ? el("div", { class: "small muted" }, trackNote(r.moving)) : ""),
       el("td", { class: "num" }, r.telescopes), el("td", { class: "num" }, fmtDur(r.exposure_s)),
       stateCell(r), progressCell(r), el("td", {}, viewBtn(r))));
   }
@@ -198,7 +198,7 @@ function render(s) {
     if (r.mosaic) {
       if (!groups.has(r.mosaic.group)) { groups.set(r.mosaic.group, []); m.append(el("tr", { "data-group": r.mosaic.group })); }
       groups.get(r.mosaic.group).push(r);
-    } else m.append(el("tr", {}, el("td", {}, `#${r.id} ${r.target_name}`), stateCell(r), progressCell(r), el("td", {}, viewBtn(r))));
+    } else m.append(el("tr", {}, el("td", {}, `#${r.id} ${r.target_name}`, r.moving ? el("div", { class: "small muted" }, trackNote(r.moving)) : ""), stateCell(r), progressCell(r), el("td", {}, viewBtn(r))));
   }
   for (const [g, tiles] of groups) m.querySelector(`tr[data-group="${g}"]`).replaceWith(mosaicRow(tiles));
   if (!m.children.length) m.append(el("tr", {}, el("td", { class: "muted small" }, "None yet from this browser.")));

@@ -62,7 +62,10 @@
       inclined galaxies); overview at full depth per tile instead of the shallowest.
 - [ ] Galaxy models from catalogue axis ratios: near edge-on galaxies with big halos
       (M104, M82) come out as inclined spirals; OpenNGC "S?" types are drawn as spirals.
-- [ ] Moving targets: track NEOs and planets as they move when chosen from search.
+- [x] Moving targets: NEOs tracked by name everywhere (requests, STARE, search,
+      programme), per-telescope parallax, stacks registered on the target.
+- [ ] New-discovery recovery: an alert with an uncertainty region (not a known
+      orbit), searched with a mosaic and timed from alert to recovery.
 
 ## Build and platform
 - [x] GitHub CI (build + tests): .github/workflows/ci.yml.

@@ -285,13 +285,13 @@ impl App {
                 break;
             }
             if n.name.to_lowercase().contains(&ql) {
-                if let Some(&dir) = self.neo.dir.get(i) {
+                if self.neo.dir.get(i).is_some() {
                     n_neo += 1;
                     let v = self.neo.vmag.get(i).copied().unwrap_or(f32::NAN);
                     out.push(Hit {
                         label: format!("{} (V {:.1} now)", n.name, v),
                         kind: "NEO",
-                        target: Target::Fixed { name: n.name.to_string(), dir },
+                        target: Target::Neo(i),
                     });
                 }
             }
@@ -538,7 +538,7 @@ impl App {
             });
             if let Some(h) = chosen {
                 if h.kind == "NEO" {
-                    self.scenario_msg = Some(format!("{}: position at selection; NEOs move, so re-select to update", h.label));
+                    self.scenario_msg = Some(format!("{}: tracked as it moves", h.label));
                 }
                 self.target = Some(h.target);
                 self.look_at_target();

@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Moving targets: known near-Earth asteroids are tracked as they move, by
+  name in public requests, STARE campaigns, desktop search, and the science
+  programme's and simulated visitors' NEO follow-ups. Ephemeris (direction,
+  distance, V, rate, position angle) refreshed every scheduling step.
+- Each telescope aims from its own orbital position, correcting the
+  topocentric parallax of asteroids, planets and the Moon.
+- Result images of a tracked asteroid are registered on it: a point source
+  with trailed stars; new Tracking table (rate, PA, distance, parallax, star
+  trails) and the target's V and peak SNR. Request lists show the tracking
+  rate.
+
 ## 0.6.1 (2026-11-21)
 
 - Interferometry clusters are passively collision-safe: deputies fly with

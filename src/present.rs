@@ -858,7 +858,7 @@ impl App {
         let (body, name, dir) = match sh.resolve(target) {
             Some(crate::server::Resolved::Body(i, n)) => (Some(i), n, self.bodies[i].dir),
             Some(crate::server::Resolved::Fixed(n, d)) => (None, n, d),
-            None => return,
+            Some(crate::server::Resolved::Neo(..)) | None => return,
         };
         let id = sh.next_id;
         sh.next_id += 1;
@@ -869,6 +869,8 @@ impl App {
             submitter: "a member of the public".into(),
             target_name: name.clone(),
             body,
+            neo: None,
+            moving: None,
             ra_deg: ra.to_degrees(),
             dec_deg: dec.to_degrees(),
             telescopes,

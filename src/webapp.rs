@@ -132,6 +132,7 @@ impl App {
                         match resolved.iter().find(|(k, _)| *k == n).map(|(_, r)| r.clone()) {
                             Some(Resolved::Body(i, _)) => self.target = Some(Target::Body(i)),
                             Some(Resolved::Fixed(nm, d)) => self.target = Some(Target::Fixed { name: nm, dir: d }),
+                            Some(Resolved::Neo(k, _)) => self.target = Some(Target::Neo(k)),
                             None => {}
                         }
                     } else if let (Some(ra), Some(dec)) = (ra_deg, dec_deg) {
@@ -179,8 +180,9 @@ impl App {
                     continue;
                 }
             }
-            if let Some(b) = c.body {
-                c.dir = self.bodies[b].dir;
+            if let Some((d, _, e)) = self.track(c.body, c.neo) {
+                c.dir = d;
+                c.moving = e;
                 let (ra, dec) = c.dir.to_radec();
                 c.ra_deg = deg(ra);
                 c.dec_deg = deg(dec);
@@ -189,8 +191,9 @@ impl App {
         // Ready (armed) campaigns: keep their target position and keep-out
         // status current so the console can show "would start paused".
         for c in sh.campaigns.iter_mut().filter(|c| c.armed && !c.active) {
-            if let Some(b) = c.body {
-                c.dir = self.bodies[b].dir;
+            if let Some((d, _, e)) = self.track(c.body, c.neo) {
+                c.dir = d;
+                c.moving = e;
                 let (ra, dec) = c.dir.to_radec();
                 c.ra_deg = deg(ra);
                 c.dec_deg = deg(dec);
@@ -214,6 +217,7 @@ impl App {
                     dir: c.dir,
                     eyes: c.eyes as usize,
                     fine: c.body.is_some() || crate::imaging::guide_star_available(c.dir, o.fov_deg, o.guide_mag),
+                    range_km: self.track(c.body, c.neo).map_or(0.0, |t| t.1),
                 }
             })
             .collect();
@@ -392,15 +396,18 @@ impl App {
             .iter()
             .map(|&i| {
                 let r = &mut sh.requests[i];
-                if let Some(b) = r.body {
-                    r.dir = self.bodies[b].dir;
+                let mut range_km = 0.0;
+                if let Some((d, range, e)) = self.track(r.body, r.neo) {
+                    r.dir = d;
+                    r.moving = e;
+                    range_km = range;
                     let (ra, dec) = r.dir.to_radec();
                     r.ra_deg = deg(ra);
                     r.dec_deg = deg(dec);
                 }
                 let fine = r.body.is_some() || crate::imaging::guide_star_available(r.dir, o.fov_deg, o.guide_mag);
                 let continuous = self.handover && r.sched.continuous(jd, prep);
-                QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine, continuous }
+                QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine, continuous, range_km }
             })
             .collect();
         let ta = std::time::Instant::now();
@@ -776,6 +783,8 @@ impl App {
                 submitter: inv,
                 target_name: d.target_name,
                 body: d.body,
+                neo: d.neo,
+                moving: None,
                 ra_deg: deg(ra),
                 dec_deg: deg(dec),
                 telescopes: d.telescopes,
@@ -1558,6 +1567,7 @@ impl App {
         let tgt = match &self.target {
             Some(crate::app::Target::Body(i)) => Some(BODY_NAMES[*i].to_string()),
             Some(crate::app::Target::Fixed { name, .. }) => Some(name.clone()),
+            Some(crate::app::Target::Neo(k)) => Some(crate::neo::all()[*k].name.to_string()),
             None => None,
         };
         if let Some(t) = tgt {
@@ -1566,7 +1576,7 @@ impl App {
                 if ui.small_button(format!("STARE at {t}")).clicked() {
                     let dir = self.target_dir();
                     let res = match (&self.target, dir) {
-                        (Some(crate::app::Target::Body(_)), _) => crate::server::start_campaign(&mut sh, Some(&t), None, None, Some(self.stare_eyes), None, None),
+                        (Some(crate::app::Target::Body(_) | crate::app::Target::Neo(_)), _) => crate::server::start_campaign(&mut sh, Some(&t), None, None, Some(self.stare_eyes), None, None),
                         (_, Some(d)) => {
                             let (ra, dec) = d.to_radec();
                             crate::server::start_campaign(&mut sh, None, Some(deg(ra)), Some(deg(dec)), Some(self.stare_eyes), None, None)

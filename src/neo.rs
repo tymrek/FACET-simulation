@@ -161,9 +161,9 @@ impl App {
             // enough for a short stack and outside the keep-outs.
             let o = &self.obs_params;
             let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
-            let mut cands: Vec<(V3, String)> = (0..s.dir.len())
+            let mut cands: Vec<(V3, String, usize)> = (0..s.dir.len())
                 .filter(|&k| s.vmag[k] <= 20.5 && crate::obs::sky_blocked(o, s.dir[k], sun, moon).is_none())
-                .map(|k| (s.dir[k], format!("{} (V {:.1})", all()[k].name, s.vmag[k])))
+                .map(|k| (s.dir[k], format!("{} (V {:.1})", all()[k].name, s.vmag[k]), k))
                 .collect();
             cands.truncate(4000);
             self.gen.neo_targets = cands;
@@ -379,5 +379,107 @@ mod check {
         for a in ca.iter().take(8) {
             eprintln!("{:<18} {} {:.2} LD V{:.1}", a.name, &a.utc[..16], a.dist_ld, a.peak_v);
         }
+    }
+}
+
+/// Where a known NEO is, seen from the Earth's centre: for tracking it.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct Ephem {
+    /// Geocentric direction (J2000 equatorial unit vector).
+    #[serde(skip)]
+    pub dir: V3,
+    /// Geocentric distance, km.
+    pub range_km: f64,
+    pub vmag: f64,
+    /// Geocentric apparent rate of motion, arcsec/s, and its position angle
+    /// (deg, north through east).
+    pub rate_arcsec_s: f64,
+    pub pa_deg: f64,
+    /// Largest extra apparent rate from the observer's orbital motion
+    /// (v_orbit / range), arcsec/s: the topocentric parallax rate from LEO.
+    pub parallax_rate_arcsec_s: f64,
+    /// Largest topocentric parallax from the shell (r_orbit / range), deg.
+    pub parallax_deg: f64,
+}
+
+/// Ephemeris of NEO `k` at `jd` (two-body). `orbit_km`/`v_orbit_km_s` are
+/// the shell's orbital radius and speed, for the parallax figures.
+pub fn ephem(k: usize, jd: f64, orbit_km: f64, v_orbit_km_s: f64) -> Ephem {
+    let o = &all()[k];
+    let at = |t: f64| {
+        let r = o.helio(t);
+        let rho = r - crate::defence::earth_pos(t);
+        (r, rho)
+    };
+    let (r, rho) = at(jd);
+    let dt_d = 60.0 / 86_400.0;
+    let (_, rho2) = at(jd + dt_d);
+    let (u1, u2) = (rho.unit(), rho2.unit());
+    let rate = deg(u1.angle(u2)) * 3600.0 / 60.0;
+    // Position angle of the motion: north through east.
+    let (ra1, de1) = u1.to_radec();
+    let (ra2, de2) = u2.to_radec();
+    let pa = deg(((ra2 - ra1) * de1.cos()).atan2(de2 - de1)).rem_euclid(360.0);
+    let range_km = rho.norm() * AU_KM;
+    let phase = (-r).angle(-rho);
+    Ephem {
+        dir: u1,
+        range_km,
+        vmag: v_mag(o.h as f64, o.g as f64, r.norm(), rho.norm(), phase),
+        rate_arcsec_s: rate,
+        pa_deg: pa,
+        parallax_rate_arcsec_s: deg(v_orbit_km_s / range_km) * 3600.0,
+        parallax_deg: deg((orbit_km / range_km).min(1.0).asin()),
+    }
+}
+
+/// Find a known NEO by designation or name ("Apophis", "99942", "(433) Eros").
+pub fn find(q: &str) -> Option<usize> {
+    let q = q.trim().trim_start_matches('(').to_lowercase().replace(") ", " ").replace(')', "");
+    if q.len() < 2 {
+        return None;
+    }
+    let names = all();
+    // Exact number or name first, then a word match.
+    names
+        .iter()
+        .position(|n| {
+            let l = n.name.to_lowercase();
+            let (num, rest) = match l.strip_prefix('(').and_then(|s| s.split_once(") ")) {
+                Some((a, b)) => (a.to_string(), b.to_string()),
+                None => (String::new(), l.clone()),
+            };
+            l == q || num == q || rest == q || l.trim_start_matches('(').replace(") ", " ") == q
+        })
+        .or_else(|| names.iter().position(|n| n.name.to_lowercase().split(|c: char| !c.is_alphanumeric()).any(|w| w == q)))
+}
+
+#[cfg(test)]
+mod ephem_tests {
+    use super::*;
+
+    #[test]
+    fn finds_by_name_and_number() {
+        let a = find("Apophis").expect("Apophis");
+        assert!(all()[a].name.contains("Apophis"));
+        assert_eq!(find("99942"), Some(a));
+        assert_eq!(find("(99942) Apophis"), Some(a));
+        assert!(all()[find("Eros").unwrap()].name.contains("Eros"));
+        assert_eq!(find("zz"), None);
+    }
+
+    #[test]
+    fn apophis_2029_flyby_is_close_and_fast() {
+        // 13 Apr 2029 ~21:46 UTC: about 38,000 km from the Earth's centre
+        // (two-body from a 2026 epoch is good to a few thousand km here).
+        let a = find("Apophis").unwrap();
+        let jd = 2_462_240.407; // 2029-04-13 21:46 UTC
+        let e = ephem(a, jd, 6_921.0, 7.59);
+        assert!(e.range_km < 120_000.0, "range {} km", e.range_km);
+        assert!(e.rate_arcsec_s > 5.0, "rate {}", e.rate_arcsec_s);
+        assert!(e.parallax_deg > 3.0);
+        // A month earlier it is far and slow.
+        let f = ephem(a, jd - 30.0, 6_921.0, 7.59);
+        assert!(f.range_km > 3.0e6 && f.rate_arcsec_s < 1.0, "{f:?}");
     }
 }

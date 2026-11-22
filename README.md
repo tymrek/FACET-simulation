@@ -783,6 +783,22 @@ with cold gas ~32 kg.
   (published: ~0.099 LD on 13 April ~21:46 UTC). Planetary perturbations are
   ignored, so dates and distances degrade over years and through close
   approaches.
+* **Tracking moving targets:** a known NEO can be observed by name — in
+  public requests ("Apophis", "99942", "(433) Eros"), STARE campaigns, the
+  desktop search, and the science programme's and simulated visitors' NEO
+  follow-ups — and is followed as it moves: its ephemeris (direction,
+  distance, V, geocentric rate and position angle) is recomputed every
+  scheduling step, as for planets. Each telescope aims from its own orbital
+  position, correcting topocentric parallax (r_orbit / range: ~0.4° at
+  2.7 lunar distances, ~1° at one) — for planets and the Moon too. Result
+  images are stacks registered on the target: it is a point source at the
+  centre and the field trails by its motion over the observation, or within
+  each sub-frame by the topocentric rate (geocentric rate plus up to
+  v_orbit / range from the satellite's own motion, which dominates for close
+  approachers: ~91″/min at 2.7 LD against Apophis's 2.3″/min geocentric two
+  days before its 2029 flyby). The result adds a Tracking table (rate, PA,
+  distance, parallax, trail lengths), the target's V and peak SNR, and
+  request lists show "tracking N″/min · V · distance".
 
 ## Space environment: South Atlantic Anomaly, Earthshine, orbital lifetime
 

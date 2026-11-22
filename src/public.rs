@@ -369,8 +369,10 @@ impl App {
                     new_reqs.push(ObsRequest {
                         id,
                         submitter: format!("{} #{}", match s { Segment::Casual => "visitor", Segment::Amateur => "amateur", Segment::Classroom => "class", Segment::Citizen => "citizen" }, uid),
+                        neo: neo_t.iter().find(|x| x.1 == name).map(|x| x.2),
                         target_name: name,
                         body,
+                        moving: None,
                         ra_deg: deg(ra),
                         dec_deg: deg(dec),
                         telescopes: c.telescopes,
@@ -529,7 +531,7 @@ fn messier() -> &'static [usize] {
     })
 }
 
-fn pick_target(p: &mut Public, s: Segment, bodies: &[V3], neo: &[(V3, String)], blocked: &dyn Fn(V3) -> bool) -> Option<(String, Option<usize>, V3)> {
+fn pick_target(p: &mut Public, s: Segment, bodies: &[V3], neo: &[(V3, String, usize)], blocked: &dyn Fn(V3) -> bool) -> Option<(String, Option<usize>, V3)> {
     let dso = crate::catalog::dso();
     let names = ["Moon", "Mercury", "Venus", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune"];
     for _ in 0..12 {

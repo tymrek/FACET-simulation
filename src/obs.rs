@@ -672,6 +672,19 @@ pub struct QueueItem {
     /// Needs unbroken coverage now (an open event window): staff it like a
     /// STARE campaign, recruiting replacements before members lose the target.
     pub continuous: bool,
+    /// Geocentric distance of a Solar System target, km (0 = at infinity).
+    /// Each telescope then aims from its own position, correcting parallax.
+    pub range_km: f64,
+}
+
+/// Direction from satellite `i` (ECI position `sat_km`) to a target at
+/// geocentric direction `dir` and distance `range_km` (0 = at infinity).
+pub fn aim(dir: V3, range_km: f64, sat_km: V3) -> V3 {
+    if range_km > 0.0 {
+        (dir * range_km - sat_km).unit()
+    } else {
+        dir
+    }
 }
 
 /// When satellite `i` stops being useful on `dir`: whichever comes first of
@@ -759,7 +772,7 @@ pub fn assign_queue(
                 let keep = healthy < it.want || (it.continuous && st.att[i].phase() == crate::attitude::Phase::Locked);
                 if keep && used < budget && !taken[i] && !st.off[i] && job_tag(st.job[i]) != TAG_STARE && it.dir.dot(st.rhat[i]) > st.cos_lim {
                     taken[i] = true;
-                    st.pointing[i] = Some(it.dir);
+                    st.pointing[i] = Some(aim(it.dir, it.range_km, shell.pos[i]));
                     st.job[i] = me;
                     st.fine[i] = it.fine;
                     assigned += 1;
@@ -817,7 +830,7 @@ pub fn assign_queue(
                 used += 1;
                 free -= 1;
                 taken[i] = true;
-                st.pointing[i] = Some(it.dir);
+                st.pointing[i] = Some(aim(it.dir, it.range_km, shell.pos[i]));
                 st.job[i] = me;
                 st.fine[i] = it.fine;
                 got += 1;
@@ -833,7 +846,7 @@ pub fn assign_queue(
             }
             for &(_, i) in &cands[..k] {
                 taken[i] = true;
-                st.pointing[i] = Some(it.dir);
+                st.pointing[i] = Some(aim(it.dir, it.range_km, shell.pos[i]));
                 st.job[i] = me;
                 st.fine[i] = it.fine;
                 got += 1;
@@ -873,6 +886,8 @@ pub struct StareItem {
     pub dir: V3,
     pub eyes: usize,
     pub fine: bool,
+    /// Geocentric distance, km (0 = at infinity); see QueueItem.
+    pub range_km: f64,
 }
 
 pub struct StareResult {
@@ -921,7 +936,7 @@ pub fn assign_stare(
         let mut assigned = 0;
         let take = |st: &mut ObsState, taken: &mut Vec<bool>, i: usize| {
             taken[i] = true;
-            st.pointing[i] = Some(it.dir);
+            st.pointing[i] = Some(aim(it.dir, it.range_km, shell.pos[i]));
             st.job[i] = me;
             st.fine[i] = it.fine;
         };
@@ -1194,7 +1209,7 @@ mod stare_tests {
             update(&mut st, &o, Mode::Survey, &shell.pos, &[], sun, moon, None, None);
             let items: Vec<StareItem> = targets
                 .iter()
-                .map(|&i| StareItem { id: i as u64, dir: b[i].dir, eyes, fine: true })
+                .map(|&i| StareItem { id: i as u64, dir: b[i].dir, eyes, fine: true, range_km: 0.0 })
                 .collect();
             let res = assign_stare(&mut st, &o, &shell, &items, sun, moon, &ag);
             advance_attitudes(&mut st, &ag, dt, None);

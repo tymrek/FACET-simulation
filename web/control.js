@@ -248,7 +248,7 @@ function reqRow(r) {
   if (r.has_result) btns.append(el("button", { class: "view", onclick: () => { stareViewer.close(); viewer.show(r.id); } }, r.state === "done" ? "Result" : "Live"));
   const who = el("td", {}, r.submitter); who.title = `${r.ip} · submitted ${r.submitted_utc}${r.note ? "\n" + r.note : ""}`;
   return el("tr", { onmouseenter: () => { sky.highlight = r.id; sky.draw(); } },
-    el("td", {}, r.id), who, el("td", {}, r.target_name, r.note ? el("div", { class: "small muted" }, r.note) : ""),
+    el("td", {}, r.id), who, el("td", {}, r.target_name, r.moving ? el("div", { class: "small muted" }, trackNote(r.moving)) : "", r.note ? el("div", { class: "small muted" }, r.note) : ""),
     el("td", { class: "num" }, tel), el("td", { class: "num" }, fmtDur(r.exposure_s)),
     el("td", { class: "num" }, prio), stateCell(r), progressCell(r), btns);
 }

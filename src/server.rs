@@ -64,6 +64,11 @@ pub struct ObsRequest {
     pub target_name: String,
     /// Index into astro::bodies for moving targets; otherwise fixed RA/Dec.
     pub body: Option<usize>,
+    /// Index into neo::all() for a tracked near-Earth asteroid.
+    #[serde(skip)]
+    pub neo: Option<usize>,
+    /// Latest ephemeris of a tracked asteroid (rate, distance, parallax).
+    pub moving: Option<crate::neo::Ephem>,
     pub ra_deg: f64,
     pub dec_deg: f64,
     /// Telescopes requested simultaneously (they stack).
@@ -206,6 +211,9 @@ pub struct Campaign {
     pub target_name: String,
     #[serde(skip)]
     pub body: Option<usize>,
+    #[serde(skip)]
+    pub neo: Option<usize>,
+    pub moving: Option<crate::neo::Ephem>,
     pub ra_deg: f64,
     pub dec_deg: f64,
     #[serde(skip)]
@@ -317,6 +325,8 @@ pub enum Command {
 pub enum Resolved {
     Body(usize, String),
     Fixed(String, V3),
+    /// A known near-Earth asteroid (index into neo::all()), tracked.
+    Neo(usize, String),
 }
 
 pub struct Shared {
@@ -453,15 +463,16 @@ fn create_campaign(
     active: bool,
     preset: bool,
 ) -> Result<u64, &'static str> {
-    let (body, name, dir) = match (target, ra, dec) {
+    let (body, neo, name, dir) = match (target, ra, dec) {
         (Some(t), _, _) if !t.trim().is_empty() => match sh.resolve(t) {
-            Some(Resolved::Body(i, n)) => (Some(i), n, V3::Z),
-            Some(Resolved::Fixed(n, d)) => (None, n, d),
+            Some(Resolved::Body(i, n)) => (Some(i), None, n, V3::Z),
+            Some(Resolved::Fixed(n, d)) => (None, None, n, d),
+            Some(Resolved::Neo(k, n)) => (None, Some(k), n, V3::Z),
             None => return Err("unknown target name"),
         },
         (_, Some(ra), Some(dec)) if ra.is_finite() && (-90.0..=90.0).contains(&dec) => {
             let ra = ra.rem_euclid(360.0);
-            (None, format!("RA {ra:.3}° Dec {dec:+.3}°"), V3::from_radec(ra.to_radians(), dec.to_radians()))
+            (None, None, format!("RA {ra:.3}° Dec {dec:+.3}°"), V3::from_radec(ra.to_radians(), dec.to_radians()))
         }
         _ => return Err("give a target name or ra_deg/dec_deg"),
     };
@@ -478,6 +489,8 @@ fn create_campaign(
         id,
         target_name: name.clone(),
         body,
+        neo,
+        moving: None,
         ra_deg: ra_r.to_degrees(),
         dec_deg: dec_r.to_degrees(),
         dir,
@@ -626,6 +639,7 @@ fn handle_campaign(shared: SharedRef, req: Request, path: String) {
                 slews: c.handovers,
                 mean_slew_deg: 0.0,
                 agility: Some(ag),
+                mover: c.moving,
             },
         )
     };
@@ -696,6 +710,7 @@ fn result_spec(r: &ObsRequest) -> Option<((u64, u32), crate::imaging::Spec)> {
             slews: r.slews,
             mean_slew_deg: if r.slews > 0 { r.slew_deg_sum / r.slews as f64 } else { 0.0 },
             agility: r.agility,
+            mover: r.moving,
         },
     ))
 }
@@ -862,7 +877,10 @@ pub type SharedRef = Arc<Mutex<Shared>>;
 
 impl Shared {
     pub fn resolve(&self, name: &str) -> Option<Resolved> {
-        self.names.get(&name.trim().to_lowercase()).cloned()
+        self.names
+            .get(&name.trim().to_lowercase())
+            .cloned()
+            .or_else(|| crate::neo::find(name).map(|k| Resolved::Neo(k, crate::neo::all()[k].name.to_string())))
     }
 }
 
@@ -1073,18 +1091,19 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         drop(sh);
         return err(req, 429, "you already have 5 open requests");
     }
-    let (body_idx, name, dir) = match (&sub.target, sub.ra_deg, sub.dec_deg) {
+    let (body_idx, neo_idx, name, dir) = match (&sub.target, sub.ra_deg, sub.dec_deg) {
         (Some(t), _, _) if !t.trim().is_empty() => match sh.resolve(t) {
-            Some(Resolved::Body(i, n)) => (Some(i), n, V3::Z),
-            Some(Resolved::Fixed(n, d)) => (None, n, d),
+            Some(Resolved::Body(i, n)) => (Some(i), None, n, V3::Z),
+            Some(Resolved::Fixed(n, d)) => (None, None, n, d),
+            Some(Resolved::Neo(k, n)) => (None, Some(k), n, V3::Z),
             None => {
                 drop(sh);
-                return err(req, 404, "unknown target name; use a planet, a bright-star name, or RA/Dec");
+                return err(req, 404, "unknown target name; use a planet, a near-Earth asteroid, a bright-star or deep-sky name, or RA/Dec");
             }
         },
         (_, Some(ra), Some(dec)) if ra.is_finite() && (-90.0..=90.0).contains(&dec) => {
             let ra = ra.rem_euclid(360.0);
-            (None, format!("RA {ra:.3}° Dec {dec:+.3}°"), V3::from_radec(ra.to_radians(), dec.to_radians()))
+            (None, None, format!("RA {ra:.3}° Dec {dec:+.3}°"), V3::from_radec(ra.to_radians(), dec.to_radians()))
         }
         _ => {
             drop(sh);
@@ -1110,6 +1129,8 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         },
         target_name: name,
         body: body_idx,
+        neo: neo_idx,
+        moving: None,
         ra_deg: ra.to_degrees(),
         dec_deg: dec.to_degrees(),
         telescopes,

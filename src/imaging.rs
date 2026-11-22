@@ -433,6 +433,37 @@ impl Frame {
             }
         }
     }
+    /// Smear the scene by `len_px` pixels at angle (dx, dy unit): what a stack
+    /// registered on a moving target does to everything else in the field.
+    fn smear(&mut self, dx: f64, dy: f64, len_px: f64) {
+        if len_px < 0.5 {
+            return;
+        }
+        let n = (len_px.ceil() as usize + 1).min(2000);
+        let (w, h) = (self.w as i64, self.h as i64);
+        let src = std::mem::take(&mut self.rate);
+        let mut out = vec![0.0; src.len()];
+        for k in 0..n {
+            let t = k as f64 / (n - 1) as f64 * len_px;
+            let (ox, oy) = ((t * dx).round() as i64, (t * dy).round() as i64);
+            for y in 0..h {
+                let sy = y - oy;
+                if sy < 0 || sy >= h {
+                    continue;
+                }
+                for x in 0..w {
+                    let sx = x - ox;
+                    if sx >= 0 && sx < w {
+                        out[(y * w + x) as usize] += src[(sy * w + sx) as usize];
+                    }
+                }
+            }
+        }
+        let inv = 1.0 / n as f64;
+        out.iter_mut().for_each(|v| *v *= inv);
+        self.rate = out;
+    }
+
     /// A catalogue deep-sky object (deepsky::Model) of total `flux` e⁻/s.
     /// Returns whether any of it fell in the frame.
     fn add_model(&mut self, m: &crate::deepsky::Model, flux: f64) -> bool {
@@ -732,6 +763,9 @@ pub struct Spec {
     pub slews: u32,
     pub mean_slew_deg: f64,
     pub agility: Option<crate::attitude::Agility>,
+    /// A tracked asteroid: the telescopes follow it, so it stays a point and
+    /// the stars trail.
+    pub mover: Option<crate::neo::Ephem>,
 }
 
 pub struct Output {
@@ -1090,6 +1124,60 @@ pub fn render(spec: &Spec) -> Output {
         }
     }
 
+    // ---- A tracked asteroid: the stack is registered on it, so the rest of
+    // the field trails by its motion over the observation and it is a point.
+    let mut moving_json = serde_json::Value::Null;
+    if let Some(e) = spec.mover {
+        let wall_s = spec.exposure_s;
+        // Within each sub-frame a telescope tracks the topocentric rate, which
+        // for close objects is dominated by its own orbital motion (mean
+        // 2/π of v_orbit/range); over the stack the geocentric motion adds up.
+        let per_sub = (e.rate_arcsec_s + 0.64 * e.parallax_rate_arcsec_s) * sub_s;
+        let trail = (e.rate_arcsec_s * wall_s).max(per_sub);
+        // Stars move opposite to the target: towards PA + 180°. On the image
+        // east is left (−x) and north up (−y), so the target moves by
+        // (−sin PA, −cos PA) and the stars by (+sin PA, +cos PA).
+        let (s, c) = e.pa_deg.to_radians().sin_cos();
+        for fr in [&mut full, &mut crop] {
+            fr.smear(s, c, trail / fr.scale);
+        }
+        let flux = zp * 10f64.powf(-0.4 * e.vmag);
+        for fr in [&mut full, &mut crop] {
+            let (cx, cy) = (fr.w as f64 / 2.0, fr.h as f64 / 2.0);
+            fr.add_psf(cx, cy, flux, 0.0);
+        }
+        target_mag = Some(e.vmag);
+        let ld = e.range_km / 384_400.0;
+        moving_json = serde_json::json!({
+            "rate_arcsec_min": r2(e.rate_arcsec_s * 60.0),
+            "pa_deg": r1(e.pa_deg),
+            "range_km": e.range_km.round(),
+            "range_lunar_distances": r2(ld),
+            "parallax_from_shell_deg": r2(e.parallax_deg),
+            "parallax_rate_max_arcsec_min": r2(e.parallax_rate_arcsec_s * 60.0),
+            "star_trail_arcsec": r1(trail),
+            "star_trail_per_subframe_arcsec": r2(per_sub),
+        });
+        notes.push(format!(
+            "Tracked asteroid: {:.1}″/min geocentric at PA {:.0}°, {} away. Each telescope follows it and the stack is registered on it, so it stays a point source and the stars trail {} over the {}. Within one {} sub-frame a star moves about {:.1}″ against the tracking ({}).",
+            e.rate_arcsec_s * 60.0,
+            e.pa_deg,
+            if ld < 100.0 { format!("{ld:.1} lunar distances") } else { format!("{:.3} AU", e.range_km / crate::astro::AU_KM) },
+            if trail >= 60.0 { format!("{:.1}′", trail / 60.0) } else { format!("{trail:.0}″") },
+            fmt_s(wall_s),
+            fmt_s(sub_s),
+            per_sub,
+            if per_sub < fwhm { "under the image size, so guide stars stay usable" } else { "more than the image size: guiding uses the predicted motion" }
+        ));
+        if e.parallax_deg > 0.05 {
+            notes.push(format!(
+                "From 550 km the asteroid's direction shifts by up to {:.2}° with each telescope's position (parallax), and its apparent rate by up to {:.1}″/min with the orbital motion: each telescope aims from its own position. Frames from different telescopes therefore see the stars offset from each other by up to twice that parallax, which blurs the star field further in the stack.",
+                e.parallax_deg,
+                e.parallax_rate_arcsec_s * 60.0
+            ));
+        }
+    }
+
     // ---- Optics: convolve the ideal scene with the Fourier-optics PSF
     // (diffraction from aperture, obstruction and spiders; wavefront error;
     // 7-wavelength polychromatic; pointing jitter), pixel-integrated.
@@ -1105,6 +1193,18 @@ pub fn render(spec: &Spec) -> Output {
     let mut nrng = Rng(field_seed ^ spec.id.wrapping_mul(0xA24B_AED4_963E_E407) ^ (total_s as u64));
     let fe = expose(&full, hw, total_s, sub_s, bg_native, &mut nrng);
     let ce = expose(&crop, hw, total_s, sub_s, bg_native, &mut nrng);
+    if spec.mover.is_some() {
+        // Peak of the target's image: brightest pixel near the centre.
+        let (w, h) = (crop.w, crop.h);
+        let mut s = 0.0f64;
+        for y in h / 2 - 3..=h / 2 + 3 {
+            for x in w / 2 - 3..=w / 2 + 3 {
+                s = s.max(crop.rate[y * w + x]);
+            }
+        }
+        let s = s * total_s;
+        target_snr = Some(s / (s + ce.sigma_bg.powi(2)).sqrt());
+    }
     if spec.body.is_some() {
         if let Some(i) = spec.body {
             if spec.body == Some(i) {
@@ -1219,6 +1319,7 @@ pub fn render(spec: &Spec) -> Output {
             "angular_diameter_arcsec": ang_diam.map(r2),
             "saturn_ring_tilt_deg": ring_tilt.map(r2),
         },
+        "moving": moving_json,
         "optics": {
             "model": format!(
                 "Fourier optics: {:.0} cm aperture, {:.0} % central obstruction, {} spider vane{} × {} mm, {:.0} nm RMS wavefront error, 7 wavelengths 420–690 nm, ⊗ {:.2}\" RMS jitter, pixel-integrated",
@@ -1341,7 +1442,7 @@ mod tests {
                 full_lock_s: None,
                 slews: 0,
                 mean_slew_deg: 0.0,
-                agility: None,
+                agility: None, mover: None,
             };
             let out = render(&spec);
             assert!(out.full_png.len() > 1000 && out.crop_png.len() > 1000);
@@ -1371,7 +1472,7 @@ mod gallery {
         for (name, body, dir, total, n, exp) in cases {
             let spec = Spec { id: 7, target_name: name.into(), dir, body, jd, total_s: total, required_s: total,
                               telescopes: n, exposure_s: exp, hw: Hardware::from_obs(&ObsParams::default()), done: true,
-                              fine_frac: 1.0, response_s: None, full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None };
+                              fine_frac: 1.0, response_s: None, full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None, mover: None };
             let t = std::time::Instant::now();
             let out = render(&spec);
             std::fs::write(format!("/tmp/g_{name}_full.png"), &out.full_png).unwrap();
@@ -1413,13 +1514,37 @@ mod deepsky_render {
             let spec = Spec {
                 id: 7, target_name: d.name(), dir: d.dir, body: None, jd, total_s: 60_000.0, required_s: 60_000.0,
                 telescopes: 100, exposure_s: 600.0, hw: hw.clone(), done: true, fine_frac: 1.0, response_s: None,
-                full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None,
+                full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None, mover: None,
             };
             let t = std::time::Instant::now();
             let out = render(&spec);
             std::fs::write(format!("/tmp/dso-{q}-full.png"), &out.full_png).unwrap();
             std::fs::write(format!("/tmp/dso-{q}-crop.png"), &out.crop_png).unwrap();
             println!("{q}: {:.1} s; notes: {}", t.elapsed().as_secs_f64(), out.report["notes"]);
+        }
+    }
+}
+
+#[cfg(test)]
+mod mover_render {
+    use super::*;
+    /// Renders tracked asteroids to /tmp/neo-*.png (run with --ignored).
+    #[test]
+    #[ignore]
+    fn render_tracked_asteroids() {
+        let hw = Hardware::from_obs(&crate::obs::ObsParams::default());
+        for (q, jd) in [("Apophis", 2_462_238.5), ("Eros", 2_461_366.5)] {
+            let k = crate::neo::find(q).unwrap();
+            let e = crate::neo::ephem(k, jd, 6_921.0, 7.59);
+            let spec = Spec {
+                id: 9, target_name: crate::neo::all()[k].name.into(), dir: e.dir, body: None, jd, total_s: 6_000.0, required_s: 6_000.0,
+                telescopes: 10, exposure_s: 600.0, hw: hw.clone(), done: true, fine_frac: 1.0, response_s: None,
+                full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None, mover: Some(e),
+            };
+            let out = render(&spec);
+            std::fs::write(format!("/tmp/neo-{q}-full.png"), &out.full_png).unwrap();
+            std::fs::write(format!("/tmp/neo-{q}-crop.png"), &out.crop_png).unwrap();
+            println!("{q}: V {:.1} rate {:.2}\"/min range {:.0} km; snr {}; moving {}", e.vmag, e.rate_arcsec_s * 60.0, e.range_km, out.report["results"]["target_peak_snr"], out.report["moving"]);
         }
     }
 }

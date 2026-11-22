@@ -12,6 +12,8 @@ use std::time::Instant;
 pub enum Target {
     Body(usize),
     Fixed { name: String, dir: V3 },
+    /// A known near-Earth asteroid (index into neo::all()), tracked.
+    Neo(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -481,14 +483,28 @@ impl App {
         match &self.target {
             Some(Target::Body(i)) => Some(self.bodies[*i].dir),
             Some(Target::Fixed { dir, .. }) => Some(*dir),
+            Some(Target::Neo(k)) => Some(self.track(None, Some(*k)).map_or(V3::Z, |t| t.0)),
             None => None,
         }
+    }
+
+    /// Current geocentric direction, distance (km) and, for an asteroid, the
+    /// ephemeris of a moving target: a Solar System body or a known NEO.
+    pub fn track(&self, body: Option<usize>, neo: Option<usize>) -> Option<(V3, f64, Option<crate::neo::Ephem>)> {
+        if let Some(k) = neo {
+            let a = self.shell.params.semi_major_km();
+            let e = crate::neo::ephem(k, self.jd, a, (crate::astro::MU_EARTH / a).sqrt());
+            return Some((e.dir, e.range_km, Some(e)));
+        }
+        // The Sun (index 0) is far enough to treat as at infinity.
+        body.map(|b| (self.bodies[b].dir, if b == 0 { 0.0 } else { self.bodies[b].dist_km }, None))
     }
 
     pub fn target_name(&self) -> String {
         match &self.target {
             Some(Target::Body(i)) => BODY_NAMES[*i].to_string(),
             Some(Target::Fixed { name, .. }) => name.clone(),
+            Some(Target::Neo(k)) => crate::neo::all()[*k].name.to_string(),
             None => "none".into(),
         }
     }

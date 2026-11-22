@@ -189,6 +189,15 @@ class SkyMap {
 }
 
 // Small shared helpers for the two pages.
+
+// A tracked asteroid's motion, for request lists: "tracking 1.9″/min, V 17.4".
+function trackNote(m) {
+  if (!m) return "";
+  const rate = m.rate_arcsec_s * 60;
+  const ld = m.range_km / 384400;
+  const where = ld < 100 ? `${ld.toFixed(1)} lunar distances` : `${(m.range_km / 149597870.7).toFixed(2)} AU`;
+  return `tracking ${rate < 10 ? rate.toFixed(1) : rate.toFixed(0)}″/min · V ${m.vmag.toFixed(1)} · ${where}`;
+}
 function el(tag, attrs = {}, ...kids) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -316,6 +325,12 @@ class ResultViewer {
           ["Phase angle", m.phase_angle_deg !== null ? `${m.phase_angle_deg}°` : null],
           ["Saturn ring tilt (to Earth)", m.saturn_ring_tilt_deg !== null ? `${m.saturn_ring_tilt_deg}°` : null],
         ])),
+        r.moving ? el("div", {}, el("h3", {}, "Tracking"), kv([
+          ["Rate (geocentric)", `${r.moving.rate_arcsec_min}″/min at PA ${r.moving.pa_deg}°`],
+          ["Distance", r.moving.range_lunar_distances < 100 ? `${r.moving.range_lunar_distances} lunar distances (${Math.round(r.moving.range_km).toLocaleString()} km)` : `${(r.moving.range_km / 149597870.7).toFixed(3)} AU`],
+          ["Parallax from the shell", r.moving.parallax_from_shell_deg >= 0.01 ? `up to ${r.moving.parallax_from_shell_deg}° (rate up to ${r.moving.parallax_rate_max_arcsec_min}″/min)` : "negligible"],
+          ["Star trails in this stack", `${r.moving.star_trail_arcsec}″ (${r.moving.star_trail_per_subframe_arcsec}″ per sub-frame)`],
+        ])) : "",
         el("div", {}, el("h3", {}, "Exposure"), kv([
           ["Integration", `${x.telescope_seconds.toLocaleString()} of ${x.telescope_seconds_required.toLocaleString()} telescope-seconds`],
           ["= one telescope for", `${x.single_scope_equivalent_h} h`],
