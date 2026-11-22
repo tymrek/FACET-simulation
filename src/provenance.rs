@@ -91,6 +91,7 @@ pub const HEADLINES: &[(&str, Basis, &str)] = &[
     ("neo_approaches", Modelled, "Two-body propagation without planetary perturbations; dates typically within hours, distances within 10–20 %."),
     // Interferometry and propulsion
     ("ii_snr", Modelled, "Hanbury Brown–Twiss SNR with assumed timing jitter, synchronisation, throughput and channel count."),
+    ("recovery", Assumed, "NEO recovery exercise: the discovery is a real catalogued NEO (its orbit gives the true motion); the alert's errors are assumed — 4 positions over 1 h at 0.5″, plus 5 % (along) and 2 % (across) of the rate — and the prediction is a straight line, a pessimistic stand-in for orbit determination."),
     ("ii_safety", Modelled, "Minimum radial/cross-track separation of every cluster pair over an orbit (Hill equations, e/i vector separation) and the along-track drift of a deputy that cannot thrust, with an assumed 5 % difference in ballistic coefficient."),
     ("ii_fit", Simulated, "Angular diameter fitted to |V|² samples the simulated cluster accumulates, with noise from the modelled SNR."),
     ("twin", Simulated, "Angular diameter fitted to |V|² samples twin-telescope satellites accumulate as they observe; SNR from the intensity-interferometry model with an assumed boom, metrology and published approximate diameters."),

@@ -157,6 +157,23 @@ impl App {
                 | Command::StareActivate { .. }
                 | Command::StareActivateAll
                 | Command::StareEyes { .. } => {}
+                Command::RecoveryStart { target, age_h, telescopes_per_tile, exposure_s } => {
+                    if let Some(a) = age_h.filter(|a| a.is_finite()) {
+                        self.recovery_cfg.age_h = a.clamp(0.5, 72.0);
+                    }
+                    if let Some(t) = telescopes_per_tile {
+                        self.recovery_cfg.telescopes_per_tile = t.clamp(1, 200);
+                    }
+                    if let Some(e) = exposure_s.filter(|e| e.is_finite()) {
+                        self.recovery_cfg.exposure_s = e.clamp(10.0, 3600.0);
+                    }
+                    if let Err(e) = self.recovery_start(target.as_deref()) {
+                        if let Some(w) = &self.web {
+                            w.lock().unwrap().log("warn", format!("NEO recovery exercise not started: {e}"));
+                        }
+                    }
+                }
+                Command::RecoveryAuto { on } => self.recovery_cfg.auto = on,
             }
         }
     }
@@ -396,6 +413,12 @@ impl App {
             .iter()
             .map(|&i| {
                 let r = &mut sh.requests[i];
+                if let Some(d) = r.drift {
+                    r.dir = d.at(self.jd);
+                    let (ra, dec) = r.dir.to_radec();
+                    r.ra_deg = deg(ra);
+                    r.dec_deg = deg(dec);
+                }
                 let mut range_km = 0.0;
                 if let Some((d, range, e)) = self.track(r.body, r.neo) {
                     r.dir = d;
@@ -817,6 +840,7 @@ impl App {
                 case_idx: Some(d.case),
                 inv_idx: Some(d.inv),
                 mosaic: None,
+                drift: None,
             });
         }
         sh.prune();
@@ -1235,6 +1259,7 @@ impl App {
             "mode": self.mode.key(),
             "public_share": self.public_share,
             "defence": self.defence.as_ref().map(|d| d.json(self.jd)),
+            "recovery": self.recovery_json(),
             "traffic": traffic_json,
             "programme": {
                 "search_share": self.search_share,

@@ -25,6 +25,7 @@ mod optics;
 mod present;
 mod deepsky;
 mod mosaic;
+mod recovery;
 mod provenance;
 mod twin;
 mod ui_shell;

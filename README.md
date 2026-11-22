@@ -1198,6 +1198,42 @@ Desktop: *% of fleet held for NEO search* sets the reserve
 (`--search-share 10`). This is the trade-off a real FACET would face:
 programme science against search, and it scales with fleet size.
 
+## Recovering a new discovery
+
+A survey reports a new near-Earth object from a short tracklet: where it was
+and how fast it moved, with errors. Its position is then known only within a
+region that grows with time since discovery, mostly along the motion. The
+director console's **NEO recovery** tab (or `recovery_start` on the control
+API, `--recovery-auto` to run one after another) raises such an alert. FACET
+tiles the 3σ region with fields that drift at the predicted rate, scheduled
+at top priority; a tile recovers the object if it is inside the field and
+brighter than the tile's limit (including the trailing loss from the rate
+error). The rest of the search is then cancelled and a tracked follow-up
+starts.
+
+The "discovery" is a real catalogued NEO, observable now, between V 18 and
+21.5 and within 0.2 AU (new discoveries are mostly small objects found close
+to the Earth, so fast), so its true motion — including the curvature a
+straight-line prediction misses — comes from its orbit. The alert's errors
+are assumed: four positions over one hour at 0.5″, plus 5 % (along) and 2 %
+(across) of the rate; the prediction is a straight line, a pessimistic
+stand-in for orbit determination.
+
+Measured with defaults (1,000 telescopes, 8 per tile × 120 s), ~59 alerts
+each, ~50 different objects with median rate ~7″/min (up to 110″/min):
+
+| Hours since discovery | Recovered | Alert → recovery (median / 90 %) | Tiles (median / max) |
+|---|---|---|---|
+| 6 | 59 / 59 | 2.8 / 3.9 min | 1 / 8 |
+| 24 | 57 / 59 | 2.8 / 3.6 min | 1 / 18 |
+| 48 | 54 / 59 | 2.9 / 3.8 min | 3 / 24 |
+
+Losses are objects that had curved out of the straight-line 3σ region
+(4–22σ off, fast close approachers) or were fainter than a tile reached.
+Recovery is quick mainly because of the field: a 1.05° field covers the
+typical 3σ region (0.1°–1° long after 6–48 h) in one to a few pointings, and
+the queue staffs tiles within minutes.
+
 ## Science programme and science return
 
 The sim starts in **Science operations** mode with a simulated science

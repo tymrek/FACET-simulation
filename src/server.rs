@@ -128,6 +128,9 @@ pub struct ObsRequest {
     pub sched: Sched,
     /// Tile of a public mosaic (see mosaic.rs).
     pub mosaic: Option<crate::mosaic::Mosaic>,
+    /// A pointing that drifts at a fixed rate (NEO recovery search tiles).
+    #[serde(skip)]
+    pub drift: Option<crate::recovery::Drift>,
 }
 
 /// Per-request state for science requirements beyond telescope-seconds.
@@ -317,6 +320,17 @@ pub enum Command {
     StareEyes {
         id: u64,
         eyes: u32,
+    },
+    /// Raise a synthetic new-discovery alert and search for it.
+    RecoveryStart {
+        target: Option<String>,
+        age_h: Option<f64>,
+        telescopes_per_tile: Option<u32>,
+        exposure_s: Option<f64>,
+    },
+    /// Keep raising alerts, one after another (for measuring many).
+    RecoveryAuto {
+        on: bool,
     },
 }
 
@@ -1163,6 +1177,7 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
         case_idx: None,
         inv_idx: None,
         mosaic: None,
+        drift: None,
     };
     // A mosaic: one request per tile, the telescopes shared between tiles.
     let mut reqs = vec![r];

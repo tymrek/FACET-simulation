@@ -262,6 +262,27 @@ function fmtIp(p) {
   if (p <= 0) return "0";
   return `1 in ${Math.round(1 / p).toLocaleString()}`;
 }
+function renderRecovery(s) {
+  const rc = s.recovery; if (!rc) return;
+  if ($("rec_chip") && !$("rec_chip").firstChild) $("rec_chip").append(basisChip("recovery"));
+  if (document.activeElement !== $("rec_auto")) $("rec_auto").checked = rc.cfg.auto;
+  const a = rc.after_s;
+  $("rec_stats").textContent = rc.ended
+    ? `${rc.recovered} of ${rc.ended} recovered · alert to recovery: median ${fmtDur(a.median ?? 0)}, 90 % within ${fmtDur(a.p90 ?? 0)}, longest ${fmtDur(a.max ?? 0)}`
+    : "No alerts yet.";
+  $("rec_rows").replaceChildren(...rc.recent.map(r => {
+    const o = r.outcome;
+    const out = o === "Searching" ? `searching · ${r.tiles_done}/${r.tiles.length} tiles done`
+      : o.Recovered ? `recovered in ${fmtDur(o.Recovered.after_s)} (tile ${o.Recovered.tile + 1}, SNR ${o.Recovered.snr.toFixed(0)})`
+      : `lost after ${fmtDur(o.Lost.after_s)}: ${o.Lost.why}`;
+    return el("tr", {}, el("td", {}, `${r.designation} · ${r.age_h} h old`), el("td", {}, r.vmag.toFixed(1)),
+      el("td", {}, `${r.rate_arcsec_min.toFixed(1)}″/min`), el("td", {}, `${Math.round(r.sigma_along_arcsec)}″ × ${Math.round(r.sigma_cross_arcsec)}″`),
+      el("td", {}, `${r.tiles.length} (${r.cols}×${r.rows})`), el("td", {}, out), el("td", {}, r.truth_name || "–"));
+  }));
+}
+$("rec_go").onclick = () => cmd({ cmd: "recovery_start", age_h: +$("rec_age").value, telescopes_per_tile: +$("rec_tel").value, exposure_s: +$("rec_exp").value });
+$("rec_auto").onchange = (e) => cmd({ cmd: "recovery_auto", on: e.target.checked });
+
 function renderDefence(s) {
   const d = s.defence, sec = $("pd_sec");
   sec.hidden = !d; if (!d) return;
@@ -622,6 +643,7 @@ function render(s) {
   renderStares(s);
   renderScience(s);
   renderDefence(s);
+  renderRecovery(s);
   renderTraffic(s);
   renderResilience(s);
   renderEnvironment(s);

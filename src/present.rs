@@ -903,6 +903,7 @@ impl App {
             case_idx: None,
             inv_idx: None,
             mosaic: None,
+            drift: None,
         });
         sh.log("info", format!("Public request #{id}: {name}, {telescopes} × {exposure_s:.0} s (presentation)"));
     }

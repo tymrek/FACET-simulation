@@ -8,6 +8,13 @@
   distance, V, rate, position angle) refreshed every scheduling step.
 - Each telescope aims from its own orbital position, correcting the
   topocentric parallax of asteroids, planets and the Moon.
+- NEO recovery exercise: a synthetic new-discovery alert (a real catalogued
+  NEO as truth, short-arc errors assumed) whose growing uncertainty region is
+  tiled with drifting fields at top priority; detection, cancellation of the
+  remaining search, tracked follow-up, and alert-to-recovery statistics.
+  Director console tab "NEO recovery"; `recovery_start` / `recovery_auto`
+  commands; `--recovery-auto`. Measured: median ~3 min from alert to
+  recovery at 6–48 h since discovery; 92–100 % recovered.
 - Result images of a tracked asteroid are registered on it: a point source
   with trailed stars; new Tracking table (rate, PA, distance, parallax, star
   trails) and the target's V and peak SNR. Request lists show the tracking

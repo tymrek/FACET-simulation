@@ -143,6 +143,10 @@ pub struct App {
     /// for comparison).
     pub handover: bool,
     pub twin: crate::twin::Twin,
+    /// NEO recovery exercises (recovery.rs).
+    pub recovery_cfg: crate::recovery::RecoveryCfg,
+    pub recoveries: Vec<crate::recovery::Recovery>,
+    pub recovery_seed: u64,
     pub present_deck: Option<String>,
     pub cost_msg: Option<String>,
     pub science: crate::programme::Science,
@@ -261,6 +265,9 @@ impl App {
             scenario_save_name: String::new(),
             handover: true,
             twin: Default::default(),
+            recovery_cfg: Default::default(),
+            recoveries: Vec::new(),
+            recovery_seed: 0x5EED_FACE,
             present_deck: None,
             cost_msg: None,
             traffic: crate::traffic::Traffic::new(Default::default(), jd0_for_traffic(), 550.0),
@@ -378,6 +385,7 @@ impl App {
                 }
                 "--survey-in-queue" => self.survey.in_queue = true,
                 "--survey-polar" => self.survey.polar = true,
+                "--recovery-auto" => self.recovery_cfg.auto = true,
                 "--scenario" => {
                     let q = val();
                     match crate::ui_shell::find_scenario(&q) {
@@ -616,6 +624,7 @@ impl App {
         self.ii_step(dt_sim);
         self.twin_step(dt_sim);
         self.queue_credit();
+        self.recovery_step();
         prof("queue_credit");
         self.science_account(dt_sim);
         prof("science_account");

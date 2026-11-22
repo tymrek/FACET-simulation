@@ -126,6 +126,22 @@
 
   <nav class="span tabbar" id="tabbar"></nav>
 
+  <section class="span" data-tab="NEO recovery">
+    <div class="panel">
+      <h2>Recovering a new discovery <span id="rec_chip"></span></h2>
+      <div class="small muted">A survey reports a new near-Earth object from a short tracklet. Its position is only known within a region that grows along its motion with time since discovery. FACET tiles the 3σ region with fields that track the predicted rate, at top priority, until a tile catches it. The "discovery" is a real catalogued NEO observable now, so its true motion comes from its orbit; the alert's errors are synthetic (assumed).</div>
+      <div style="display:flex; margin:8px 0; gap:14px; flex-wrap:wrap; align-items:center">
+        <label>Hours since discovery <input id="rec_age" type="number" min="0.5" max="72" step="0.5" value="12" style="width:70px"></label>
+        <label>Telescopes per tile <input id="rec_tel" type="number" min="1" max="200" value="8" style="width:60px"></label>
+        <label>Exposure (s) <input id="rec_exp" type="number" min="10" max="3600" value="120" style="width:70px"></label>
+        <button id="rec_go">Raise alert</button>
+        <label><input id="rec_auto" type="checkbox"> one after another</label>
+      </div>
+      <div class="small" id="rec_stats"></div>
+      <table class="kv"><thead><tr><th>Alert</th><th>V</th><th>Rate</th><th>1σ region</th><th>Tiles</th><th>Outcome</th><th>It was</th></tr></thead><tbody id="rec_rows"></tbody></table>
+    </div>
+  </section>
+
   <section class="span" data-tab="Science return">
     <div class="panel">
       <h2>Science return <span class="small muted" id="sci_since"></span></h2>

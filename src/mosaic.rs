@@ -71,7 +71,6 @@ pub fn offset_dir(c: V3, xi_deg: f64, eta_deg: f64) -> V3 {
 /// `pa_deg` (north through east), with square fields of side `field_deg`.
 pub fn plan(center: V3, a_deg: f64, b_deg: f64, pa_deg: f64, field_deg: f64) -> Result<Plan, String> {
     let (s, c) = pa_deg.to_radians().sin_cos();
-    // Half-extents of the rotated ellipse along east and north.
     let hx = ((a_deg * s).powi(2) + (b_deg * c).powi(2)).sqrt();
     let hy = ((a_deg * c).powi(2) + (b_deg * s).powi(2)).sqrt();
     if 2.0 * hx <= field_deg && 2.0 * hy <= field_deg {
@@ -82,6 +81,15 @@ pub fn plan(center: V3, a_deg: f64, b_deg: f64, pa_deg: f64, field_deg: f64) -> 
             field_deg * 60.0
         ));
     }
+    plan_region(center, a_deg, b_deg, pa_deg, field_deg, MAX_TILES)
+}
+
+/// Tile any ellipse (one field if it fits), up to `max_tiles`.
+pub fn plan_region(center: V3, a_deg: f64, b_deg: f64, pa_deg: f64, field_deg: f64, max_tiles: usize) -> Result<Plan, String> {
+    let (s, c) = pa_deg.to_radians().sin_cos();
+    // Half-extents of the rotated ellipse along east and north.
+    let hx = ((a_deg * s).powi(2) + (b_deg * c).powi(2)).sqrt();
+    let hy = ((a_deg * c).powi(2) + (b_deg * s).powi(2)).sqrt();
     let step = field_deg * (1.0 - OVERLAP);
     let count = |w: f64| if w <= field_deg { 1 } else { ((w - field_deg) / step).ceil() as u32 + 1 };
     let (cols, rows) = (count(2.0 * hx), count(2.0 * hy));
@@ -104,11 +112,11 @@ pub fn plan(center: V3, a_deg: f64, b_deg: f64, pa_deg: f64, field_deg: f64) -> 
             }
         }
     }
-    if tiles.len() > MAX_TILES {
-        return Err(format!(
-            "needs {} tiles ({cols} × {rows} grid); public mosaics are limited to {MAX_TILES}",
-            tiles.len()
-        ));
+    if tiles.is_empty() {
+        tiles.push((0, 0, center));
+    }
+    if tiles.len() > max_tiles {
+        return Err(format!("needs {} tiles ({cols} × {rows} grid); the limit is {max_tiles}", tiles.len()));
     }
     Ok(Plan { cols, rows, step_deg: step, tiles })
 }
