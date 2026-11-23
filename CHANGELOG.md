@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.7.1 (2026-11-23)
+
+Faster simulation steps at large fleets and high time warp (found while
+profiling the browser build). With 10,000 satellites at 60x on one thread
+the mean step fell from 43.7 to 31.3 ms and the ~90 ms stalls are gone.
+
+- SAA look-ahead (used for handover): refreshed round-robin so each
+  satellite is recomputed every 15 s of simulated time without stalling a
+  step, and evaluated against a cached 1-degree map of the above-threshold
+  region (predicted entry times change by at most ~15 s).
+- STARE recruiting and continuous event-window scans screen with the
+  closed-form set time and refine only the leading candidates, or values
+  near a threshold, with the drift-corrected prediction.
+- The Earth's heliocentric position is computed once per instant instead
+  of twice per tracked asteroid per step.
+- Scheduling results unchanged: over 25 simulated hours at 1,000
+  satellites, 100 % of transits and 99.7 % of occultations met (0.7.0 in the
+  same run: 100 % and 100 %).
+
 ## 0.7.0 (2026-11-23)
 
 Includes 0.6.1 (passively collision-safe interferometry clusters).

@@ -1,6 +1,6 @@
 [package]
 name = "facet-sim"
-version = "0.7.0"
+version = "0.7.1"
 edition = "2021"
 rust-version = "1.79"
 description = "FACET constellation simulator: an Earth-centred planetarium with a scalable telescope shell"
