@@ -114,6 +114,8 @@ pub struct App {
     pub pd_preset: usize,
     pub pending_defence: bool,
     pub search_share: f64,
+    /// Counts queue allocations; staggers top-up scans of programme requests.
+    pub queue_round: u64,
     /// Other operators' satellites and debris: data relay, streaks, conjunctions.
     pub traffic: crate::traffic::Traffic,
     /// Programme cost model and its separate window.
@@ -244,6 +246,7 @@ impl App {
             pd_preset: 0,
             pending_defence: false,
             search_share: 0.10,
+            queue_round: 0,
             cost_model: crate::costs::Model::baseline(),
             resil: Default::default(),
             env: Default::default(),

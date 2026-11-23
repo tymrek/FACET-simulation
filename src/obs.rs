@@ -675,6 +675,10 @@ pub struct QueueItem {
     /// Geocentric distance of a Solar System target, km (0 = at infinity).
     /// Each telescope then aims from its own position, correcting parallax.
     pub range_km: f64,
+    /// Look for more telescopes this call. When false, the request keeps the
+    /// members it has and the fleet-wide scan is skipped (background science
+    /// is topped up on a stagger; see `queue_assign`).
+    pub rescan: bool,
 }
 
 /// Direction from satellite `i` (ECI position `sat_km`) to a target at
@@ -712,6 +716,8 @@ pub struct QueueResult {
     pub id: u64,
     pub assigned: usize,
     pub blocked: Option<&'static str>,
+    /// The scan was skipped this call: keep the previous blocked reason.
+    pub skipped: bool,
 }
 
 /// Slew-aware greedy allocator. Items in priority order each take up to
@@ -758,11 +764,11 @@ pub fn assign_queue(
     }
     for it in items {
         if budget == 0 || used >= budget || free == 0 {
-            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(if free == 0 { "no free telescopes" } else { pool }) });
+            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(if free == 0 { "no free telescopes" } else { pool }), skipped: false });
             continue;
         }
         if let Some(why) = sky_blocked(o, it.dir, sun, moon) {
-            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(why) });
+            out.push(QueueResult { id: it.id, assigned: 0, blocked: Some(why), skipped: false });
             continue;
         }
         let me = job(TAG_QUEUE, it.id);
@@ -797,13 +803,35 @@ pub fn assign_queue(
         got += healthy;
         let outgoing = assigned - healthy;
         if got >= it.want || used >= budget {
-            out.push(QueueResult { id: it.id, assigned, blocked: None });
+            out.push(QueueResult { id: it.id, assigned, blocked: None, skipped: false });
+            continue;
+        }
+        if !it.rescan {
+            out.push(QueueResult { id: it.id, assigned, blocked: None, skipped: true });
             continue;
         }
         // Eligibility and slew cost over the free telescopes only.
-        if pool_idx.len() > 2 * free.max(1) {
+        // Drop taken telescopes once enough have piled up (each sweep removes
+        // at least 256, so the sweeps cost O(n) in all per call).
+        if pool_idx.len() > free + 256 {
             pool_idx.retain(|&i| !taken[i]);
         }
+        // Time until telescope `i` loses the target, as a slew-cost penalty:
+        // 0 beyond 3 × lead, 1 beyond 1.5 × lead, else unusable (None).
+        // Closed form first; the exact (J2-drift) set time only where the
+        // estimate is near a threshold.
+        let keep_score = |st_ref: &ObsState, i: usize| -> Option<f64> {
+            let near = |t: f64, x: f64| (t - x).abs() < 0.2 * x;
+            let t = match loss_time_fast(st_ref, shell, i, it.dir) {
+                Some(t) if near(t, 3.0 * lead) || near(t, 1.5 * lead) => loss_time(st_ref, shell, i, it.dir),
+                t => t,
+            };
+            match t {
+                Some(t) if t > 3.0 * lead => Some(0.0),
+                Some(t) if t > 1.5 * lead => Some(1.0),
+                _ => None,
+            }
+        };
         let scan: Vec<(usize, bool, f64)> = {
             use rayon::prelude::*;
             let (taken, st_ref) = (&taken, &*st);
@@ -814,20 +842,14 @@ pub fn assign_queue(
                 let mine = st_ref.prev_job[i] == me;
                 let pt = job_tag(st_ref.prev_job[i]);
                 let busy = pt != 0 && pt != TAG_SURVEY && pt != TAG_ALLSKY && !mine;
-                // Continuous items skip telescopes about to lose the target.
+                // Continuous items: members we already hold are checked for
+                // an imminent loss of the target here; other candidates are
+                // checked after the scan, cheapest slew first (see below).
                 let mut extra = 0.0;
-                if it.continuous {
-                    // Closed form first; the exact (J2-drift) set time only
-                    // where the estimate is near a threshold.
-                    let near = |t: f64, x: f64| (t - x).abs() < 0.2 * x;
-                    let t = match loss_time_fast(st_ref, shell, i, it.dir) {
-                        Some(t) if near(t, 3.0 * lead) || near(t, 1.5 * lead) => loss_time(st_ref, shell, i, it.dir),
-                        t => t,
-                    };
-                    match t {
-                        Some(t) if t > 3.0 * lead => {}
-                        Some(t) if t > 1.5 * lead => extra = 1.0,
-                        _ => return None,
+                if it.continuous && mine {
+                    match keep_score(st_ref, i) {
+                        Some(x) => extra = x,
+                        None => return None,
                     }
                 }
                 // Mid-way through an all-sky tile: take it only if no truly idle
@@ -856,6 +878,38 @@ pub fn assign_queue(
             }
         }
         let need = it.want.saturating_sub(got).min(budget - used);
+        if it.continuous && need > 0 && !cands.is_empty() {
+            // The loss-time penalty only ever adds to the slew cost, so
+            // visit candidates in slew-cost order and stop once the next
+            // one cannot beat the `need` best found so far. Usually a few
+            // dozen loss-time evaluations instead of one per visible
+            // telescope.
+            let mut best: Vec<(f64, usize)> = Vec::with_capacity(need + 1);
+            let batch = (4 * need).max(32);
+            let mut rest = std::mem::take(&mut cands);
+            'outer: while !rest.is_empty() {
+                let mut chunk = if rest.len() > batch {
+                    rest.select_nth_unstable_by(batch - 1, |a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                    let tail = rest.split_off(batch);
+                    std::mem::replace(&mut rest, tail)
+                } else {
+                    std::mem::take(&mut rest)
+                };
+                chunk.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                for (c, i) in chunk {
+                    if best.len() >= need && c >= best[need - 1].0 {
+                        break 'outer;
+                    }
+                    if let Some(x) = keep_score(st, i) {
+                        let v = (c + x, i);
+                        let at = best.partition_point(|b| b.0 <= v.0);
+                        best.insert(at, v);
+                        best.truncate(need);
+                    }
+                }
+            }
+            cands = best;
+        }
         if need > 0 && !cands.is_empty() {
             let k = need.min(cands.len());
             if k < cands.len() {
@@ -882,14 +936,14 @@ pub fn assign_queue(
         } else {
             None
         };
-        out.push(QueueResult { id: it.id, assigned: got + outgoing, blocked });
+        out.push(QueueResult { id: it.id, assigned: got + outgoing, blocked, skipped: false });
     }
     st.protected.clear();
     st.protected.resize(n, false);
-    for it in items.iter().filter(|it| it.continuous) {
-        let me = job(TAG_QUEUE, it.id);
+    let cont: std::collections::HashSet<u64> = items.iter().filter(|it| it.continuous).map(|it| job(TAG_QUEUE, it.id)).collect();
+    if !cont.is_empty() {
         for i in 0..n {
-            if st.job[i] == me {
+            if cont.contains(&st.job[i]) {
                 st.protected[i] = true;
             }
         }
