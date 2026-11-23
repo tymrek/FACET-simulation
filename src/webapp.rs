@@ -396,7 +396,9 @@ impl App {
                 },
             ),
         ];
-        for (order, budget, steal, pool) in pools {
+        self.queue_round += 1;
+        let round = self.queue_round;
+        for (k, (order, budget, steal, pool)) in pools.into_iter().enumerate() {
         // Programme budget: what is left after public work, minus the
         // planetary-defence search reserve, which keeps surveying.
         let budget = if budget == usize::MAX {
@@ -430,7 +432,13 @@ impl App {
                 }
                 let fine = r.body.is_some() || crate::imaging::guide_star_available(r.dir, o.fov_deg, o.guide_mag);
                 let continuous = self.handover && r.sched.continuous(jd, prep);
-                QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine, continuous, range_km }
+                // Background programme requests that are not inside an event
+                // window look for more telescopes every fourth allocation
+                // (staggered by id); members they hold are kept every step.
+                // With a deep backlog this cuts the allocator's fleet scans
+                // about fourfold.
+                let rescan = k == 0 || continuous || (r.id + round) % 4 == 0;
+                QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine, continuous, range_km, rescan }
             })
             .collect();
         let ta = web_time::Instant::now();
@@ -441,6 +449,12 @@ impl App {
         for (res, &i) in results.iter().zip(&order) {
             let r = &mut sh.requests[i];
             r.assigned_now = res.assigned as u32;
+            if res.skipped {
+                if res.assigned > 0 {
+                    r.blocked = None;
+                }
+                continue;
+            }
             r.blocked = res.blocked.map(String::from);
             if res.blocked.is_none() && r.sched.win.map_or(false, |(a, _)| jd < a) {
                 r.blocked = Some("settling in before the event window".into());
