@@ -33,6 +33,7 @@ jobs:
       - name: Page
         run: |
           cp wasm/index.html wasm/favicon.ico dist/
+          if [ -f wasm/loading.gif ]; then cp wasm/loading.gif dist/; fi
           ls -la dist
           gzip -9 -k dist/facet-sim_bg.wasm && ls -la dist/*.gz && rm dist/*.gz
       - uses: actions/upload-artifact@v4

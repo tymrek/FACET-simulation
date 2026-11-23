@@ -434,11 +434,7 @@ impl App {
             })
             .collect();
         let ta = web_time::Instant::now();
-        let t_items = web_time::Instant::now();
         let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon, budget, steal, pool, &self.shell, prep);
-        if std::env::var_os("FACET_PROFILE").is_some() {
-            eprintln!("    queue: {} items, allocator {:.2} ms", items.len(), t_items.elapsed().as_secs_f64() * 1e3);
-        }
         if std::env::var_os("FACET_PROFILE").is_some() {
             eprintln!("    queue: build {:.1} ms, assign {:.1} ms ({} items)", (ta - tb).as_secs_f64() * 1e3, ta.elapsed().as_secs_f64() * 1e3, items.len());
         }
