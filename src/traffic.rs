@@ -448,8 +448,11 @@ impl Traffic {
             .collect();
         src.par_extend((0..n).into_par_iter().filter(|&k| sunlit(f.pos[k])).map(|k| (f.pos[k], Self::facet_orbit(f, k).pos(jd1), Pop::Facet)));
         // Sample integrating telescopes (round robin).
-        // Bound the work per step (~400k segment tests), at least 8 frames.
-        let want = (400_000 / src.len().max(1)).clamp(8, 64).min(n);
+        // Bound the work per step (~400k segment tests natively; a quarter of
+        // that in the browser, where it runs on the frame thread: the
+        // estimate is unbiased either way, it just converges more slowly).
+        const TESTS: usize = if cfg!(target_arch = "wasm32") { 100_000 } else { 400_000 };
+        let want = (TESTS / src.len().max(1)).clamp(if cfg!(target_arch = "wasm32") { 2 } else { 8 }, 64).min(n);
         let mut picks = Vec::with_capacity(want);
         let mut tries = 0;
         while picks.len() < want && tries < n {
