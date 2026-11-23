@@ -608,6 +608,7 @@ impl App {
         if self.handover {
             self.saa_lookahead(dt_sim);
         }
+        prof("saa_lookahead");
         self.stare_assign();
         prof("stare_assign");
         self.queue_assign();

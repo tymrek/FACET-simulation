@@ -697,6 +697,16 @@ fn loss_time(st: &ObsState, shell: &crate::constellation::Shell, i: usize, dir: 
     shell.time_to_set(i, dir, st.cos_lim).map(|t| t.min(saa))
 }
 
+/// `loss_time` with the closed-form (frozen-node) set time, no Newton
+/// refinement: cheap enough to screen the whole fleet.
+fn loss_time_fast(st: &ObsState, shell: &crate::constellation::Shell, i: usize, dir: V3) -> Option<f64> {
+    let saa = st.saa_eta.get(i).copied().unwrap_or(f64::INFINITY);
+    if saa <= 0.0 {
+        return None;
+    }
+    shell.time_to_set_frozen(i, dir, st.cos_lim).map(|t| t.min(saa))
+}
+
 pub struct QueueResult {
     #[allow(dead_code)]
     pub id: u64,
@@ -807,7 +817,14 @@ pub fn assign_queue(
                 // Continuous items skip telescopes about to lose the target.
                 let mut extra = 0.0;
                 if it.continuous {
-                    match loss_time(st_ref, shell, i, it.dir) {
+                    // Closed form first; the exact (J2-drift) set time only
+                    // where the estimate is near a threshold.
+                    let near = |t: f64, x: f64| (t - x).abs() < 0.2 * x;
+                    let t = match loss_time_fast(st_ref, shell, i, it.dir) {
+                        Some(t) if near(t, 3.0 * lead) || near(t, 1.5 * lead) => loss_time(st_ref, shell, i, it.dir),
+                        t => t,
+                    };
+                    match t {
                         Some(t) if t > 3.0 * lead => {}
                         Some(t) if t > 1.5 * lead => extra = 1.0,
                         _ => return None,
@@ -970,9 +987,11 @@ pub fn assign_stare(
                         if job_tag(pj) == TAG_STARE && pj != me {
                             return None; // another campaign's eye
                         }
-                        let tts = loss_time(st_ref, shell, i, it.dir)?;
+                        // Screen with the closed form; the best few are
+                        // refined below.
+                        let tts = loss_time_fast(st_ref, shell, i, it.dir)?;
                         let rt = ag.repoint_time(st_ref.att[i].dir.angle(it.dir));
-                        if tts <= rt + dwell {
+                        if tts <= 0.8 * (rt + dwell) {
                             return None;
                         }
                         // Leave telescopes alone that are mid-way through an
@@ -983,6 +1002,18 @@ pub fn assign_stare(
                     })
                     .collect()
             };
+            cands.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            // Refine the leading candidates with the exact set time (J2
+            // drift), then re-rank: the same choice at a fraction of the cost.
+            cands.truncate((3 * need).max(need + 8));
+            let mut cands: Vec<(bool, bool, f64, usize)> = cands
+                .into_iter()
+                .filter_map(|(p, late, _, i)| {
+                    let tts = loss_time(st, shell, i, it.dir)?;
+                    let rt = ag.repoint_time(st.att[i].dir.angle(it.dir));
+                    (tts > rt + dwell).then_some((p, late, -tts.min(1e7), i))
+                })
+                .collect();
             cands.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             for &(_, _, _, i) in cands.iter().take(need) {
                 take(st, &mut taken, i);

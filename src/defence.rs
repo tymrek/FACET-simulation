@@ -91,8 +91,20 @@ pub fn propagate(r0: V3, v0: V3, dt: f64) -> (V3, V3) {
 
 /// Earth's heliocentric J2000 equatorial position, AU.
 pub fn earth_pos(jd: f64) -> V3 {
+    // Many callers ask for the same few instants in one step (every tracked
+    // asteroid needs the Earth at now and now + 60 s): remember the last few.
+    thread_local!(static CACHE: std::cell::RefCell<[(f64, V3); 4]> = const { std::cell::RefCell::new([(f64::NAN, V3::new(0.0, 0.0, 0.0)); 4]) });
+    if let Some(v) = CACHE.with(|c| c.borrow().iter().find(|e| e.0 == jd).map(|e| e.1)) {
+        return v;
+    }
     let s = astro::bodies(jd)[0];
-    s.dir * (-s.dist_km / AU_KM)
+    let v = s.dir * (-s.dist_km / AU_KM);
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        c.rotate_right(1);
+        c[0] = (jd, v);
+    });
+    v
 }
 fn earth_state(jd: f64) -> (V3, V3) {
     let h = 0.01;
