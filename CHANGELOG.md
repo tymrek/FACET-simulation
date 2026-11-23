@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 (2026-11-23)
+
+Includes 0.6.1 (passively collision-safe interferometry clusters).
 
 - Moving targets: known near-Earth asteroids are tracked as they move, by
   name in public requests, STARE campaigns, desktop search, and the science
