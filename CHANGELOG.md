@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.2 (2026-11-23)
+
+Queue allocator stays fast as the science-programme backlog fills. At
+10,000 satellites and 600x the backlog reaches its 5,000-request cap within
+minutes of wall time, about 1,000 of them inside open event windows. On one
+thread the allocator grew from 36 to 150 ms per call and the whole tick
+from ~330 to ~450 ms; it now stays flat at ~200-220 ms.
+
+- Event-window (continuous) requests evaluate the loss-of-target time
+  lazily, in slew-cost order, stopping once no remaining candidate can beat
+  the best found. The penalty only adds cost, so the choice is unchanged.
+- Background programme requests outside a window look for extra
+  telescopes every fourth allocation, staggered by request id; telescopes
+  they already hold are kept every step.
+- Cheaper bookkeeping: taken telescopes are swept from the pool once 256
+  have piled up, and the protected set is built in one pass.
+- Scheduling results unchanged: over 25 simulated hours at 10,000
+  satellites, transits 19,872 of 19,878 and occultations 3,118 of 3,118
+  met (before: 21,182 of 21,186 and 3,319 of 3,319); at 1,000, transits
+  1,794 of 1,794 and occultations 279 of 280.
+
 ## 0.7.1 (2026-11-23)
 
 Faster simulation steps at large fleets and high time warp (found while
