@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use tiny_http::{Header, Method, Request, Response, Server};
 
 const CONTROL_HTML: &str = include_str!("../web/control.html");
@@ -608,6 +609,7 @@ pub fn arm_presets(sh: &mut Shared, eyes: u32) {
 }
 
 /// Serve `/api/campaign/{id}[/full.png|/crop.png]`: the latest STARE frame.
+#[cfg(not(target_arch = "wasm32"))]
 fn handle_campaign(shared: SharedRef, req: Request, path: String) {
     let rest = path.trim_start_matches("/api/campaign/");
     let (id_s, part) = rest.split_once('/').unwrap_or((rest, ""));
@@ -749,6 +751,7 @@ fn render_cached(
     o
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn send_output(req: Request, out: &crate::imaging::Output, part: &str) {
     match part {
         "" => json(req, 200, out.report.clone()),
@@ -760,6 +763,7 @@ fn send_output(req: Request, out: &crate::imaging::Output, part: &str) {
 }
 
 /// Serve `/api/result/{id}[/full.png|/crop.png]`. Runs on its own thread.
+#[cfg(not(target_arch = "wasm32"))]
 fn handle_result(shared: SharedRef, req: Request, path: String) {
     let rest = path.trim_start_matches("/api/result/");
     let (id_s, part) = rest.split_once('/').unwrap_or((rest, ""));
@@ -786,6 +790,7 @@ fn handle_result(shared: SharedRef, req: Request, path: String) {
 /// Serve `/api/mosaic/{group}[/full.png|/crop.png]`: the stitched overview of
 /// a mosaic, rendered over the whole footprint at the depth of its shallowest
 /// tile, with cells that were not observed greyed out.
+#[cfg(not(target_arch = "wasm32"))]
 fn handle_mosaic(shared: SharedRef, req: Request, path: String) {
     let rest = path.trim_start_matches("/api/mosaic/");
     let (id_s, part) = rest.split_once('/').unwrap_or((rest, ""));
@@ -879,6 +884,7 @@ fn handle_mosaic(shared: SharedRef, req: Request, path: String) {
     send_output(req, &out, part)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn send_bytes(req: Request, ctype: &str, body: Vec<u8>) {
     let resp = Response::from_data(body)
         .with_header(header("Content-Type", ctype))
@@ -898,6 +904,13 @@ impl Shared {
     }
 }
 
+fn process_id() -> u32 {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::process::id();
+    #[cfg(target_arch = "wasm32")]
+    0
+}
+
 pub fn random_token() -> String {
     let mut buf = [0u8; 16];
     let ok = std::fs::File::open("/dev/urandom")
@@ -905,20 +918,22 @@ pub fn random_token() -> String {
         .is_ok();
     if !ok {
         // Fallback: not cryptographic, but never empty.
-        let t = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let t = web_time::SystemTime::now()
+            .duration_since(web_time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0)
-            ^ (std::process::id() as u128) << 64;
+            ^ (process_id() as u128) << 64;
         buf.copy_from_slice(&t.to_le_bytes());
     }
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn header(k: &str, v: &str) -> Header {
     Header::from_bytes(k.as_bytes(), v.as_bytes()).expect("static header")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn send(req: Request, code: u16, ctype: &str, body: String) {
     let resp = Response::from_string(body)
         .with_status_code(code)
@@ -933,14 +948,17 @@ fn send(req: Request, code: u16, ctype: &str, body: String) {
     let _ = req.respond(resp);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn json(req: Request, code: u16, v: serde_json::Value) {
     send(req, code, "application/json", v.to_string());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn err(req: Request, code: u16, msg: &str) {
     json(req, code, serde_json::json!({ "error": msg }));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_body(req: &mut Request) -> Option<String> {
     if req.body_length().map_or(false, |l| l as u64 > MAX_BODY) {
         return None;
@@ -969,6 +987,7 @@ fn ct_eq(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn authorised(req: &Request, token: &str) -> bool {
     let from_header = req
         .headers()
@@ -988,6 +1007,7 @@ fn clean(s: &str, max: usize) -> String {
         .to_string()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn static_route(path: &str, director: bool) -> Option<(&'static str, &'static str)> {
     match path {
         "/skymap.js" => Some(("application/javascript; charset=utf-8", SKYMAP_JS)),
@@ -1078,6 +1098,7 @@ struct Submit {
     mosaic: Option<bool>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn handle_submit(shared: &SharedRef, mut req: Request) {
     let ip = req.remote_addr().map(|a| a.ip().to_string()).unwrap_or_default();
     let Some(body) = read_body(&mut req) else {
@@ -1305,6 +1326,7 @@ fn apply_one(sh: &mut Shared, id: u64, action: &str, priority: Option<i32>, tele
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn control_loop(server: Server, shared: SharedRef) {
     for mut req in server.incoming_requests() {
         let path = path_of(req.url()).to_string();
@@ -1470,6 +1492,7 @@ fn control_loop(server: Server, shared: SharedRef) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn public_loop(server: Server, shared: SharedRef) {
     for req in server.incoming_requests() {
         let path = path_of(req.url()).to_string();
@@ -1512,6 +1535,7 @@ fn public_loop(server: Server, shared: SharedRef) {
 
 /// Start both listeners. Failures (port in use, …) are recorded in `errors`
 /// and shown in the app rather than aborting the simulator.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn start(shared: &SharedRef, control_addr: Option<&str>, public_addr: Option<&str>) {
     let token = shared.lock().unwrap().token.clone();
     if let Some(addr) = control_addr {
@@ -1547,9 +1571,14 @@ pub fn start(shared: &SharedRef, control_addr: Option<&str>, public_addr: Option
 }
 
 /// 0.0.0.0 isn't browsable; show localhost for a wildcard bind.
+#[cfg(not(target_arch = "wasm32"))]
 fn display_addr(addr: &str) -> String {
     addr.replace("0.0.0.0", "localhost").replace("[::]", "localhost")
 }
+
+/// In the browser there are no HTTP servers (see WASM.md).
+#[cfg(target_arch = "wasm32")]
+pub fn start(_shared: &SharedRef, _control_addr: Option<&str>, _public_addr: Option<&str>) {}
 
 #[cfg(test)]
 mod tests {

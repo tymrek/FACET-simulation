@@ -1473,7 +1473,7 @@ mod gallery {
             let spec = Spec { id: 7, target_name: name.into(), dir, body, jd, total_s: total, required_s: total,
                               telescopes: n, exposure_s: exp, hw: Hardware::from_obs(&ObsParams::default()), done: true,
                               fine_frac: 1.0, response_s: None, full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None, mover: None };
-            let t = std::time::Instant::now();
+            let t = web_time::Instant::now();
             let out = render(&spec);
             std::fs::write(format!("/tmp/g_{name}_full.png"), &out.full_png).unwrap();
             std::fs::write(format!("/tmp/g_{name}_crop.png"), &out.crop_png).unwrap();
@@ -1516,7 +1516,7 @@ mod deepsky_render {
                 telescopes: 100, exposure_s: 600.0, hw: hw.clone(), done: true, fine_frac: 1.0, response_s: None,
                 full_lock_s: None, slews: 0, mean_slew_deg: 0.0, agility: None, mover: None,
             };
-            let t = std::time::Instant::now();
+            let t = web_time::Instant::now();
             let out = render(&spec);
             std::fs::write(format!("/tmp/dso-{q}-full.png"), &out.full_png).unwrap();
             std::fs::write(format!("/tmp/dso-{q}-crop.png"), &out.crop_png).unwrap();

@@ -308,6 +308,14 @@ pub fn fleet_spread(o: &crate::obs::ObsParams) -> Option<FleetSpread> {
     if !g.2 {
         g.2 = true;
         let (ws, ts, jit) = (o.wfe_spread, o.throughput_spread, hw.jitter_arcsec);
+        // The browser has no threads: a smaller sample, computed now.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let r = fleet_spread_sample(&hw, ws, ts, jit, 16);
+            *g = (key, Some(r), false);
+            return g.1.clone();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         std::thread::Builder::new()
             .name("facet-fleet-optics".into())
             .spawn(move || {

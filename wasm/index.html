@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FACET simulator</title>
+<link rel="icon" href="favicon.ico">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0b0f17; color: #c9d4e3; font: 14px system-ui, sans-serif; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  #loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  #loading small { opacity: .6; }
+</style>
+</head>
+<body>
+<canvas id="facet_canvas"></canvas>
+<div id="loading">
+  <div>Loading the FACET simulator…</div>
+  <small>About 6 MB. Options in the address: ?n=10000&amp;mode=allsky&amp;twins</small>
+</div>
+<script type="module">
+  import init from "./facet-sim.js";
+  init().then(() => document.getElementById("loading").remove())
+        .catch(e => { document.getElementById("loading").textContent = "Could not start: " + e; console.error(e); });
+</script>
+</body>
+</html>

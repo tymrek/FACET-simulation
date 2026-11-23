@@ -39,6 +39,7 @@ mod tle;
 mod traffic;
 mod views;
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -53,4 +54,18 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| Box::new(app::Gui::new(cc))),
     )
+}
+
+/// Browser entry point: draws into the page's `<canvas id="facet_canvas">`.
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    console_error_panic_hook::set_once();
+    wasm_bindgen_futures::spawn_local(async {
+        let r = eframe::WebRunner::new()
+            .start("facet_canvas", eframe::WebOptions::default(), Box::new(|cc| Box::new(app::Gui::new(cc))))
+            .await;
+        if let Err(e) = r {
+            web_sys::console::error_1(&e);
+        }
+    });
 }

@@ -404,11 +404,11 @@ impl Traffic {
         }
         self.elapsed_s += f.dt_s;
         let prof = std::env::var_os("FACET_PROFILE").is_some();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         self.streak_sample(f);
-        let t1 = std::time::Instant::now();
+        let t1 = web_time::Instant::now();
         self.screen(f);
-        let t2 = std::time::Instant::now();
+        let t2 = web_time::Instant::now();
         self.age_notices(f.jd);
         if prof {
             eprintln!("    traffic: streaks {:.1} ms, screening {:.1} ms", (t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3);
@@ -535,7 +535,7 @@ impl Traffic {
         let cands: Vec<usize> = (0..self.objs.len())
             .filter(|&j| (self.objs[j].orbit.a - (EARTH_RADIUS_KM + f.alt_km)).abs() < 5.0)
             .collect();
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let mut found: Vec<(usize, usize, f64, f64)> = Vec::new();
         while self.screen_credit >= 1.0 && t0.elapsed().as_secs_f64() < 0.012 {
             let todo = (self.screen_credit.floor() as usize).min(8 * rayon::current_num_threads());
@@ -834,7 +834,7 @@ impl Traffic {
             return;
         }
         self.last_dtg_jd = jd;
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let _g = Defer(t0);
         let ns = self.cfg.stations.min(STATIONS.len());
         let a = EARTH_RADIUS_KM + alt_km;
@@ -1035,7 +1035,7 @@ mod tests {
     }
 }
 
-struct Defer(std::time::Instant);
+struct Defer(web_time::Instant);
 impl Drop for Defer {
     fn drop(&mut self) {
         if std::env::var_os("FACET_PROFILE").is_some() {

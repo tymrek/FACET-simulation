@@ -24,8 +24,8 @@ pub fn jd_from_unix(secs: f64) -> f64 {
 }
 
 pub fn jd_now() -> f64 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let secs = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0);
     jd_from_unix(secs)

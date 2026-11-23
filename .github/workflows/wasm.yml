@@ -1,0 +1,42 @@
+name: WASM
+
+# Builds the browser version on the wasm branch and keeps it as a
+# downloadable artifact (Actions → this run → Artifacts → facet-sim-web).
+on:
+  push:
+    branches: [wasm]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (wasm32, no audio)
+        run: cargo build --release --locked --target wasm32-unknown-unknown --no-default-features
+      - name: wasm-bindgen (same version as Cargo.lock)
+        run: |
+          V=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/version = "\(.*\)"/\1/p')
+          cargo install wasm-bindgen-cli --version "$V" --locked
+          wasm-bindgen --target web --no-typescript --out-dir dist target/wasm32-unknown-unknown/release/facet-sim.wasm
+      - name: Optimise size (wasm-opt)
+        run: |
+          sudo apt-get update && sudo apt-get install -y binaryen
+          wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals dist/facet-sim_bg.wasm -o dist/facet-sim_bg.wasm
+      - name: Page
+        run: |
+          cp wasm/index.html wasm/favicon.ico dist/
+          ls -la dist
+          gzip -9 -k dist/facet-sim_bg.wasm && ls -la dist/*.gz && rm dist/*.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: facet-sim-web
+          path: dist
+          retention-days: 30

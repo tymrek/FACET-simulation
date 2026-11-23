@@ -1289,7 +1289,7 @@ mod stare_tests {
     #[ignore]
     fn stare_24h_report() {
         for (n, eyes) in [(1000usize, 10usize), (1000, 50), (100, 10)] {
-            let t = std::time::Instant::now();
+            let t = web_time::Instant::now();
             let cov = fly(n, eyes, 24.0, 2.0);
             println!("\n== {n} satellites, {eyes} eyes per target, 24 h from 2026-11-15 ({:.0} s CPU)", t.elapsed().as_secs_f64());
             println!("{:8} {:>9} {:>11} {:>11} {:>9} {:>9}", "target", "excluded", "full-k %", "≥1 eye %", "max gap", "handovers/h");

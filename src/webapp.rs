@@ -9,7 +9,7 @@ use crate::server::{self, Command, ReqState, Resolved, Shared};
 use egui::RichText;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use web_time::Instant;
 
 fn r1(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
@@ -407,7 +407,7 @@ impl App {
             budget
         };
         let pool = if budget == 0 && pool.starts_with("waiting: every") { "waiting: fleet fully booked (search reserve held back)" } else { pool };
-        let tb = std::time::Instant::now();
+        let tb = web_time::Instant::now();
         let o = &self.obs_params;
         let items: Vec<QueueItem> = order
             .iter()
@@ -433,7 +433,7 @@ impl App {
                 QueueItem { id: r.id, dir: r.dir, want: r.telescopes as usize, fine, continuous, range_km }
             })
             .collect();
-        let ta = std::time::Instant::now();
+        let ta = web_time::Instant::now();
         let results = obs::assign_queue(&mut self.obs, &self.obs_params, &items, sun, moon, budget, steal, pool, &self.shell, prep);
         if std::env::var_os("FACET_PROFILE").is_some() {
             eprintln!("    queue: build {:.1} ms, assign {:.1} ms ({} items)", (ta - tb).as_secs_f64() * 1e3, ta.elapsed().as_secs_f64() * 1e3, items.len());

@@ -6,7 +6,7 @@ use crate::constellation::{Shell, ShellParams};
 use crate::math::{deg, rad, V3};
 use crate::obs::{self, Mode, ObsParams, ObsState};
 use egui::{Color32, RichText};
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Clone, Debug)]
 pub enum Target {
@@ -274,7 +274,7 @@ impl App {
             science: crate::programme::Science::default(),
             pending_stares: Vec::new(),
         };
-        app.apply_args(std::env::args().skip(1).collect());
+        app.apply_args(launch_args());
         app.start_web();
         if let Some(web) = app.web.clone() {
             let mut sh = web.lock().unwrap();
@@ -1204,6 +1204,28 @@ impl App {
     }
 }
 
+/// Launch options: the command line natively; in the browser the page URL's
+/// query string, so `?n=10000&mode=allsky&twins` means
+/// `--n 10000 --mode allsky --twins`.
+fn launch_args() -> Vec<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    return std::env::args().skip(1).collect();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let mut out = Vec::new();
+        let search = web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default();
+        for pair in search.trim_start_matches('?').split('&').filter(|p| !p.is_empty()) {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            let dec = |x: &str| x.replace('+', " ").replace("%20", " ").replace("%2C", ",").replace("%3A", ":");
+            out.push(format!("--{}", dec(k)));
+            if !v.is_empty() {
+                out.push(dec(v));
+            }
+        }
+        out
+    }
+}
+
 /// eframe front end: the simulation lives on its own thread behind a mutex;
 /// the window locks it briefly to draw and to apply control changes.
 pub struct Gui {
@@ -1218,7 +1240,12 @@ impl Gui {
         use std::sync::{atomic::AtomicBool, Arc, Mutex};
         let core = Arc::new(Mutex::new(App::new(cc)));
         let stop = Arc::new(AtomicBool::new(false));
+        // The browser has one thread: the simulation steps in update().
+        #[cfg(target_arch = "wasm32")]
+        return Gui { presenter: crate::present::Presenter::new(), core, stop, worker: None };
+        #[cfg(not(target_arch = "wasm32"))]
         let (c2, s2) = (core.clone(), stop.clone());
+        #[cfg(not(target_arch = "wasm32"))]
         let worker = std::thread::Builder::new()
             .name("facet-sim".into())
             .spawn(move || {
@@ -1232,6 +1259,7 @@ impl Gui {
                 }
             })
             .expect("spawn simulation thread");
+        #[cfg(not(target_arch = "wasm32"))]
         Gui { presenter: crate::present::Presenter::new(), core, stop, worker: Some(worker) }
     }
 }
@@ -1239,6 +1267,11 @@ impl Gui {
 impl eframe::App for Gui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let mut app = self.core.lock().unwrap();
+        #[cfg(target_arch = "wasm32")]
+        {
+            app.tick();
+            ctx.request_repaint();
+        }
         let p = &mut self.presenter;
         if std::mem::take(&mut app.present_open) {
             p.reload();

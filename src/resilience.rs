@@ -12,7 +12,7 @@ use crate::app::App;
 use egui::RichText;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Default)]
 pub struct Resilience {
@@ -297,10 +297,15 @@ impl App {
         let hw = crate::imaging::Hardware::from_obs(&self.obs_params);
         let slot = Arc::new(Mutex::new(None));
         let out = slot.clone();
-        std::thread::spawn(move || {
+        let job = move || {
             let c = crate::ground::compare(jd, &targets, n, duty, sky, excl, med, &hw);
             *out.lock().unwrap() = Some(c);
-        });
+        };
+        // The browser has no threads: run it now.
+        #[cfg(target_arch = "wasm32")]
+        job();
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(job);
         self.resil.ground_job = Some(slot);
     }
 

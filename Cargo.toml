@@ -7,15 +7,28 @@ description = "FACET constellation simulator: an Earth-centred planetarium with 
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow"] }
 egui = "0.27"
-tiny_http = "0.12"
+# Instant/SystemTime that also work in the browser (re-exports std natively).
+web-time = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 png = "0.17"
 rustfft = "6"
 rayon = "1"
 rodio = { version = "0.21", optional = true }
+
+# Native only: window backends and the HTTP servers.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { version = "0.27", default-features = false, features = ["x11", "wayland"] }
+tiny_http = "0.12"
+
+# Browser build (see WASM.md).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Location", "HtmlCanvasElement", "Element", "Storage", "console"] }
+console_error_panic_hook = "0.1"
 
 [profile.release]
 opt-level = 3

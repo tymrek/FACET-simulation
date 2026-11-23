@@ -19,7 +19,7 @@ use crate::math::V3;
 use egui::{Align2, Color32, FontId, RichText};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use web_time::Instant;
 
 pub const DIR: &str = "presentations";
 
