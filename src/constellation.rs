@@ -269,6 +269,12 @@ impl Shell {
         Some(tau.max(0.0))
     }
 
+    /// (node rate, argument-of-latitude rate, cos i, sin i): for callers that
+    /// advance many satellites by the same time steps themselves.
+    pub fn rates(&self) -> (f64, f64, f64, f64) {
+        (self.raan_dot, self.u_dot, self.cos_i, self.sin_i)
+    }
+
     /// Radial unit vector of satellite i, `tau` seconds after the current
     /// propagation epoch (node and argument of latitude both advanced).
     pub fn rhat_after(&self, i: usize, tau: f64) -> V3 {

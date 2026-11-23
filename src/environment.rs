@@ -384,7 +384,9 @@ pub struct Environment {
     /// Satellite inside the SAA contour this step.
     pub in_saa: Vec<bool>,
     pub n_in_saa: usize,
-    pub saa_eta_age: f64,
+    pub saa_cursor: usize,
+    /// Cached above-threshold SAA map on a 1° grid: key (alt, year, threshold).
+    pub saa_mask: Option<((i64, i64, i64), Vec<bool>)>,
     /// Dark-sky-equivalent efficiency of the current exposure (1 = no Earthshine).
     pub shine: Vec<f32>,
     pub n_shine: usize,
@@ -599,40 +601,87 @@ impl App {
             self.obs.saa_eta.clear();
             return;
         }
-        if self.obs.saa_eta.len() == n && self.env.saa_eta_age < 15.0 {
-            self.env.saa_eta_age += dt;
+        // Count every forecast down; refresh a round-robin slice so each
+        // satellite is recomputed every SAA_REFRESH_S of simulated time —
+        // spread over the steps instead of all at once (which stalled a
+        // frame for ~90 ms at 10,000 satellites).
+        const SAA_REFRESH_S: f64 = 15.0;
+        let fresh = self.obs.saa_eta.len() != n;
+        if fresh {
+            self.obs.saa_eta = vec![f64::INFINITY; n];
+            self.env.saa_cursor = 0;
+        } else {
             for t in self.obs.saa_eta.iter_mut() {
                 if t.is_finite() {
                     *t = (*t - dt).max(0.0);
                 }
             }
-            return;
         }
-        self.env.saa_eta_age = 0.0;
+        let k = if fresh { n } else { ((n as f64 * dt / SAA_REFRESH_S).ceil() as usize).clamp(1, n) };
         let year = year_of(self.jd);
         let thr = self.env.cfg.saa_threshold;
-        let r = self.shell.params.alt_km + EARTH_RADIUS_KM;
+        let alt = self.shell.params.alt_km;
+        // Where the flux exceeds the threshold, on a 1° grid (lat −90…90 ×
+        // lon −180…180), rebuilt only when altitude, year or threshold change.
+        let key = ((alt * 10.0).round() as i64, (year * 10.0).floor() as i64, (thr * 1e6).round() as i64);
+        if self.env.saa_mask.as_ref().map_or(true, |m| m.0 != key) {
+            let mut m = vec![false; 181 * 360];
+            for la in 0..181 {
+                for lo in 0..360 {
+                    m[la * 360 + lo] = saa_flux(la as f64 - 90.0, lo as f64 - 180.0 + 0.5, alt, year) > thr;
+                }
+            }
+            self.env.saa_mask = Some((key, m));
+        }
+        let mask = &self.env.saa_mask.as_ref().unwrap().1;
         let jd = self.jd;
         let shell = &self.shell;
-        use rayon::prelude::*;
-        self.obs.saa_eta = (0..n)
-            .into_par_iter()
-            .map(|i| {
-                if self.env.in_saa.get(i).copied().unwrap_or(false) {
-                    return 0.0;
-                }
-                let mut tau = 30.0;
-                while tau <= 1800.0 {
-                    let p = shell.rhat_after(i, tau) * r;
-                    let (lat, lon) = latlon(p, crate::astro::gmst(jd + tau / 86_400.0));
-                    if saa_flux(lat, lon, self.shell.params.alt_km, year) > thr {
-                        return tau - 15.0;
-                    }
-                    tau += 30.0;
-                }
-                f64::INFINITY
+        let start = self.env.saa_cursor % n.max(1);
+        let idx: Vec<usize> = (0..k).map(|j| (start + j) % n).collect();
+        self.env.saa_cursor = (start + k) % n.max(1);
+        // Per look-ahead step: Earth rotation and the orbit-angle increments,
+        // shared by every satellite.
+        let (wd, ud, ci, si) = shell.rates();
+        let steps: Vec<(f64, f64, f64, f64, f64, f64, f64)> = (1..=60)
+            .map(|s| {
+                let tau = 30.0 * s as f64;
+                let (sg, cg) = crate::astro::gmst(jd + tau / 86_400.0).sin_cos();
+                let (sdw, cdw) = (wd * tau).sin_cos();
+                let (sdu, cdu) = (ud * tau).sin_cos();
+                (tau, sg, cg, sdw, cdw, sdu, cdu)
             })
             .collect();
+        use rayon::prelude::*;
+        let in_saa = &self.env.in_saa;
+        let upd: Vec<(usize, f64)> = idx
+            .par_iter()
+            .map(|&i| {
+                if in_saa.get(i).copied().unwrap_or(false) {
+                    return (i, 0.0);
+                }
+                let (so0, co0) = shell.raan_now[i].sin_cos();
+                let (su0, cu0) = shell.u_now[i].sin_cos();
+                for &(tau, sg, cg, sdw, cdw, sdu, cdu) in &steps {
+                    // Angle addition instead of fresh trig (as rhat_after).
+                    let (so, co) = (so0 * cdw + co0 * sdw, co0 * cdw - so0 * sdw);
+                    let (su, cu) = (su0 * cdu + cu0 * sdu, cu0 * cdu - su0 * sdu);
+                    let (x, y, z) = (cu * co - su * ci * so, cu * so + su * ci * co, su * si);
+                    // To Earth-fixed (rotate by −GMST), then the grid cell.
+                    let (xe, ye) = (x * cg + y * sg, -x * sg + y * cg);
+                    let lat = z.clamp(-1.0, 1.0).asin().to_degrees();
+                    let lon = ye.atan2(xe).to_degrees();
+                    let la = (lat + 90.0).round().clamp(0.0, 180.0) as usize;
+                    let lo = ((lon + 180.0).floor() as usize).min(359);
+                    if mask[la * 360 + lo] {
+                        return (i, tau - 15.0);
+                    }
+                }
+                (i, f64::INFINITY)
+            })
+            .collect();
+        for (i, t) in upd {
+            self.obs.saa_eta[i] = t;
+        }
     }
 }
 
