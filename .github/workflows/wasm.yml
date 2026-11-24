@@ -32,7 +32,7 @@ jobs:
           wasm-opt -O2 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals dist/facet-sim_bg.wasm -o dist/facet-sim_bg.wasm
       - name: Page
         run: |
-          cp wasm/index.html wasm/favicon.ico dist/
+          cp wasm/index.html wasm/favicon.ico wasm/og-image.png dist/
           ls -la dist
           gzip -9 -k dist/facet-sim_bg.wasm && ls -la dist/*.gz && rm dist/*.gz
       - uses: actions/upload-artifact@v4
