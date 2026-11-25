@@ -7,7 +7,7 @@ description = "FACET constellation simulator: an Earth-centred planetarium with 
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow"] }
 egui = "0.27"
 tiny_http = "0.12"
 serde = { version = "1", features = ["derive"] }
@@ -16,6 +16,18 @@ png = "0.17"
 rustfft = "6"
 rayon = "1"
 rodio = { version = "0.21", optional = true }
+
+# Linux display servers; Windows and macOS need no extra features.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.27", default-features = false, features = ["x11", "wayland"] }
+
+# Windows: reattach to the launching terminal's console (see main.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+
+# Windows: icon and version information in the .exe (build.rs).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = 3

@@ -17,4 +17,20 @@ fn main() {
     println!("cargo:rustc-env=FACET_GIT={}{}", hash, if dirty { "+" } else { "" });
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/index");
+    #[cfg(windows)]
+    windows_resources();
+}
+
+/// Icon and version information shown in Explorer and the .exe properties.
+#[cfg(windows)]
+fn windows_resources() {
+    println!("cargo:rerun-if-changed=assets/icon/facet.ico");
+    let mut res = winresource::WindowsResource::new();
+    res.set_icon("assets/icon/facet.ico")
+        .set("ProductName", "FACET simulator")
+        .set("FileDescription", "FACET simulator")
+        .set("LegalCopyright", "James T. Jordan; MIT OR Apache-2.0");
+    if let Err(e) = res.compile() {
+        println!("cargo:warning=Windows resources not embedded: {e}");
+    }
 }

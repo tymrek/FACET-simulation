@@ -1,0 +1,66 @@
+name: Windows
+
+on:
+  push:
+    branches: [windows, main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (default features, with audio)
+        run: cargo build --release --locked
+      - name: Tests
+        run: cargo test --release --locked
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/facet-sim.exe dist/
+          Copy-Item windows/README.txt dist/
+          Copy-Item CHANGELOG.md dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: facet-sim-windows
+          path: dist/
+      # The runner has no GPU OpenGL, so run the smoke test on Mesa's
+      # software renderer (llvmpipe) placed beside a copy of the .exe. The
+      # uploaded build above does not include it.
+      - name: Smoke test (software OpenGL)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          New-Item -ItemType Directory smoke | Out-Null
+          gh release download --repo pal1000/mesa-dist-win --pattern "mesa3d-*-release-msvc.7z" --dir smoke
+          7z x -osmoke/mesa (Get-ChildItem smoke/*.7z).FullName | Out-Null
+          Copy-Item smoke/mesa/x64/*.dll smoke/
+          Copy-Item target/release/facet-sim.exe smoke/
+          $p = Start-Process -FilePath smoke/facet-sim.exe -WorkingDirectory smoke -PassThru `
+                 -RedirectStandardError smoke/stderr.txt -RedirectStandardOutput smoke/stdout.txt
+          $ok = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep 2
+            if ($p.HasExited) { break }
+            try { $s = Invoke-RestMethod http://127.0.0.1:8781/api/status -TimeoutSec 5; $ok = $true; break } catch {}
+          }
+          if ($ok) {
+            Write-Host "Public page up: build $($s.build)"
+            Start-Sleep 20
+            $s2 = Invoke-RestMethod http://127.0.0.1:8781/api/status -TimeoutSec 5
+            Write-Host "After 20 s: $($s2 | ConvertTo-Json -Compress -Depth 2)"
+            $c = Invoke-WebRequest http://127.0.0.1:8780/ -UseBasicParsing -TimeoutSec 5
+            Write-Host "Control page: HTTP $($c.StatusCode), $($c.Content.Length) bytes"
+          }
+          $alive = -not $p.HasExited
+          if ($alive) { Stop-Process -Id $p.Id -Force }
+          Get-Content smoke/stderr.txt -Tail 40 -ErrorAction SilentlyContinue
+          if (-not $ok -or -not $alive) { throw "facet-sim did not come up (or exited) on Windows" }
