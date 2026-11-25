@@ -11,6 +11,8 @@ env:
 jobs:
   windows:
     runs-on: windows-latest
+    permissions:
+      contents: write   # the "windows-test" pre-release below
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -75,3 +77,24 @@ jobs:
           if ($alive) { Stop-Process -Id $p.Id -Force }
           Get-Content smoke/stderr.txt -Tail 40 -ErrorAction SilentlyContinue
           if (-not $ok -or -not $alive) { throw "facet-sim did not come up (or exited) on Windows" }
+      # Test builds from the windows branch go to one rolling pre-release, so
+      # testers can download without a GitHub account:
+      # https://github.com/tymrek/FACET-simulation/releases/tag/windows-test
+      - name: Publish the "Windows test build" pre-release
+        if: github.ref == 'refs/heads/windows'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path dist/* -DestinationPath facet-sim-windows.zip
+          $sha = "${{ github.sha }}".Substring(0, 7)
+          $notes = @"
+          Test build of the FACET simulator for Windows (64-bit), from the windows branch at $sha.
+          Not a release. Replaced by each new test build.
+
+          Download facet-sim-windows.zip below (facet-sim.exe plus README.txt with first-run steps and a test checklist), or facet-sim.exe on its own.
+          "@
+          gh release delete windows-test --cleanup-tag --yes 2>$null
+          gh release create windows-test --prerelease --target "${{ github.sha }}" `
+            --title "Windows test build ($sha)" --notes $notes `
+            facet-sim-windows.zip dist/facet-sim.exe
