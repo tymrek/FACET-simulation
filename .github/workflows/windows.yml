@@ -50,7 +50,8 @@ jobs:
           for ($i = 0; $i -lt 90; $i++) {
             Start-Sleep 2
             if ($p.HasExited) { break }
-            try { $s = Invoke-RestMethod http://127.0.0.1:8781/api/status -TimeoutSec 5; $ok = $true; break } catch {}
+            try { $s = Invoke-RestMethod http://127.0.0.1:8781/api/status -TimeoutSec 5 } catch { $s = $null }
+            if ($s -and $s.build) { $ok = $true; break }
           }
           if ($ok) {
             Write-Host "Public page up: build $($s.build), $($s.mode_label), sim time $($s.utc)"
