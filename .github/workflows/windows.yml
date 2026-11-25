@@ -51,7 +51,9 @@ jobs:
           New-Item -ItemType Directory smoke | Out-Null
           gh release download --repo pal1000/mesa-dist-win --pattern "mesa3d-*-release-msvc.7z" --dir smoke
           7z x -osmoke/mesa (Get-ChildItem smoke/*.7z).FullName | Out-Null
-          Copy-Item smoke/mesa/x64/*.dll smoke/
+          foreach ($d in "opengl32.dll", "libgallium_wgl.dll", "libglapi.dll") {
+            if (Test-Path smoke/mesa/x64/$d) { Copy-Item smoke/mesa/x64/$d smoke/ }
+          }
           Copy-Item target/release/facet-sim.exe smoke/
           $p = Start-Process -FilePath smoke/facet-sim.exe -WorkingDirectory smoke -PassThru `
                  -RedirectStandardError smoke/stderr.txt -RedirectStandardOutput smoke/stdout.txt
@@ -88,7 +90,11 @@ jobs:
         run: |
           New-Item -ItemType Directory soft | Out-Null
           Copy-Item dist/* soft/
-          Copy-Item smoke/mesa/x64/*.dll soft/
+          # OpenGL over llvmpipe only: opengl32 plus the gallium WGL driver
+          # (and libglapi in older Mesa); none of the Vulkan/OpenCL/D3D parts.
+          foreach ($d in "opengl32.dll", "libgallium_wgl.dll", "libglapi.dll") {
+            if (Test-Path smoke/mesa/x64/$d) { Copy-Item smoke/mesa/x64/$d soft/ }
+          }
           $lic = Get-ChildItem smoke/mesa -Recurse -Include "*licen*","*copying*" -File | Select-Object -First 1
           if ($lic) { Copy-Item $lic.FullName soft/MESA-LICENSE.txt }
           @"
