@@ -53,12 +53,15 @@ jobs:
             try { $s = Invoke-RestMethod http://127.0.0.1:8781/api/status -TimeoutSec 5; $ok = $true; break } catch {}
           }
           if ($ok) {
-            Write-Host "Public page up: build $($s.build)"
+            Write-Host "Public page up: build $($s.build), $($s.mode_label), sim time $($s.utc)"
             Start-Sleep 20
             $s2 = Invoke-RestMethod http://127.0.0.1:8781/api/status -TimeoutSec 5
-            Write-Host "After 20 s: $($s2 | ConvertTo-Json -Compress -Depth 2)"
+            Write-Host "After 20 s: sim time $($s2.utc), playing $($s2.playing)"
+            if ($s2.jd -le $s.jd) { throw "simulation clock did not advance" }
             $c = Invoke-WebRequest http://127.0.0.1:8780/ -UseBasicParsing -TimeoutSec 5
             Write-Host "Control page: HTTP $($c.StatusCode), $($c.Content.Length) bytes"
+            $q = Invoke-WebRequest http://127.0.0.1:8781/ -UseBasicParsing -TimeoutSec 5
+            Write-Host "Public page: HTTP $($q.StatusCode), $($q.Content.Length) bytes"
           }
           $alive = -not $p.HasExited
           if ($alive) { Stop-Process -Id $p.Id -Force }
