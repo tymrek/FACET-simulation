@@ -17,6 +17,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build (default features, with audio)
         run: cargo build --release --locked
+      - name: Check the .exe needs no Visual C++ runtime DLLs
+        shell: pwsh
+        run: |
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes("target/release/facet-sim.exe"))
+          $bad = [regex]::Matches($text, '(?i)(vcruntime|msvcp|ucrtbase)[0-9_]*\.dll|api-ms-win-crt-[a-z0-9-]+\.dll') | ForEach-Object Value | Sort-Object -Unique
+          if ($bad) { throw "facet-sim.exe still imports: $($bad -join ', ')" }
+          Write-Host "No Visual C++ runtime imports."
       - name: Tests
         run: cargo test --release --locked
       - name: Package

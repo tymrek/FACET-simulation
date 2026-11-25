@@ -1,0 +1,5 @@
+# Windows: link the Visual C++ runtime statically, so facet-sim.exe runs on
+# machines without the "Microsoft Visual C++ Redistributable" installed
+# (otherwise: "VCRUNTIME140.dll was not found").
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
