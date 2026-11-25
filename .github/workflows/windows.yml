@@ -35,7 +35,7 @@ jobs:
           Copy-Item target/release/facet-sim.exe dist/
           Copy-Item windows/README.txt dist/
           Copy-Item CHANGELOG.md dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: facet-sim-windows
           path: dist/
@@ -80,6 +80,29 @@ jobs:
       # Test builds from the windows branch go to one rolling pre-release, so
       # testers can download without a GitHub account:
       # https://github.com/tymrek/FACET-simulation/releases/tag/windows-test
+      # For machines without OpenGL 3 (virtual machines, Remote Desktop):
+      # the same .exe with Mesa's software renderer beside it. Windows loads
+      # an opengl32.dll from the program's folder first.
+      - name: Package the software-OpenGL variant
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory soft | Out-Null
+          Copy-Item dist/* soft/
+          Copy-Item smoke/mesa/x64/*.dll soft/
+          $lic = Get-ChildItem smoke/mesa -Recurse -Include "*licen*","*copying*" -File | Select-Object -First 1
+          if ($lic) { Copy-Item $lic.FullName soft/MESA-LICENSE.txt }
+          @"
+          Software OpenGL variant
+          =======================
+          This folder adds Mesa's software OpenGL renderer (llvmpipe; opengl32.dll
+          and companions, MIT licence, from github.com/pal1000/mesa-dist-win) for
+          machines without OpenGL 3: virtual machines and Remote Desktop sessions.
+          It draws on the CPU, so it is slower than a graphics card. On a normal
+          PC use facet-sim-windows.zip instead.
+          "@ | Set-Content soft/SOFTWARE-OPENGL.txt
+          Compress-Archive -Path soft/* -DestinationPath facet-sim-windows-software-gl.zip
+          Get-ChildItem soft | Format-Table Name, Length
+
       - name: Publish the "Windows test build" pre-release
         if: github.ref == 'refs/heads/windows'
         shell: pwsh
@@ -93,8 +116,10 @@ jobs:
           Not a release. Replaced by each new test build.
 
           Download facet-sim-windows.zip below (facet-sim.exe plus README.txt with first-run steps and a test checklist), or facet-sim.exe on its own.
+
+          In a virtual machine or over Remote Desktop (no OpenGL 3), use facet-sim-windows-software-gl.zip: the same build with Mesa's software OpenGL renderer.
           "@
           gh release delete windows-test --cleanup-tag --yes 2>$null
           gh release create windows-test --prerelease --target "${{ github.sha }}" `
             --title "Windows test build ($sha)" --notes $notes `
-            facet-sim-windows.zip dist/facet-sim.exe
+            facet-sim-windows.zip facet-sim-windows-software-gl.zip dist/facet-sim.exe

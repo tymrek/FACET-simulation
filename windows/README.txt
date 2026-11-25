@@ -2,8 +2,10 @@ FACET simulator for Windows (test build)
 ========================================
 
 Requirements: 64-bit Windows 10 or 11, and a graphics card with current
-drivers (OpenGL 3). Remote Desktop sessions and some virtual machines have
-no OpenGL; there the program reports an error instead of opening a window.
+drivers (OpenGL 3). Virtual machines and Remote Desktop sessions often have
+no OpenGL 3; the program then shows an error. There, use the download
+facet-sim-windows-software-gl.zip instead (same program, with a software
+OpenGL renderer; slower, but it runs anywhere).
 
 Running it
 ----------

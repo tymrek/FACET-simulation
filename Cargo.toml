@@ -23,7 +23,7 @@ eframe = { version = "0.27", default-features = false, features = ["x11", "wayla
 
 # Windows: reattach to the launching terminal's console (see main.rs).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+windows-sys = { version = "0.59", features = ["Win32_System_Console", "Win32_UI_WindowsAndMessaging"] }
 
 # Windows: icon and version information in the .exe (build.rs).
 [target.'cfg(windows)'.build-dependencies]

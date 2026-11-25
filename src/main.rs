@@ -58,6 +58,22 @@ fn windows_console() {
     }
 }
 
+/// Without a console a failure would be invisible, so show it in a dialog
+/// (and on the attached console, if any).
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn windows_error(msg: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    eprintln!("{msg}");
+    let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let (text, title) = (wide(msg), wide("FACET simulator"));
+    // SAFETY: both buffers are NUL-terminated UTF-16 that outlive the call;
+    // a null owner window is allowed.
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+    }
+}
+
 /// The FACET compound-eye icon for the window and taskbar.
 fn window_icon() -> Option<egui::IconData> {
     let mut dec = png::Decoder::new(&include_bytes!("../assets/icon/facet-256.png")[..]);
@@ -75,7 +91,14 @@ fn window_icon() -> Option<egui::IconData> {
 
 fn main() -> eframe::Result<()> {
     #[cfg(windows)]
-    windows_console();
+    {
+        windows_console();
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            default(info);
+            windows_error(&format!("The simulator stopped with an internal error:\n\n{info}"));
+        }));
+    }
     let mut viewport = egui::ViewportBuilder::default();
     if let Some(icon) = window_icon() {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
@@ -88,11 +111,21 @@ fn main() -> eframe::Result<()> {
         vsync: true,
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         "FACET simulator",
         options,
         Box::new(|cc| Box::new(app::Gui::new(cc))),
-    )
+    );
+    #[cfg(windows)]
+    if let Err(e) = &result {
+        windows_error(&format!(
+            "The simulator could not start:\n\n{e}\n\n\
+             It needs OpenGL 3, which some virtual machines and Remote Desktop \
+             sessions lack. Use the \"software OpenGL\" download \
+             (facet-sim-windows-software-gl.zip) there."
+        ));
+    }
+    result
 }
 
 #[cfg(test)]
