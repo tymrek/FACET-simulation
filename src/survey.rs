@@ -9,8 +9,11 @@
 //!
 //! * Tiling: rings of constant declination, spacing = field side ÷ √1.1
 //!   (≈ 10 % overlap), each ring holding ⌈360° cos δ ÷ spacing⌉ tiles.
-//! * A pass is complete when every tile is either done or inside the Sun or
-//!   Moon keep-out at that moment. Then all tiles reset and the next begins.
+//! * A pass is complete when every tile is either done or has been inside the
+//!   Sun or Moon keep-out at some point during the pass. (Counting only tiles
+//!   hidden at that moment made the pass wait on each tile the moving Moon
+//!   uncovered at the end: one full exposure each, with the fleet idle.)
+//!   Then all tiles reset and the next begins.
 //! * A free telescope takes the nearest undone, unclaimed tile it can see
 //!   (above its limb margin, outside the keep-outs), searched outward from
 //!   its current pointing so slews stay short.
@@ -48,6 +51,18 @@ const TAIL_LIST_MAX: usize = 8000;
 /// SAA sky: refreshed this often (simulated s). It moves 15° an hour in RA
 /// as the Earth turns.
 const SAA_SKY_REFRESH_S: f64 = 20.0;
+/// Sunward-first: tiles within this many degrees outside the Sun keep-out.
+const SUN_FIRST_BAND_DEG: f64 = 35.0;
+/// Sunward-first: preference for those tiles in the cost, deg of slew.
+const SUN_FIRST_BONUS_DEG: f64 = 30.0;
+/// Tail stacking: starts once this few tiles remain; at most this many
+/// telescopes join per step; a join must bring the tile's finish forward by
+/// at least STACK_MIN_GAIN_S; slew settling and acquisition, s (measured
+/// ≈ 2–5 s per tile).
+const STACK_START_TILES: usize = 2000;
+const STACK_JOIN_PER_STEP: usize = 512;
+const STACK_MIN_GAIN_S: f64 = 5.0;
+const STACK_SETTLE_S: f64 = 5.0;
 
 #[derive(Default)]
 pub struct Tiling {
@@ -117,6 +132,13 @@ pub struct PassRecord {
     pub saa_median_s: f64,
     pub saa_last_s: f64,
     pub saa_first: bool,
+    /// Share of the last 5 % of tiles that lay in the sunward band (within
+    /// SUN_FIRST_BAND_DEG outside the Sun keep-out) when done.
+    pub tail_in_sun: f64,
+    pub sun_first: bool,
+    /// Tail stacking on, and telescope joins this pass.
+    pub stack: bool,
+    pub stack_joins: u64,
     /// Telescope-seconds per completed tile by attitude phase.
     pub slew_s_per_tile: f64,
     pub settle_s_per_tile: f64,
@@ -146,7 +168,9 @@ pub struct Survey {
     pub pass: u32,
     pub pass_start_jd: f64,
     pub n_done: usize,
+    /// Undone tiles inside a keep-out now or at any check this pass.
     pub n_blocked: usize,
+    pub was_blocked: Vec<bool>,
     pub blocked_check_jd: f64,
     pub eyes_now: usize,
     pub eye_s: f64,
@@ -190,6 +214,18 @@ pub struct Survey {
     /// Tile was overhead the SAA when it was completed.
     pub saa_hit: Vec<bool>,
     pub saa_sky_n: usize,
+    /// Sunward-first: tiles in the band just outside the Sun keep-out are
+    /// preferred wherever one is in reach.
+    pub sun_first: bool,
+    /// Tiles in that band now, refreshed with the SAA sky.
+    pub sun_sky: Vec<bool>,
+    pub sun_hit: Vec<bool>,
+    /// Tail stacking: once few tiles remain, idle telescopes join tiles
+    /// others are integrating and their exposures are co-added.
+    pub stack: bool,
+    pub stack_joins: u64,
+    /// Telescopes holding each tile (stacking only; rebuilt each assignment).
+    pub holders: Vec<u16>,
 }
 
 impl Survey {
@@ -202,7 +238,10 @@ impl Survey {
             self.claimed_by = vec![NONE; nt];
             self.done_at = vec![-1.0; nt];
             self.saa_sky = vec![false; nt];
+            self.was_blocked = vec![false; nt];
             self.saa_hit = vec![false; nt];
+            self.sun_sky = vec![false; nt];
+            self.sun_hit = vec![false; nt];
             self.saa_sky_jd = 0.0;
             self.tile_of.clear();
             self.restart(jd);
@@ -219,6 +258,9 @@ impl Survey {
         self.progress.iter_mut().for_each(|p| *p = 0.0);
         self.done_at.iter_mut().for_each(|t| *t = -1.0);
         self.saa_hit.iter_mut().for_each(|h| *h = false);
+        self.was_blocked.iter_mut().for_each(|b| *b = false);
+        self.sun_hit.iter_mut().for_each(|h| *h = false);
+        self.stack_joins = 0;
         self.saa_sky_jd = 0.0;
         self.n_done = 0;
         self.pass_start_jd = jd;
@@ -295,6 +337,16 @@ impl Survey {
 
     /// For the pass just finished: share of the last 5 % of tiles that were
     /// overhead the SAA when done; count, median and last completion of those.
+    fn tail_share(&self, hit: &[bool]) -> f64 {
+        let mut all: Vec<(f32, bool)> = (0..self.tiles())
+            .filter(|&k| self.done_at[k] >= 0.0)
+            .map(|k| (self.done_at[k], hit.get(k).copied().unwrap_or(false)))
+            .collect();
+        all.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let tail = &all[(all.len() as f64 * 0.95) as usize..];
+        if tail.is_empty() { 0.0 } else { tail.iter().filter(|x| x.1).count() as f64 / tail.len() as f64 }
+    }
+
     fn saa_stats(&self) -> (f64, usize, f64, f64) {
         let mut all: Vec<(f32, bool)> = (0..self.tiles())
             .filter(|&k| self.done_at[k] >= 0.0)
@@ -349,8 +401,14 @@ impl App {
         let caps = s.polar && 90.0 - turn >= POLAR_MIN_CAP_DEG;
         let tail = !s.left.is_empty();
         // The sky overhead the SAA, from the environment's 1° flux map.
-        if safed && (self.jd - s.saa_sky_jd) * 86_400.0 >= SAA_SKY_REFRESH_S {
+        if (self.jd - s.saa_sky_jd) * 86_400.0 >= SAA_SKY_REFRESH_S {
             s.saa_sky_jd = self.jd;
+            let band = rad(o.sun_excl_deg + SUN_FIRST_BAND_DEG).cos();
+            for (k, d) in s.tiling.dirs.iter().enumerate() {
+                s.sun_sky[k] = d.dot(sun) > band;
+            }
+        }
+        if safed && s.saa_sky_jd == self.jd {
             if let Some((_, mask)) = self.env.saa_mask.as_ref() {
                 let (sg, cg) = crate::astro::gmst(self.jd).sin_cos();
                 let mut nsky = 0;
@@ -381,6 +439,19 @@ impl App {
                 }
             }
         }
+        let stacking = s.stack && !s.left.is_empty() && s.left.len() <= STACK_START_TILES;
+        if stacking {
+            s.holders.clear();
+            s.holders.resize(s.tiles(), 0);
+            for &t in &s.tile_of {
+                if t != NONE {
+                    s.holders[t as usize] = s.holders[t as usize].saturating_add(1);
+                }
+            }
+        }
+        let agil = crate::attitude::Agility::from_obs(&o);
+        let exp = o.exp_s.max(1.0);
+        let mut joins = 0usize;
         for i in 0..n {
             let in_saa = safed && self.env.in_saa.get(i).copied().unwrap_or(false);
             let free = job_tag(self.obs.job[i]) == TAG_SURVEY && !self.obs.off.get(i).copied().unwrap_or(false) && !in_saa;
@@ -399,6 +470,9 @@ impl App {
                     self.obs.fine[i] = crate::imaging::guide_star_available(d, fov, o.guide_mag);
                     eyes += 1;
                     continue;
+                }
+                if stacking {
+                    s.holders[t as usize] = s.holders[t as usize].saturating_sub(1);
                 }
                 s.release(i);
             }
@@ -484,7 +558,10 @@ impl App {
                         // Cost: slew angle plus a zenith-distance penalty, so
                         // telescopes work high in their sky (less Earthshine,
                         // longer visibility) instead of drifting to the limb.
-                        let c = -(here.angle(d) + ZA_WEIGHT * cz.clamp(-1.0, 1.0).acos());
+                        let mut c = -(here.angle(d) + ZA_WEIGHT * cz.clamp(-1.0, 1.0).acos());
+                        if s.sun_first && s.sun_sky[k] {
+                            c += rad(SUN_FIRST_BONUS_DEG);
+                        }
                         if best.map_or(true, |b| c > b.0) && ok(d) {
                             best = Some((c, k));
                         }
@@ -537,6 +614,53 @@ impl App {
                 self.obs.job[i] = job(TAG_ALLSKY, k as u64);
                 self.obs.fine[i] = crate::imaging::guide_star_available(d, fov, o.guide_mag);
                 eyes += 1;
+                if stacking {
+                    s.holders[k] = s.holders[k].saturating_add(1);
+                }
+            } else if stacking && joins < STACK_JOIN_PER_STEP {
+                // Tail stacking: join the tile whose finish this telescope
+                // brings forward most. With h holders integrating, `rem`
+                // seconds left finish in rem/h; joining after a slew and
+                // settle of D, in D + (rem − h·D)/(h + 1).
+                joins += 1;
+                let mut pick: Option<(f64, usize)> = None;
+                for &k in &s.left {
+                    let k = k as usize;
+                    if s.done[k] {
+                        continue;
+                    }
+                    let d = s.tiling.dirs[k];
+                    let cz = d.dot(rhat);
+                    if cz <= cos_lim.max(cos_za) || !ok(d) {
+                        continue;
+                    }
+                    let rem = (exp - s.progress[k] as f64).max(0.0);
+                    let h = s.holders[k].max(1) as f64;
+                    let delay = agil.slew_time(here.angle(d)) + STACK_SETTLE_S;
+                    if rem <= h * delay {
+                        continue;
+                    }
+                    let gain = rem / h - (delay + (rem - h * delay) / (h + 1.0));
+                    if gain > STACK_MIN_GAIN_S && pick.map_or(true, |p| gain > p.0) {
+                        pick = Some((gain, k));
+                    }
+                }
+                if let Some((_, k)) = pick {
+                    if s.claimed_by[k] == NONE {
+                        s.claimed_by[k] = i as u32;
+                    }
+                    s.tile_of[i] = k as u32;
+                    s.holders[k] = s.holders[k].saturating_add(1);
+                    s.stack_joins += 1;
+                    let d = s.tiling.dirs[k];
+                    s.slew_deg += deg(here.angle(d));
+                    self.obs.pointing[i] = Some(d);
+                    self.obs.job[i] = job(TAG_ALLSKY, k as u64);
+                    self.obs.fine[i] = crate::imaging::guide_star_available(d, fov, o.guide_mag);
+                    eyes += 1;
+                } else {
+                    idle[2] += 1;
+                }
             } else {
                 idle[2] += 1;
             }
@@ -572,6 +696,9 @@ impl App {
                 if let (Some(h), Some(&sky)) = (s.saa_hit.get_mut(k), s.saa_sky.get(k)) {
                     *h = sky;
                 }
+                if let (Some(h), Some(&sky)) = (s.sun_hit.get_mut(k), s.sun_sky.get(k)) {
+                    *h = sky;
+                }
                 if let Some(t) = s.done_at.get_mut(k) {
                     *t = ((self.jd - s.pass_start_jd) * 86_400.0) as f32;
                 }
@@ -582,23 +709,24 @@ impl App {
             }
         }
         s.eye_s += s.eyes_now as f64 * dt;
-        // Every simulated minute, count undone tiles hidden by the keep-outs.
-        if self.jd - s.blocked_check_jd > 60.0 / 86_400.0 {
+        // Count undone tiles hidden by the keep-outs, and check whether the
+        // pass is complete: every simulated minute, and every 5 s once the
+        // tail list is kept (a minute was up to 15 % of a 10,000-telescope
+        // pass spent waiting for the check).
+        let every = if s.left.is_empty() { 60.0 } else { 5.0 };
+        if self.jd - s.blocked_check_jd > every / 86_400.0 {
             s.blocked_check_jd = self.jd;
             let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
             let o = &self.obs_params;
             use rayon::prelude::*;
-            let done = &s.done;
-            s.n_blocked = s
-                .tiling
-                .dirs
-                .par_iter()
-                .enumerate()
-                .filter(|(k, d)| !done[*k] && obs::sky_blocked(o, **d, sun, moon).is_some())
-                .count();
+            let now: Vec<bool> = s.tiling.dirs.par_iter().map(|d| obs::sky_blocked(o, *d, sun, moon).is_some()).collect();
+            for (w, b) in s.was_blocked.iter_mut().zip(&now) {
+                *w |= *b;
+            }
+            s.n_blocked = (0..s.tiles()).filter(|&k| !s.done[k] && s.was_blocked[k]).count();
             let remaining = s.tiles().saturating_sub(s.n_done + s.n_blocked);
             s.left = if remaining <= TAIL_LIST_MAX {
-                (0..s.tiles()).filter(|&k| !s.done[k] && obs::sky_blocked(o, s.tiling.dirs[k], sun, moon).is_none()).map(|k| k as u32).collect()
+                (0..s.tiles()).filter(|&k| !s.done[k] && !s.was_blocked[k]).map(|k| k as u32).collect()
             } else {
                 Vec::new()
             };
@@ -610,6 +738,7 @@ impl App {
                 s.pass += 1;
                 let (bands, tail_in_caps) = s.band_stats();
                 let (tail_in_saa, saa_tiles, saa_median_s, saa_last_s) = s.saa_stats();
+                let tail_in_sun = s.tail_share(&s.sun_hit);
                 let rec = PassRecord {
                     pass: s.pass,
                     seconds: secs,
@@ -624,6 +753,10 @@ impl App {
                     saa_median_s,
                     saa_last_s,
                     saa_first: s.saa_first,
+                    tail_in_sun,
+                    sun_first: s.sun_first,
+                    stack: s.stack,
+                    stack_joins: s.stack_joins,
                     slew_s_per_tile: s.phase_s[0] / s.tiles_completed.max(1) as f64,
                     settle_s_per_tile: s.phase_s[1] / s.tiles_completed.max(1) as f64,
                     locked_s_per_tile: s.phase_s[2] / s.tiles_completed.max(1) as f64,
@@ -652,6 +785,9 @@ impl App {
             "in_queue": s.in_queue,
             "polar": s.polar,
             "saa_first": s.saa_first,
+            "sun_first": s.sun_first,
+            "stack": s.stack,
+            "stack_joins": s.stack_joins,
             "saa_sky_tiles": s.saa_sky_n,
             "saa_sky_left": s.saa_left.len(),
             "idle_now": { "saa": s.idle_now[0], "other_or_off": s.idle_now[1], "nothing_in_reach": s.idle_now[2] },
@@ -732,6 +868,10 @@ impl App {
                 .on_hover_text("Sky beyond the shell's turning latitude (53° by default) never passes overhead. Satellites near that latitude, where the shell is densest, take the caps; the rest leave them until the tail.");
             ui.checkbox(&mut self.survey.saa_first, "SAA first: the sky overhead the South Atlantic Anomaly is taken first, at any slew")
                 .on_hover_text("Telescopes inside the SAA are safed, so the sky above it can only be tiled from outside, looking sideways. With this on, every free telescope that can see an undone tile of that sky takes one before anything else.");
+            ui.checkbox(&mut self.survey.sun_first, "sunward first: sky just outside the Sun keep-out is preferred")
+                .on_hover_text("Tiles within 35° outside the Sun keep-out, where sunward stray light slows integrations, are taken in preference to others in reach.");
+            ui.checkbox(&mut self.survey.stack, "tail stacking: idle telescopes join the last tiles and co-add")
+                .on_hover_text("Once 2,000 or fewer tiles remain, a telescope with nothing in reach joins the tile it can finish soonest; the exposures of all telescopes on a tile are co-added.");
             ui.checkbox(&mut self.survey.in_queue, "free telescopes tile during Science operations")
                 .on_hover_text("Idle telescopes tile the sky instead of staring at the zenith.");
         });
