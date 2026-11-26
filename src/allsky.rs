@@ -124,6 +124,10 @@ impl App {
 pub fn fmt_span(s: f64) -> String {
     if s < 90.0 {
         format!("{:.0} s", s)
+    } else if s < 1200.0 {
+        // Under 20 min, whole minutes hide differences that matter
+        // (8.0 and 8.7 min both read "9 min").
+        format!("{:.1} min", s / 60.0)
     } else if s < 5400.0 {
         format!("{:.0} min", s / 60.0)
     } else if s < 2.0 * 86_400.0 {
