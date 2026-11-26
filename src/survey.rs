@@ -7,8 +7,12 @@
 //! dark-sky-equivalent integration counts (so slews, the South Atlantic
 //! Anomaly, Earthshine and sunward stray light all cost what they cost).
 //!
-//! * Tiling: rings of constant declination, spacing = field side ÷ √1.1
-//!   (≈ 10 % overlap), each ring holding ⌈360° cos δ ÷ spacing⌉ tiles.
+//! * Tiling: the telescope's rectangular frame, rolled with its long side
+//!   east-west, in rings of constant declination spaced by the frame height
+//!   ÷ 1.05; each ring holds enough tiles, spaced by the frame width ÷ 1.05
+//!   along its equatorward edge (where RA lines are furthest apart), to
+//!   overlap there by ≥ 5 %. Every seam overlaps (≥ 310 × 450 px at the
+//!   default 0.485″/px), so a pass stitches into one gap-free sky.
 //! * A pass is complete when every tile is either done or has been inside the
 //!   Sun or Moon keep-out at some point during the pass. (Counting only tiles
 //!   hidden at that moment made the pass wait on each tile the moving Moon
@@ -40,6 +44,8 @@ use crate::obs::{self, job, job_tag, job_val, TAG_ALLSKY, TAG_SURVEY};
 use serde::Serialize;
 
 const NONE: u32 = u32::MAX;
+/// Linear overlap of neighbouring survey tiles on each axis (at least).
+const SURVEY_OVERLAP: f64 = 0.05;
 /// Tiles are taken only within this zenith distance (deg), and weighted toward the zenith.
 const MAX_ZA_DEG: f64 = 75.0;
 const ZA_WEIGHT: f64 = 0.35;
@@ -71,6 +77,19 @@ const STACK_JOIN_PER_STEP: usize = 512;
 const STACK_MIN_GAIN_S: f64 = 5.0;
 const STACK_SETTLE_S: f64 = 5.0;
 
+/// Is `p` inside a frame `w` (east-west) × `h` (north-south) degrees
+/// centred on `c` (gnomonic projection, long side east-west)? The edges are
+/// shrunk by 0.5 % so a "covered" point is inside with margin.
+pub fn frame_contains(c: V3, p: V3, w: f64, h: f64) -> bool {
+    let z = p.dot(c);
+    if z <= 0.0 {
+        return false;
+    }
+    let (e, n) = crate::obs::tangent_basis(c);
+    let (x, y) = (p.dot(e) / z, p.dot(n) / z);
+    x.abs() <= rad(0.4975 * w).tan() && y.abs() <= rad(0.4975 * h).tan()
+}
+
 #[derive(Default)]
 pub struct Tiling {
     pub dirs: Vec<V3>,
@@ -82,24 +101,45 @@ pub struct Tiling {
 }
 
 impl Tiling {
-    pub fn new(fov_deg: f64) -> Tiling {
-        let step = fov_deg / 1.1f64.sqrt();
-        let nr = (180.0 / step).ceil() as usize;
+    /// Tiles for a frame `w_deg` (east-west) × `h_deg` (north-south).
+    pub fn new(w_deg: f64, h_deg: f64) -> Tiling {
+        let nr = (180.0 / (h_deg / (1.0 + SURVEY_OVERLAP))).ceil() as usize;
         let dstep = 180.0 / nr as f64;
+        let sx = w_deg / (1.0 + SURVEY_OVERLAP);
         let (mut dirs, mut ring_start, mut ring_dec) = (Vec::new(), Vec::new(), Vec::new());
         for r in 0..nr {
             let dec = -90.0 + (r as f64 + 0.5) * dstep;
-            let m = ((360.0 * rad(dec).cos()) / step).ceil().max(1.0) as usize;
+            let edge = (dec.abs() - dstep / 2.0).max(0.0);
+            let mut m = ((360.0 * rad(edge).cos()) / sx).ceil().max(1.0) as usize;
+            // Near the poles the circles of declination curve away from the
+            // frame's top and bottom edges: add tiles until sample points on
+            // both edges of the ring (and its middle) between two
+            // neighbouring tiles lie inside one of them.
+            let covered = |m: usize| {
+                let (a, b) = (V3::from_radec(0.0, rad(dec)), V3::from_radec(rad(360.0 / m as f64), rad(dec)));
+                [dec - dstep / 2.0, dec, dec + dstep / 2.0].iter().all(|&d| {
+                    let d = d.clamp(-90.0, 90.0);
+                    (0..=16).all(|j| {
+                        let p = V3::from_radec(rad(360.0 / m as f64 * j as f64 / 16.0), rad(d));
+                        frame_contains(a, p, w_deg, h_deg) || frame_contains(b, p, w_deg, h_deg)
+                    })
+                })
+            };
+            while !covered(m) && m < 100_000 {
+                m += 1;
+            }
             ring_start.push(dirs.len() as u32);
             ring_dec.push(dec);
-            let off = if r % 2 == 0 { 0.0 } else { 0.5 };
             for k in 0..m {
-                let ra = (k as f64 + off) / m as f64 * 360.0;
+                let ra = k as f64 / m as f64 * 360.0;
                 dirs.push(V3::from_radec(rad(ra), rad(dec)));
             }
         }
         ring_start.push(dirs.len() as u32);
-        Tiling { dirs, ring_start, ring_dec, step_deg: dstep, fov_key: (fov_deg * 1000.0) as i64 }
+        Tiling { dirs, ring_start, ring_dec, step_deg: dstep, fov_key: Tiling::key(w_deg, h_deg) }
+    }
+    fn key(w: f64, h: f64) -> i64 {
+        (w * 1000.0) as i64 * 100_000 + (h * 1000.0) as i64
     }
     fn ring_of(&self, dec_deg: f64) -> usize {
         (((dec_deg + 90.0) / self.step_deg) as isize).clamp(0, self.ring_dec.len() as isize - 1) as usize
@@ -222,9 +262,9 @@ pub struct Survey {
 }
 
 impl Survey {
-    fn ensure(&mut self, fov: f64, n_sat: usize, jd: f64) {
-        if self.tiling.dirs.is_empty() || self.tiling.fov_key != (fov * 1000.0) as i64 {
-            self.tiling = Tiling::new(fov);
+    fn ensure(&mut self, (w, h): (f64, f64), n_sat: usize, jd: f64) {
+        if self.tiling.dirs.is_empty() || self.tiling.fov_key != Tiling::key(w, h) {
+            self.tiling = Tiling::new(w, h);
             let nt = self.tiling.dirs.len();
             self.done = vec![false; nt];
             self.progress = vec![0.0; nt];
@@ -375,7 +415,7 @@ impl App {
             self.survey.eyes_now = 0;
             return;
         }
-        self.survey.ensure(fov, n, jd);
+        self.survey.ensure(obs::frame_ew_ns(&self.obs_params), n, jd);
         let inc = self.shell_params.inc_deg;
         self.survey.turn_deg = if inc <= 90.0 { inc } else { 180.0 - inc };
         let (sun, moon) = (self.bodies[0].dir, self.bodies[1].dir);
@@ -867,6 +907,41 @@ impl App {
         if ui.small_button("Restart pass").clicked() {
             let jd = self.jd;
             self.survey.reset(jd);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn in_frame(t: &Tiling, k: usize, p: V3, w: f64, h: f64) -> bool {
+        frame_contains(t.dirs[k], p, w, h)
+    }
+
+    #[test]
+    fn rectangular_tiles_cover_the_whole_sky() {
+        let (w, h) = (1.289, 0.860); // default frame
+        let t = Tiling::new(w, h);
+        eprintln!("survey tiles: {}", t.dirs.len());
+        assert!(t.dirs.len() > 40_000 && t.dirs.len() < 43_000, "{}", t.dirs.len());
+        let mut seed = 12345u64;
+        let mut rnd = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        // Uniform over the sphere, plus extra points within 3° of the poles.
+        for i in 0..60_000 {
+            let z = if i % 4 == 0 { (1.0 - 0.0014 * rnd()) * if rnd() < 0.5 { 1.0 } else { -1.0 } } else { 2.0 * rnd() - 1.0 };
+            let ra = 360.0 * rnd();
+            let dec = deg(z.asin());
+            let p = V3::from_radec(rad(ra), rad(dec));
+            let r0 = t.ring_of(dec);
+            let hit = (r0.saturating_sub(2)..(r0 + 3).min(t.ring_dec.len()))
+                .any(|r| t.ring_window(r, ra, 2.0).any(|k| in_frame(&t, k, p, w, h)));
+            assert!(hit, "gap at RA {ra:.3} Dec {dec:.3}");
         }
     }
 }

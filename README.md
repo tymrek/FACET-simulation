@@ -544,8 +544,17 @@ the fleet surveying.
 
 `--mode allsky`, or **All-sky survey → Dedicate the fleet** in the controls,
 makes the fleet actually tile the sky (`src/survey.rs`). The sphere is cut
-into fixed tiles one field of view across (rings of declination, ~10 %
-overlap; 41,172 at the default 1.05° field). Each free telescope takes the
+into fixed tiles of the real frame (default 9,576 × 6,388 px at 0.485″/px:
+1.29° × 0.86°), rolled with its long side east-west, in rings of
+declination: rows are spaced by the frame height ÷ 1.05, and each ring has
+enough tiles to overlap by ≥ 5 % along its equatorward edge, with more
+added near the poles until sample points on both ring edges are covered
+(41,596 tiles). Every seam overlaps — at least ~310 px top/bottom and
+~450 px left/right at the equator, wider elsewhere — so a pass stitches
+into one gap-free sky; a test checks 60,000 random points, a quarter of
+them within 3° of the poles. (Until 0.7.3 the tiling assumed a square
+frame of the same area, 1.0° apart, which with the real 3:2 frame would
+have left 11–14 % of the sky in gaps between rows.) Each free telescope takes the
 nearest undone tile it can see within 75° of its zenith and 32° of its
 current pointing (with the priorities below), slews, settles and integrates
 through the attitude model;
@@ -607,7 +616,8 @@ Measured (60×, dedicated fleet, current completion rule), pass / 95 %:
 | SAA first | 69.9 / 65.1 | 8.5 / 6.7 |
 | tail stacking | 69.3 / 64.6 | 8.3 / 6.5 |
 | SAA first + stacking | 69.4 / 65.1 | 8.2 / 6.8 |
-| all three (the pattern) | **67.6 / 63.5** | **8.0 / 6.7** |
+| all three (the pattern) | 67.6 / 63.5 | 8.0 / 6.7 |
+| the pattern, gap-free rectangular tiles (current) | **68.4 / 64.4** | **8.1 / 6.8** |
 
 At 1,000 the pass is throughput-bound and the pattern gains ~2 % at most;
 at 10,000 it saves ~8 %. Polar duty (satellites near
@@ -778,8 +788,9 @@ with cold gas ~32 kg.
   as clumpy discs.
 * **Mosaics:** a public request can tick "Mosaic the whole object" for a
   catalogue object larger than one field. It is tiled on an RA/Dec-aligned
-  grid of fields with 10 % overlap covering the catalogue ellipse (M31:
-  6 tiles on a 2 × 3 grid; M42: 2), at most 16 tiles, with the requested
+  grid of the real 1.29° × 0.86° frame (long side east-west) with 10 %
+  overlap on each axis, covering the catalogue ellipse (M31: 8 tiles on a
+  2 × 4 grid; M42: 2), at most 16 tiles, with the requested
   telescopes shared between tiles. The tiles are ordinary requests that the
   director approves, rejects or cancels as one; "Your requests" shows the
   mosaic as one row with each tile's result and a stitched overview

@@ -441,6 +441,14 @@ pub fn sky_blocked(o: &ObsParams, dir: V3, sun: V3, moon: V3) -> Option<&'static
 }
 
 /// Tangent-plane basis (east, north) at a sky direction.
+/// The telescope frame as (east-west, north-south) extent, degrees: tiled
+/// fields (all-sky survey, mosaics, recovery searches) are rolled so the
+/// long side of the sensor runs east-west.
+pub fn frame_ew_ns(o: &ObsParams) -> (f64, f64) {
+    let (w, h, _) = o.field_deg();
+    (w.max(h), w.min(h))
+}
+
 pub fn tangent_basis(t: V3) -> (V3, V3) {
     let e = V3::Z.cross(t);
     let e = if e.norm() < 1e-9 { V3::new(0.0, 1.0, 0.0) } else { e.unit() };

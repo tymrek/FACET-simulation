@@ -370,8 +370,10 @@ pub struct Shared {
     pub coast_json: String,
     pub campaigns: Vec<Campaign>,
     pub next_cid: u64,
-    /// Current telescope field side, degrees (for mosaic planning).
-    pub field_deg: f64,
+    /// Current telescope field, east-west × north-south, degrees (for
+    /// mosaic planning).
+    pub field_w_deg: f64,
+    pub field_h_deg: f64,
 }
 
 impl Shared {
@@ -820,7 +822,7 @@ fn handle_mosaic(shared: SharedRef, req: Request, path: String) {
         let done = tiles.iter().all(|r| r.state == ReqState::Done);
         let frac = (shallow.progress_s / shallow.required_s()).min(1.0);
         let bucket = if done { u32::MAX } else { ((frac * 20.0).floor() as u32).max(1) };
-        let span = crate::mosaic::Plan::span_deg(m.cols, m.rows, m.step_deg, m.field_deg);
+        let span = crate::mosaic::Plan::span_deg(&m);
         spec.id = group;
         spec.target_name = m.object.clone();
         spec.dir = V3::from_radec(m.ra_deg.to_radians(), m.dec_deg.to_radians());
@@ -847,15 +849,16 @@ fn handle_mosaic(shared: SharedRef, req: Request, path: String) {
             }
         }
         let note = format!(
-            "Mosaic overview: {n} tiles of {:.0}′ on a {} × {} grid ({:.0} % overlap) covering {:.0}′ × {:.0}′. \
+            "Mosaic overview: {n} tiles of {:.0}′ × {:.0}′ on a {} × {} grid ({:.0} % overlap) covering {:.0}′ × {:.0}′. \
              The overview is drawn at the depth of the shallowest tile and a coarser pixel scale than the tiles; \
              each tile's full-resolution result is under its own request.{}",
-            m.field_deg * 60.0,
+            m.field_w_deg * 60.0,
+            m.field_h_deg * 60.0,
             m.cols,
             m.rows,
             crate::mosaic::OVERLAP * 100.0,
-            ((m.cols - 1) as f64 * m.step_deg + m.field_deg) * 60.0,
-            ((m.rows - 1) as f64 * m.step_deg + m.field_deg) * 60.0,
+            crate::mosaic::Plan::extent_deg(&m).0 * 60.0,
+            crate::mosaic::Plan::extent_deg(&m).1 * 60.0,
             if (n as u32) < m.cols * m.rows { " Grid cells outside the object were not observed and are greyed out." } else { "" }
         );
         if let Some(a) = o.report["notes"].as_array_mut() {
@@ -864,15 +867,15 @@ fn handle_mosaic(shared: SharedRef, req: Request, path: String) {
         // The overview is rendered as one wide frame: put the hardware table
         // back to one telescope's field.
         let ps = o.report["hardware"]["pixel_scale_arcsec"].as_f64().unwrap_or(0.0);
-        o.report["hardware"]["fov_deg"] = serde_json::json!(m.field_deg);
+        o.report["hardware"]["fov_deg"] = serde_json::json!((m.field_w_deg * m.field_h_deg).sqrt());
         if let (Some(sensor), true) = (o.report["hardware"]["sensor"].as_str().map(str::to_string), ps > 0.0) {
             if let Some((_, rest)) = sensor.split_once(" px across") {
-                o.report["hardware"]["sensor"] = serde_json::json!(format!("{:.0} px across{rest}", m.field_deg * 3600.0 / ps));
+                o.report["hardware"]["sensor"] = serde_json::json!(format!("{:.0} px across{rest}", m.field_w_deg * 3600.0 / ps));
             }
         }
         o.report["mosaic"] = serde_json::json!({
             "group": m.group, "tiles": n, "cols": m.cols, "rows": m.rows,
-            "field_deg": m.field_deg, "span_deg": span, "overlap": crate::mosaic::OVERLAP,
+            "field_w_deg": m.field_w_deg, "field_h_deg": m.field_h_deg, "span_deg": span, "overlap": crate::mosaic::OVERLAP,
         });
         o
     });
@@ -1184,7 +1187,7 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
     if sub.mosaic == Some(true) {
         let plan = match &sub.target {
             Some(t) if body_idx.is_none() => match crate::catalog::find_dso(t) {
-                Some(d) if d.dir.angle(dir) < 1e-3 => crate::mosaic::plan_object(d, sh.field_deg),
+                Some(d) if d.dir.angle(dir) < 1e-3 => crate::mosaic::plan_object(d, sh.field_w_deg, sh.field_h_deg),
                 _ => Err("mosaics are for catalogue deep-sky objects (galaxies, nebulae, clusters)".into()),
             },
             _ => Err("mosaics are for catalogue deep-sky objects (galaxies, nebulae, clusters)".into()),
@@ -1221,8 +1224,10 @@ fn handle_submit(shared: &SharedRef, mut req: Request) {
                 object: t.target_name.clone(),
                 ra_deg: ra0,
                 dec_deg: dec0,
-                field_deg: sh.field_deg,
-                step_deg: plan.step_deg,
+                field_w_deg: sh.field_w_deg,
+                field_h_deg: sh.field_h_deg,
+                step_x_deg: plan.step_x_deg,
+                step_y_deg: plan.step_y_deg,
             });
             reqs.push(x);
         }

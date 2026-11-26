@@ -281,8 +281,8 @@ impl App {
         let age_s = cfg.age_h * 3600.0;
         let (sa, sc) = sigma(rate, age_s);
         let (pa_, pc_) = sigma(rate, age_s + PLAN_AHEAD_S);
-        let field = o.fov_deg;
-        let plan = crate::mosaic::plan_region(center, 3.0 * pa_ / 3600.0, 3.0 * pc_ / 3600.0, disc.pa_deg, field, MAX_TILES)?;
+        let (fw, fh) = crate::obs::frame_ew_ns(o);
+        let plan = crate::mosaic::plan_region(center, 3.0 * pa_ / 3600.0, 3.0 * pc_ / 3600.0, disc.pa_deg, fw, fh, MAX_TILES)?;
         // Nearest the prediction first.
         let mut tiles = plan.tiles.clone();
         tiles.sort_by(|x, y| x.2.angle(center).partial_cmp(&y.2.angle(center)).unwrap());
@@ -372,7 +372,7 @@ impl App {
         let v_orb = (crate::astro::MU_EARTH / a).sqrt();
         let hw = crate::imaging::Hardware::from_obs(&self.obs_params);
         let sun = self.bodies[0].dir;
-        let field = self.obs_params.fov_deg;
+        let (fw, fh) = crate::obs::frame_ew_ns(&self.obs_params);
         let jd = self.jd;
         let mut sh = web.lock().unwrap();
         let utc = sh.utc_now.clone();
@@ -396,8 +396,8 @@ impl App {
                 rc.checked[j] = true;
                 // Inside the tile's field now?
                 let (dx, dy) = offset_arcsec(r.dir, truth.dir);
-                let half = field * 3600.0 / 2.0 * 0.97;
-                if dx.abs() > half || dy.abs() > half {
+                let (half_w, half_h) = (fw * 3600.0 / 2.0 * 0.97, fh * 3600.0 / 2.0 * 0.97);
+                if dx.abs() > half_w || dy.abs() > half_h {
                     continue;
                 }
                 // Deep enough? The tile tracks the predicted rate, so the

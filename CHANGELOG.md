@@ -20,6 +20,16 @@ All-sky survey: one faster tiling pattern, and a fairer end of pass.
   is ignored with a warning.
 - Measured (60x, dedicated fleet), pass / 95 %: 10,000 telescopes 8.7 / 6.5
   -> 8.0 / 6.7 min; 1,000 telescopes 69.3 / 64.0 -> 67.6 / 63.5 min.
+- Gap-free tiling: survey tiles, public mosaics and NEO recovery searches
+  were laid out for a square frame of the same area, but the sensor frame
+  is 3:2 (1.29 x 0.86 deg): rows 1.0 deg apart under a 0.86 deg frame would
+  have left 11-14 % of the sky in gaps. All three now tile the real frame,
+  long side east-west. The survey overlaps >= 5 % on each axis (seams
+  >= ~310 x 450 px), adds tiles near the poles until each ring's edges are
+  covered (41,596 tiles, was 41,172), and a test checks 60,000 sky points.
+  Mosaics keep 10 % overlap (M31 is now 8 tiles on 2 x 4, was 6 on 2 x 3).
+  Pass times with the new tiles: 68.4 / 64.4 min (1,000), 8.1 / 6.8 min
+  (10,000).
 - Pass records add tail_in_saa, tail_in_sun, SAA-sky tile completion times
   and stack_joins; status adds saa_sky_tiles and saa_sky_left.
 

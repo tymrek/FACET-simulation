@@ -311,7 +311,7 @@ class ResultViewer {
         el("h2", {}, this.base === "/api/campaign" ? `${r.target} · latest frame (${r.utc.slice(11)})` : `Request #${r.id}: ${r.target} ${r.final ? "· final" : "· live stack"}`),
         el("button", { onclick: () => this.close() }, "Close")),
       el("div", { class: "figs" },
-        fig(`${this.base}/${id}/full.png${q}${bust}`, `${r.mosaic ? `Mosaic overview ${Number(r.mosaic.span_deg).toFixed(2)}° (${r.mosaic.tiles} tiles of ${Number(r.mosaic.field_deg).toFixed(2)}°)` : `Full field ${Number(h.fov_deg).toFixed(2)}°`} · ${im.full.arcsec_per_px}″/px (binned ×${im.full.bin}) · ${im.orientation}`),
+        fig(`${this.base}/${id}/full.png${q}${bust}`, `${r.mosaic ? `Mosaic overview ${Number(r.mosaic.span_deg).toFixed(2)}° (${r.mosaic.tiles} tiles of ${Number(r.mosaic.field_w_deg).toFixed(2)}° × ${Number(r.mosaic.field_h_deg).toFixed(2)}°)` : `Full field ${Number(h.fov_deg).toFixed(2)}°`} · ${im.full.arcsec_per_px}″/px (binned ×${im.full.bin}) · ${im.orientation}`),
         fig(`${this.base}/${id}/crop.png${q}${bust}`, `Centre ${im.crop.width_arcmin}′ · ${im.crop.arcsec_per_px}″/px (${im.crop.resampled})`)),
       el("div", { class: "kvs" },
         el("div", {}, el("h3", {}, "Result"), kv([
