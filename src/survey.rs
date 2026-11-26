@@ -15,7 +15,12 @@
 //!   (above its limb margin, outside the keep-outs), searched outward from
 //!   its current pointing so slews stay short.
 //! * A tile whose exposure is interrupted (the telescope is taken for other
-//!   work or loses sight of it) loses its partial integration.
+//!   work or loses sight of it) keeps its partial integration.
+//! * SAA-first (option): the sky overhead the South Atlantic Anomaly can only
+//!   be reached by telescopes outside it, looking sideways, so with the
+//!   nearest-tile rule it is left to the end. With SAA-first, every free
+//!   telescope that can see an undone tile of that sky takes the cheapest
+//!   one, at any slew; the rest choose as usual.
 
 use crate::app::App;
 use crate::math::{deg, rad, V3};
@@ -40,6 +45,9 @@ const POLAR_MIN_CAP_DEG: f64 = 8.0;
 /// once fewer than `TAIL_LIST_MAX` tiles remain.
 const MAX_FALLBACKS_PER_STEP: usize = 64;
 const TAIL_LIST_MAX: usize = 8000;
+/// SAA sky: refreshed this often (simulated s). It moves 15° an hour in RA
+/// as the Earth turns.
+const SAA_SKY_REFRESH_S: f64 = 20.0;
 
 #[derive(Default)]
 pub struct Tiling {
@@ -102,6 +110,13 @@ pub struct PassRecord {
     /// (|Dec| beyond the shell's turning latitude).
     pub tail_in_caps: f64,
     pub polar: bool,
+    /// Share of the last 5 % of tiles that were overhead the SAA when done.
+    pub tail_in_saa: f64,
+    /// Tiles done while overhead the SAA, and their median / last completion, s.
+    pub saa_tiles: usize,
+    pub saa_median_s: f64,
+    pub saa_last_s: f64,
+    pub saa_first: bool,
     /// Telescope-seconds per completed tile by attitude phase.
     pub slew_s_per_tile: f64,
     pub settle_s_per_tile: f64,
@@ -164,6 +179,17 @@ pub struct Survey {
     /// Telescopes not holding a tile at the last assignment, by reason:
     /// [in the SAA, taken for other work or off, nothing visible in reach].
     pub idle_now: [usize; 3],
+    /// SAA-first: the sky overhead the SAA is taken first, at any slew.
+    pub saa_first: bool,
+    /// Tiles overhead the SAA now (zenith of a point inside its contour at
+    /// the shell's altitude), refreshed every SAA_SKY_REFRESH_S.
+    pub saa_sky: Vec<bool>,
+    pub saa_sky_jd: f64,
+    /// Undone tiles overhead the SAA (SAA-first candidates).
+    pub saa_left: Vec<u32>,
+    /// Tile was overhead the SAA when it was completed.
+    pub saa_hit: Vec<bool>,
+    pub saa_sky_n: usize,
 }
 
 impl Survey {
@@ -175,6 +201,9 @@ impl Survey {
             self.progress = vec![0.0; nt];
             self.claimed_by = vec![NONE; nt];
             self.done_at = vec![-1.0; nt];
+            self.saa_sky = vec![false; nt];
+            self.saa_hit = vec![false; nt];
+            self.saa_sky_jd = 0.0;
             self.tile_of.clear();
             self.restart(jd);
             self.history.clear();
@@ -189,6 +218,8 @@ impl Survey {
         self.done.iter_mut().for_each(|d| *d = false);
         self.progress.iter_mut().for_each(|p| *p = 0.0);
         self.done_at.iter_mut().for_each(|t| *t = -1.0);
+        self.saa_hit.iter_mut().for_each(|h| *h = false);
+        self.saa_sky_jd = 0.0;
         self.n_done = 0;
         self.pass_start_jd = jd;
         self.eye_s = 0.0;
@@ -261,6 +292,21 @@ impl Survey {
         let share = if tail.is_empty() { 0.0 } else { tail.iter().filter(|x| x.1).count() as f64 / tail.len() as f64 };
         (out, share)
     }
+
+    /// For the pass just finished: share of the last 5 % of tiles that were
+    /// overhead the SAA when done; count, median and last completion of those.
+    fn saa_stats(&self) -> (f64, usize, f64, f64) {
+        let mut all: Vec<(f32, bool)> = (0..self.tiles())
+            .filter(|&k| self.done_at[k] >= 0.0)
+            .map(|k| (self.done_at[k], self.saa_hit.get(k).copied().unwrap_or(false)))
+            .collect();
+        all.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let tail = &all[(all.len() as f64 * 0.95) as usize..];
+        let share = if tail.is_empty() { 0.0 } else { tail.iter().filter(|x| x.1).count() as f64 / tail.len() as f64 };
+        let t: Vec<f32> = all.iter().filter(|x| x.1).map(|x| x.0).collect();
+        let q = |f: f64| if t.is_empty() { 0.0 } else { t[((t.len() - 1) as f64 * f) as usize] as f64 };
+        (share, t.len(), q(0.5), q(1.0))
+    }
 }
 
 impl App {
@@ -302,6 +348,39 @@ impl App {
         let turn = s.turn_deg;
         let caps = s.polar && 90.0 - turn >= POLAR_MIN_CAP_DEG;
         let tail = !s.left.is_empty();
+        // The sky overhead the SAA, from the environment's 1° flux map.
+        if safed && (self.jd - s.saa_sky_jd) * 86_400.0 >= SAA_SKY_REFRESH_S {
+            s.saa_sky_jd = self.jd;
+            if let Some((_, mask)) = self.env.saa_mask.as_ref() {
+                let (sg, cg) = crate::astro::gmst(self.jd).sin_cos();
+                let mut nsky = 0;
+                for (k, d) in s.tiling.dirs.iter().enumerate() {
+                    // Point on the ground whose zenith is d (rotate by −GMST).
+                    let (xe, ye) = (d.x * cg + d.y * sg, -d.x * sg + d.y * cg);
+                    let lat = d.z.clamp(-1.0, 1.0).asin().to_degrees();
+                    let lon = ye.atan2(xe).to_degrees();
+                    let la = (lat + 90.0).round().clamp(0.0, 180.0) as usize;
+                    let lo = ((lon + 180.0).floor() as usize).min(359);
+                    s.saa_sky[k] = mask[la * 360 + lo];
+                    nsky += s.saa_sky[k] as usize;
+                }
+                s.saa_sky_n = nsky;
+            }
+        }
+        if !safed {
+            s.saa_sky.iter_mut().for_each(|b| *b = false);
+            s.saa_sky_n = 0;
+        }
+        // SAA-first candidates: undone tiles overhead the SAA, outside the
+        // keep-outs.
+        s.saa_left.clear();
+        if s.saa_first && s.saa_sky_n > 0 {
+            for k in 0..s.tiles() {
+                if s.saa_sky[k] && !s.done[k] && ok(s.tiling.dirs[k]) {
+                    s.saa_left.push(k as u32);
+                }
+            }
+        }
         for i in 0..n {
             let in_saa = safed && self.env.in_saa.get(i).copied().unwrap_or(false);
             let free = job_tag(self.obs.job[i]) == TAG_SURVEY && !self.obs.off.get(i).copied().unwrap_or(false) && !in_saa;
@@ -336,7 +415,29 @@ impl App {
             let rhat = self.obs.rhat[i];
             let cos_za = rad(MAX_ZA_DEG).cos();
             let mut best: Option<(f64, usize)> = None;
+            // SAA-first: the cheapest unclaimed SAA-sky tile in view, at any
+            // slew (brute force over the list).
+            if s.saa_first {
+                for &k in &s.saa_left {
+                    let k = k as usize;
+                    if s.done[k] || s.claimed_by[k] != NONE {
+                        continue;
+                    }
+                    let d = s.tiling.dirs[k];
+                    let cz = d.dot(rhat);
+                    if cz <= cos_lim.max(cos_za) {
+                        continue;
+                    }
+                    let c = -(here.angle(d) + ZA_WEIGHT * cz.clamp(-1.0, 1.0).acos());
+                    if best.map_or(true, |b| c > b.0) {
+                        best = Some((c, k));
+                    }
+                }
+            }
             for duty in [duty0, 0] {
+            if best.is_some() {
+                break;
+            }
             if duty != duty0 && (duty0 == 0 || best.is_some()) {
                 break;
             }
@@ -468,6 +569,9 @@ impl App {
             s.progress[k] += self.obs.obs_dt[i] as f32;
             if s.progress[k] >= exp && !s.done[k] {
                 s.done[k] = true;
+                if let (Some(h), Some(&sky)) = (s.saa_hit.get_mut(k), s.saa_sky.get(k)) {
+                    *h = sky;
+                }
                 if let Some(t) = s.done_at.get_mut(k) {
                     *t = ((self.jd - s.pass_start_jd) * 86_400.0) as f32;
                 }
@@ -505,6 +609,7 @@ impl App {
                 let secs = (self.jd - s.pass_start_jd) * 86_400.0;
                 s.pass += 1;
                 let (bands, tail_in_caps) = s.band_stats();
+                let (tail_in_saa, saa_tiles, saa_median_s, saa_last_s) = s.saa_stats();
                 let rec = PassRecord {
                     pass: s.pass,
                     seconds: secs,
@@ -514,6 +619,11 @@ impl App {
                     bands,
                     tail_in_caps,
                     polar: s.polar,
+                    tail_in_saa,
+                    saa_tiles,
+                    saa_median_s,
+                    saa_last_s,
+                    saa_first: s.saa_first,
                     slew_s_per_tile: s.phase_s[0] / s.tiles_completed.max(1) as f64,
                     settle_s_per_tile: s.phase_s[1] / s.tiles_completed.max(1) as f64,
                     locked_s_per_tile: s.phase_s[2] / s.tiles_completed.max(1) as f64,
@@ -541,6 +651,9 @@ impl App {
             "active": self.survey_active(),
             "in_queue": s.in_queue,
             "polar": s.polar,
+            "saa_first": s.saa_first,
+            "saa_sky_tiles": s.saa_sky_n,
+            "saa_sky_left": s.saa_left.len(),
             "idle_now": { "saa": s.idle_now[0], "other_or_off": s.idle_now[1], "nothing_in_reach": s.idle_now[2] },
             "turn_deg": s.turn_deg,
             "tiles": s.tiles(),
@@ -617,6 +730,8 @@ impl App {
             }
             ui.checkbox(&mut self.survey.polar, "polar duty: satellites near the turning latitude tile the polar caps")
                 .on_hover_text("Sky beyond the shell's turning latitude (53° by default) never passes overhead. Satellites near that latitude, where the shell is densest, take the caps; the rest leave them until the tail.");
+            ui.checkbox(&mut self.survey.saa_first, "SAA first: the sky overhead the South Atlantic Anomaly is taken first, at any slew")
+                .on_hover_text("Telescopes inside the SAA are safed, so the sky above it can only be tiled from outside, looking sideways. With this on, every free telescope that can see an undone tile of that sky takes one before anything else.");
             ui.checkbox(&mut self.survey.in_queue, "free telescopes tile during Science operations")
                 .on_hover_text("Idle telescopes tile the sky instead of staring at the zenith.");
         });

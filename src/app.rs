@@ -388,6 +388,7 @@ impl App {
                 }
                 "--survey-in-queue" => self.survey.in_queue = true,
                 "--survey-polar" => self.survey.polar = true,
+                "--survey-saa-first" => self.survey.saa_first = true,
                 "--recovery-auto" => self.recovery_cfg.auto = true,
                 "--scenario" => {
                     let q = val();
