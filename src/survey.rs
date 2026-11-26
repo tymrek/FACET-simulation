@@ -76,6 +76,54 @@ const STACK_START_TILES: usize = 2000;
 const STACK_JOIN_PER_STEP: usize = 512;
 const STACK_MIN_GAIN_S: f64 = 5.0;
 const STACK_SETTLE_S: f64 = 5.0;
+/// Takeable tiles at or below which searches use the 2° grid.
+const GRID_MAX_TAKEABLE: usize = 15_000;
+
+/// Tile indices bucketed on a 2° RA/Dec grid.
+struct SkyGrid {
+    cells: Vec<Vec<u32>>,
+}
+
+impl SkyGrid {
+    const ROWS: usize = 90;
+    const COLS: usize = 180;
+    fn new() -> SkyGrid {
+        SkyGrid { cells: vec![Vec::new(); Self::ROWS * Self::COLS] }
+    }
+    fn cell(ra_deg: f64, dec_deg: f64) -> (usize, usize) {
+        let r = (((dec_deg + 90.0) / 2.0) as usize).min(Self::ROWS - 1);
+        let c = ((ra_deg.rem_euclid(360.0) / 2.0) as usize).min(Self::COLS - 1);
+        (r, c)
+    }
+    fn push(&mut self, d: V3, k: u32) {
+        let (ra, dec) = d.to_radec();
+        let (r, c) = Self::cell(deg(ra), deg(dec));
+        self.cells[r * Self::COLS + c].push(k);
+    }
+    /// Every tile in cells that may lie within `radius_deg` of (ra, dec).
+    fn near(&self, ra_deg: f64, dec_deg: f64, radius_deg: f64, mut f: impl FnMut(u32)) {
+        // Generous: covers the ring sweep's box (rings up to a tile step
+        // beyond the radius, RA windows rounded out to whole tiles).
+        let r0 = Self::cell(0.0, (dec_deg - radius_deg - 3.0).max(-90.0)).0;
+        let r1 = Self::cell(0.0, (dec_deg + radius_deg + 3.0).min(89.999)).0;
+        for r in r0..=r1 {
+            // Widest RA span of the window in this row (its poleward edge).
+            let lo = -90.0 + 2.0 * r as f64;
+            let pole = lo.abs().max((lo + 2.0).abs()).min(89.9);
+            let near_pole = (dec_deg.abs() + radius_deg) >= 89.0 || pole >= 89.0;
+            let span = if near_pole { 180.0 } else { (radius_deg / rad(pole).cos() + 4.0).min(180.0) };
+            let c0 = ((ra_deg - span) / 2.0).floor() as isize;
+            let c1 = ((ra_deg + span) / 2.0).floor() as isize;
+            let cnt = ((c1 - c0 + 1) as usize).min(Self::COLS);
+            for j in 0..cnt {
+                let c = (c0 + j as isize).rem_euclid(Self::COLS as isize) as usize;
+                for &k in &self.cells[r * Self::COLS + c] {
+                    f(k);
+                }
+            }
+        }
+    }
+}
 
 /// Is `p` inside a frame `w` (east-west) × `h` (north-south) degrees
 /// centred on `c` (gnomonic projection, long side east-west)? The edges are
@@ -93,6 +141,8 @@ pub fn frame_contains(c: V3, p: V3, w: f64, h: f64) -> bool {
 #[derive(Default)]
 pub struct Tiling {
     pub dirs: Vec<V3>,
+    /// Ring of each tile.
+    ring: Vec<u16>,
     /// First tile index of each declination ring, plus a final sentinel.
     ring_start: Vec<u32>,
     ring_dec: Vec<f64>,
@@ -106,7 +156,7 @@ impl Tiling {
         let nr = (180.0 / (h_deg / (1.0 + SURVEY_OVERLAP))).ceil() as usize;
         let dstep = 180.0 / nr as f64;
         let sx = w_deg / (1.0 + SURVEY_OVERLAP);
-        let (mut dirs, mut ring_start, mut ring_dec) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut dirs, mut ring_start, mut ring_dec, mut ring) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
         for r in 0..nr {
             let dec = -90.0 + (r as f64 + 0.5) * dstep;
             let edge = (dec.abs() - dstep / 2.0).max(0.0);
@@ -130,19 +180,42 @@ impl Tiling {
             }
             ring_start.push(dirs.len() as u32);
             ring_dec.push(dec);
+            ring.extend(std::iter::repeat(r as u16).take(m));
             for k in 0..m {
                 let ra = k as f64 / m as f64 * 360.0;
                 dirs.push(V3::from_radec(rad(ra), rad(dec)));
             }
         }
         ring_start.push(dirs.len() as u32);
-        Tiling { dirs, ring_start, ring_dec, step_deg: dstep, fov_key: Tiling::key(w_deg, h_deg) }
+        Tiling { dirs, ring, ring_start, ring_dec, step_deg: dstep, fov_key: Tiling::key(w_deg, h_deg) }
     }
     fn key(w: f64, h: f64) -> i64 {
         (w * 1000.0) as i64 * 100_000 + (h * 1000.0) as i64
     }
     fn ring_of(&self, dec_deg: f64) -> usize {
         (((dec_deg + 90.0) / self.step_deg) as isize).clamp(0, self.ring_dec.len() as isize - 1) as usize
+    }
+    /// Is tile `k` in the search box the ring sweep visits for a pointing at
+    /// (`ra_deg`, `dec_deg`) and `half_deg`? (Exactly the tiles
+    /// `ring_window` yields over rings `ring_of(dec ± half)`.)
+    fn in_box(&self, k: usize, ra_deg: f64, dec_deg: f64, half_deg: f64) -> bool {
+        let r = self.ring[k] as usize;
+        if r < self.ring_of(dec_deg - half_deg) || r > self.ring_of(dec_deg + half_deg) {
+            return false;
+        }
+        let (a, b) = (self.ring_start[r] as usize, self.ring_start[r + 1] as usize);
+        let m = b - a;
+        let cosd = rad(self.ring_dec[r]).cos().max(1e-3);
+        let span = (half_deg / cosd).min(180.0);
+        let per = 360.0 / m as f64;
+        let k0 = ((ra_deg - span) / per).floor() as isize;
+        let k1 = ((ra_deg + span) / per).ceil() as isize;
+        if (k1 - k0 + 1) as usize >= m {
+            return true;
+        }
+        let j = (k - a) as isize;
+        // j ≡ some index in [k0, k1] (mod m)
+        (j - k0).rem_euclid(m as isize) <= k1 - k0
     }
     /// Tiles of ring `r` within ±`half_deg` of right ascension `ra_deg`.
     fn ring_window(&self, r: usize, ra_deg: f64, half_deg: f64) -> impl Iterator<Item = usize> + '_ {
@@ -252,6 +325,10 @@ pub struct Survey {
     /// Tile was overhead the SAA when it was completed.
     pub saa_hit: Vec<bool>,
     pub saa_sky_n: usize,
+    /// Centre and angular radius of the SAA sky (telescopes further than
+    /// MAX_ZA_DEG beyond it skip the SAA-first scan).
+    pub saa_center: V3,
+    pub saa_radius: f64,
     /// Tiles in that band now, refreshed with the SAA sky.
     pub sun_sky: Vec<bool>,
     pub sun_hit: Vec<bool>,
@@ -259,6 +336,9 @@ pub struct Survey {
     pub stack_joins: u64,
     /// Telescopes holding each tile (stacking only; rebuilt each assignment).
     pub holders: Vec<u16>,
+    /// Found nothing within the slew cap and was turned away from the far
+    /// (tail) search for lack of slots: go straight to it next time.
+    pub want_far: Vec<bool>,
 }
 
 impl Survey {
@@ -281,6 +361,9 @@ impl Survey {
             self.history.clear();
             self.pass = 0;
         }
+        if self.want_far.len() != n_sat {
+            self.want_far = vec![false; n_sat];
+        }
         if self.tile_of.len() != n_sat {
             self.tile_of = vec![NONE; n_sat];
             self.claimed_by.iter_mut().for_each(|c| *c = NONE);
@@ -294,6 +377,7 @@ impl Survey {
         self.was_blocked.iter_mut().for_each(|b| *b = false);
         self.sun_hit.iter_mut().for_each(|h| *h = false);
         self.stack_joins = 0;
+        self.want_far.iter_mut().for_each(|t| *t = false);
         self.saa_sky_jd = 0.0;
         self.n_done = 0;
         self.pass_start_jd = jd;
@@ -452,6 +536,11 @@ impl App {
                     nsky += s.saa_sky[k] as usize;
                 }
                 s.saa_sky_n = nsky;
+                let sum = s.tiling.dirs.iter().zip(&s.saa_sky).filter(|x| *x.1).fold(V3::default(), |a, (d, _)| a + *d);
+                if nsky > 0 && sum.norm() > 1e-9 {
+                    s.saa_center = sum.unit();
+                    s.saa_radius = s.tiling.dirs.iter().zip(&s.saa_sky).filter(|x| *x.1).map(|(d, _)| d.angle(s.saa_center)).fold(0.0, f64::max);
+                }
             }
         }
         if !safed {
@@ -478,6 +567,27 @@ impl App {
                 }
             }
         }
+        // Late in a pass, bucket the takeable tiles (undone, and unclaimed or
+        // claimed but not yet started) on a 2° grid, so a search visits only
+        // the cells within reach that still hold one. Sweeping 32° of mostly
+        // finished sky for each of thousands of freed telescopes took ~0.1 ms
+        // each and stalled the closing steps of a pass (~750 ms at 10,000).
+        let avail = {
+            // Tiles hidden by a keep-out this pass are left out: ~6,700 of
+            // them sit next to the day-side telescopes and were evaluated
+            // (and rejected) by every search.
+            let take = |k: usize| !s.done[k] && !s.was_blocked[k] && (s.claimed_by[k] == NONE || s.progress[k] == 0.0);
+            let n_take = (0..s.tiles()).filter(|&k| take(k)).count();
+            (n_take <= GRID_MAX_TAKEABLE).then(|| {
+                let mut g = SkyGrid::new();
+                for k in (0..s.tiles()).filter(|&k| take(k)) {
+                    g.push(s.tiling.dirs[k], k as u32);
+                }
+                g
+            })
+        };
+        // SAA tiles nobody has claimed yet: once none are left, skip the list.
+        let mut saa_open = s.saa_left.iter().filter(|&&k| s.claimed_by[k as usize] == NONE).count();
         let agil = crate::attitude::Agility::from_obs(&o);
         let exp = o.exp_s.max(1.0);
         let mut joins = 0usize;
@@ -514,7 +624,8 @@ impl App {
             let mut best: Option<(f64, usize)> = None;
             // SAA-first: the cheapest unclaimed SAA-sky tile in view, at any
             // slew (brute force over the list).
-            {
+            let far_only = s.want_far[i] && !s.left.is_empty();
+            if !far_only && saa_open > 0 && rhat.angle(s.saa_center) <= rad(MAX_ZA_DEG) + s.saa_radius {
                 for &k in &s.saa_left {
                     let k = k as usize;
                     if s.done[k] || s.claimed_by[k] != NONE {
@@ -531,58 +642,90 @@ impl App {
                     }
                 }
             }
-            if best.is_none() {
-            let mut search_r = 4.0 * s.tiling.step_deg;
-            loop {
-                // Search out to exactly the cap on the last round (doubling
-                // alone stepped 18° → 36° and never searched 18–32°).
-                let radius_now = search_r.min(MAX_SLEW_DEG);
-                let radius = radius_now;
-                let r0 = s.tiling.ring_of(dec - radius);
-                let r1 = s.tiling.ring_of(dec + radius);
-                for r in r0..=r1 {
-                    for k in s.tiling.ring_window(r, ra, radius) {
-                        if s.done[k] {
-                            continue;
-                        }
-                        let owner = s.claimed_by[k];
-                        if owner != NONE {
-                            // Steal only from a claimant still slewing toward it
-                            // from well further away.
-                            let oj = owner as usize;
-                            if s.progress[k] > 0.0 || oj >= n {
-                                continue;
-                            }
-                            let d = s.tiling.dirs[k];
-                            if self.obs.att[oj].dir.angle(d) < here.angle(d) + rad(STEAL_MARGIN_DEG) {
-                                continue;
-                            }
-                        }
-                        let d = s.tiling.dirs[k];
-                        let cz = d.dot(rhat);
-                        if cz <= cos_lim.max(cos_za) {
-                            continue;
-                        }
-                        // Cost: slew angle plus a zenith-distance penalty, so
-                        // telescopes work high in their sky (less Earthshine,
-                        // longer visibility) instead of drifting to the limb.
-                        let mut c = -(here.angle(d) + ZA_WEIGHT * cz.clamp(-1.0, 1.0).acos());
-                        if s.sun_sky[k] {
-                            c += rad(SUN_FIRST_BONUS_DEG);
-                        }
-                        if best.map_or(true, |b| c > b.0) && ok(d) {
-                            best = Some((c, k));
+            if best.is_none() && !far_only {
+                // Cost of taking tile k: slew angle plus a zenith-distance
+                // penalty, so telescopes work high in their sky (less
+                // Earthshine, longer visibility) instead of drifting to the
+                // limb; sunward tiles preferred. None if it can't be taken.
+                let eval = |k: usize| -> Option<f64> {
+                    if s.done[k] {
+                        return None;
+                    }
+                    let d = s.tiling.dirs[k];
+                    let owner = s.claimed_by[k];
+                    if owner != NONE {
+                        // Steal only from a claimant still slewing toward it
+                        // from well further away.
+                        let oj = owner as usize;
+                        if s.progress[k] > 0.0 || oj >= n || self.obs.att[oj].dir.angle(d) < here.angle(d) + rad(STEAL_MARGIN_DEG) {
+                            return None;
                         }
                     }
+                    let cz = d.dot(rhat);
+                    if cz <= cos_lim.max(cos_za) {
+                        return None;
+                    }
+                    let mut c = -(here.angle(d) + ZA_WEIGHT * cz.clamp(-1.0, 1.0).acos());
+                    if s.sun_sky[k] {
+                        c += rad(SUN_FIRST_BONUS_DEG);
+                    }
+                    Some(c)
+                };
+                if let Some(g) = &avail {
+                    // The same search as the sweep below (the same boxes,
+                    // widening 4, 8, 16 … tile steps up to MAX_SLEW_DEG, the
+                    // best tile in the first box holding any), but over the
+                    // grid of takeable tiles only.
+                    let mut search_r = 4.0 * s.tiling.step_deg;
+                    loop {
+                        let radius = search_r.min(MAX_SLEW_DEG);
+                        g.near(ra, dec, radius, |k| {
+                            let k = k as usize;
+                            if !s.tiling.in_box(k, ra, dec, radius) {
+                                return;
+                            }
+                            if let Some(c) = eval(k) {
+                                if best.map_or(true, |b| c > b.0) && ok(s.tiling.dirs[k]) {
+                                    best = Some((c, k));
+                                }
+                            }
+                        });
+                        if best.is_some() || radius >= MAX_SLEW_DEG {
+                            break;
+                        }
+                        search_r = radius * 2.0;
+                    }
+                } else {
+                    let mut search_r = 4.0 * s.tiling.step_deg;
+                    loop {
+                        // Search out to exactly the cap on the last round
+                        // (doubling alone stepped 18° → 36° and never
+                        // searched 18–32°).
+                        let radius = search_r.min(MAX_SLEW_DEG);
+                        let r0 = s.tiling.ring_of(dec - radius);
+                        let r1 = s.tiling.ring_of(dec + radius);
+                        for r in r0..=r1 {
+                            for k in s.tiling.ring_window(r, ra, radius) {
+                                if let Some(c) = eval(k) {
+                                    if best.map_or(true, |b| c > b.0) && ok(s.tiling.dirs[k]) {
+                                        best = Some((c, k));
+                                    }
+                                }
+                            }
+                        }
+                        if best.is_some() || radius >= MAX_SLEW_DEG {
+                            break;
+                        }
+                        search_r = radius * 2.0;
+                    }
                 }
-                if best.is_some() || radius_now >= MAX_SLEW_DEG {
-                    break;
-                }
-                search_r = radius_now * 2.0;
-            }
             }
             // The tail: nothing within the cap, but tiles remain somewhere this
             // telescope can see. A long slew beats idling at the zenith.
+            // Turned away only because this step's far searches ran out: go
+            // straight to the far search next step.
+            let fb_denied = best.is_none() && !s.left.is_empty() && fallbacks >= MAX_FALLBACKS_PER_STEP;
+            s.want_far[i] = fb_denied;
             if best.is_none() && !s.left.is_empty() && fallbacks < MAX_FALLBACKS_PER_STEP {
                 fallbacks += 1;
                 for &k in &s.left {
@@ -603,6 +746,9 @@ impl App {
             }
             if let Some((_, k)) = best {
                 let prev = s.claimed_by[k];
+                if prev == NONE && s.saa_sky[k] && saa_open > 0 {
+                    saa_open -= 1;
+                }
                 if prev != NONE {
                     // Hand the old claimant back to the free pool (zenith).
                     let j = prev as usize;
@@ -917,6 +1063,49 @@ mod tests {
 
     fn in_frame(t: &Tiling, k: usize, p: V3, w: f64, h: f64) -> bool {
         frame_contains(t.dirs[k], p, w, h)
+    }
+
+    #[test]
+    fn grid_box_matches_the_ring_sweep() {
+        let t = Tiling::new(1.289, 0.860);
+        let mut g = SkyGrid::new();
+        for (k, d) in t.dirs.iter().enumerate() {
+            g.push(*d, k as u32);
+        }
+        for (ra, dec) in [(0.0, 0.0), (359.5, 10.0), (120.0, 60.0), (45.0, -75.0), (200.0, 88.0), (10.0, -89.5), (180.0, 58.0), (77.0, 33.0)] {
+            for radius in [3.3, 6.6, 13.2, 26.4, MAX_SLEW_DEG] {
+                let mut sweep = std::collections::BTreeSet::new();
+                for r in t.ring_of(dec - radius)..=t.ring_of(dec + radius) {
+                    sweep.extend(t.ring_window(r, ra, radius));
+                }
+                let mut grid = std::collections::BTreeSet::new();
+                g.near(ra, dec, radius, |k| {
+                    if t.in_box(k as usize, ra, dec, radius) {
+                        grid.insert(k as usize);
+                    }
+                });
+                assert_eq!(sweep, grid, "RA {ra} Dec {dec} r {radius}");
+            }
+        }
+    }
+
+    #[test]
+    fn sky_grid_finds_every_tile_in_reach() {
+        let t = Tiling::new(1.289, 0.860);
+        let mut g = SkyGrid::new();
+        for (k, d) in t.dirs.iter().enumerate() {
+            g.push(*d, k as u32);
+        }
+        for (ra, dec) in [(0.0, 0.0), (359.5, 10.0), (120.0, 60.0), (45.0, -75.0), (200.0, 88.0), (10.0, -89.5), (180.0, 58.0)] {
+            let c = V3::from_radec(rad(ra), rad(dec));
+            let mut seen = vec![false; t.dirs.len()];
+            g.near(ra, dec, MAX_SLEW_DEG, |k| seen[k as usize] = true);
+            for (k, d) in t.dirs.iter().enumerate() {
+                if deg(d.angle(c)) <= MAX_SLEW_DEG {
+                    assert!(seen[k], "missed tile {k} near RA {ra} Dec {dec}");
+                }
+            }
+        }
     }
 
     #[test]

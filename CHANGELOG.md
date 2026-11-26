@@ -30,6 +30,19 @@ All-sky survey: one faster tiling pattern, and a fairer end of pass.
   Mosaics keep 10 % overlap (M31 is now 8 tiles on 2 x 4, was 6 on 2 x 3).
   Pass times with the new tiles: 68.4 / 64.4 min (1,000), 8.1 / 6.8 min
   (10,000).
+- All-sky stutter at the end of each pass (also in 0.7.2): late in a pass
+  thousands of freed telescopes each swept 32 deg of finished sky,
+  evaluating the ~6,700 keep-out tiles next to the day side, and slow steps
+  grew longer simulated steps that freed more telescopes. At 10,000 and
+  60x the survey step reached ~0.8 s (0.7.2: 1.1 s). Late in a pass the
+  takeable tiles (undone, not hidden this pass, unclaimed or not yet
+  started) now sit in a 2 deg grid searched with exactly the sweep's boxes
+  (a test checks the two visit the same tiles); the SAA-first scan stops
+  once every SAA tile is claimed and is skipped by telescopes that can't
+  see that sky; telescopes turned away from the far search go straight to
+  it next step. Step times at 10,000 / 60x: 95th percentile 690 -> 145 ms,
+  worst 850 -> 210 ms; pass times unchanged (7.97 vs 7.96 min, run side by
+  side).
 - Pass records add tail_in_saa, tail_in_sun, SAA-sky tile completion times
   and stack_joins; status adds saa_sky_tiles and saa_sky_left.
 
