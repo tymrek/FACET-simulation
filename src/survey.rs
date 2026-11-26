@@ -19,11 +19,20 @@
 //!   its current pointing so slews stay short.
 //! * A tile whose exposure is interrupted (the telescope is taken for other
 //!   work or loses sight of it) keeps its partial integration.
-//! * SAA-first (option): the sky overhead the South Atlantic Anomaly can only
+//! * The pattern, measured fastest of those tried (10,000 telescopes: 8.0
+//!   min a pass against 8.7 for nearest-tile alone; at 1,000 every variant
+//!   is throughput-bound at ~69 min):
+//!   - SAA first: the sky overhead the South Atlantic Anomaly can only
 //!   be reached by telescopes outside it, looking sideways, so with the
-//!   nearest-tile rule it is left to the end. With SAA-first, every free
-//!   telescope that can see an undone tile of that sky takes the cheapest
-//!   one, at any slew; the rest choose as usual.
+//!     nearest-tile rule it is left to the end. Every free telescope that
+//!     can see an undone tile of that sky takes the cheapest one, at any
+//!     slew; the rest choose as usual.
+//!   - Sunward first: tiles within 35° outside the Sun keep-out, slowed by
+//!     stray light, are preferred wherever one is in reach.
+//!   - Tail stacking: once few tiles remain, idle telescopes join tiles
+//!     others are integrating and the exposures are co-added.
+//!   (Polar duty, satellites near the turning latitude tiling the caps, was
+//!   neutral at 1,000 and slower at 10,000, and was removed.)
 
 use crate::app::App;
 use crate::math::{deg, rad, V3};
@@ -39,11 +48,9 @@ const MAX_SLEW_DEG: f64 = 32.0;
 /// A free telescope this much closer may take over a tile whose claimant has
 /// not started integrating, deg.
 const STEAL_MARGIN_DEG: f64 = 8.0;
-/// Polar duty: satellites whose zenith is within this many degrees of the
-/// shell's turning latitude take the polar caps (sky beyond that latitude).
-const POLAR_BAND_DEG: f64 = 8.0;
-/// Shells whose zeniths reach within this of the poles have no caps to assign.
-const POLAR_MIN_CAP_DEG: f64 = 8.0;
+/// Width of the |Dec| band just inside the turning latitude, for the pass
+/// statistics.
+const TURN_BAND_DEG: f64 = 8.0;
 /// Tail search beyond the slew cap: at most this many telescopes per step,
 /// once fewer than `TAIL_LIST_MAX` tiles remain.
 const MAX_FALLBACKS_PER_STEP: usize = 64;
@@ -124,20 +131,16 @@ pub struct PassRecord {
     /// Share of the last 5 % of tiles completed that lie in the polar caps
     /// (|Dec| beyond the shell's turning latitude).
     pub tail_in_caps: f64,
-    pub polar: bool,
     /// Share of the last 5 % of tiles that were overhead the SAA when done.
     pub tail_in_saa: f64,
     /// Tiles done while overhead the SAA, and their median / last completion, s.
     pub saa_tiles: usize,
     pub saa_median_s: f64,
     pub saa_last_s: f64,
-    pub saa_first: bool,
     /// Share of the last 5 % of tiles that lay in the sunward band (within
     /// SUN_FIRST_BAND_DEG outside the Sun keep-out) when done.
     pub tail_in_sun: f64,
-    pub sun_first: bool,
-    /// Tail stacking on, and telescope joins this pass.
-    pub stack: bool,
+    /// Tail stacking: telescope joins this pass.
     pub stack_joins: u64,
     /// Telescope-seconds per completed tile by attitude phase.
     pub slew_s_per_tile: f64,
@@ -191,9 +194,6 @@ pub struct Survey {
     pub resumed_n: u64,
     /// Completion time of each tile this pass, s after the pass start (<0 = not done).
     pub done_at: Vec<f32>,
-    /// Polar duty: satellites near the shell's turning latitude tile the
-    /// polar caps; the rest leave the caps until the tail.
-    pub polar: bool,
     /// Shell's turning latitude (max |zenith Dec|), deg, set each assignment.
     pub turn_deg: f64,
     /// This pass: telescope-seconds of tile holders by attitude phase, and
@@ -203,8 +203,6 @@ pub struct Survey {
     /// Telescopes not holding a tile at the last assignment, by reason:
     /// [in the SAA, taken for other work or off, nothing visible in reach].
     pub idle_now: [usize; 3],
-    /// SAA-first: the sky overhead the SAA is taken first, at any slew.
-    pub saa_first: bool,
     /// Tiles overhead the SAA now (zenith of a point inside its contour at
     /// the shell's altitude), refreshed every SAA_SKY_REFRESH_S.
     pub saa_sky: Vec<bool>,
@@ -214,15 +212,10 @@ pub struct Survey {
     /// Tile was overhead the SAA when it was completed.
     pub saa_hit: Vec<bool>,
     pub saa_sky_n: usize,
-    /// Sunward-first: tiles in the band just outside the Sun keep-out are
-    /// preferred wherever one is in reach.
-    pub sun_first: bool,
     /// Tiles in that band now, refreshed with the SAA sky.
     pub sun_sky: Vec<bool>,
     pub sun_hit: Vec<bool>,
-    /// Tail stacking: once few tiles remain, idle telescopes join tiles
-    /// others are integrating and their exposures are co-added.
-    pub stack: bool,
+    /// Tail stacking joins this pass.
     pub stack_joins: u64,
     /// Telescopes holding each tile (stacking only; rebuilt each assignment).
     pub holders: Vec<u16>,
@@ -305,7 +298,7 @@ impl Survey {
     /// and the share of the last 5 % of tiles that lie in the polar caps.
     fn band_stats(&self) -> (Vec<BandStat>, f64) {
         let turn = self.turn_deg;
-        let edges = [0.0, 30.0, (turn - POLAR_BAND_DEG).max(30.0), turn.max(30.0), 75.0f64.max(turn), 90.0];
+        let edges = [0.0, 30.0, (turn - TURN_BAND_DEG).max(30.0), turn.max(30.0), 75.0f64.max(turn), 90.0];
         let mut out = Vec::new();
         let mut all: Vec<(f32, bool)> = Vec::new();
         for w in edges.windows(2) {
@@ -396,10 +389,6 @@ impl App {
         // Telescopes whose detectors are safed in the South Atlantic Anomaly
         // can't integrate: they give their tiles back rather than sit on them.
         let safed = self.env.cfg.saa_policy == crate::environment::SaaPolicy::Pause;
-        // Polar caps: sky beyond the shell's turning latitude, never overhead.
-        let turn = s.turn_deg;
-        let caps = s.polar && 90.0 - turn >= POLAR_MIN_CAP_DEG;
-        let tail = !s.left.is_empty();
         // The sky overhead the SAA, from the environment's 1° flux map.
         if (self.jd - s.saa_sky_jd) * 86_400.0 >= SAA_SKY_REFRESH_S {
             s.saa_sky_jd = self.jd;
@@ -432,14 +421,14 @@ impl App {
         // SAA-first candidates: undone tiles overhead the SAA, outside the
         // keep-outs.
         s.saa_left.clear();
-        if s.saa_first && s.saa_sky_n > 0 {
+        if s.saa_sky_n > 0 {
             for k in 0..s.tiles() {
                 if s.saa_sky[k] && !s.done[k] && ok(s.tiling.dirs[k]) {
                     s.saa_left.push(k as u32);
                 }
             }
         }
-        let stacking = s.stack && !s.left.is_empty() && s.left.len() <= STACK_START_TILES;
+        let stacking = !s.left.is_empty() && s.left.len() <= STACK_START_TILES;
         if stacking {
             s.holders.clear();
             s.holders.resize(s.tiles(), 0);
@@ -476,12 +465,6 @@ impl App {
                 }
                 s.release(i);
             }
-            // Polar duty for satellites near the turning latitude (their
-            // zenith Dec ≈ their latitude): +1 north cap, −1 south, 0 none.
-            // A duty satellite that finds no cap tile in reach searches again
-            // without duty, so it never idles while other sky is left.
-            let zdec = deg(self.obs.rhat[i].to_radec().1);
-            let duty0: i8 = if caps && zdec.abs() > turn - POLAR_BAND_DEG { zdec.signum() as i8 } else { 0 };
             // Nearest undone, unclaimed, visible tile to where we point now.
             let here = self.obs.att[i].dir;
             let (ra, dec) = here.to_radec();
@@ -491,7 +474,7 @@ impl App {
             let mut best: Option<(f64, usize)> = None;
             // SAA-first: the cheapest unclaimed SAA-sky tile in view, at any
             // slew (brute force over the list).
-            if s.saa_first {
+            {
                 for &k in &s.saa_left {
                     let k = k as usize;
                     if s.done[k] || s.claimed_by[k] != NONE {
@@ -508,13 +491,7 @@ impl App {
                     }
                 }
             }
-            for duty in [duty0, 0] {
-            if best.is_some() {
-                break;
-            }
-            if duty != duty0 && (duty0 == 0 || best.is_some()) {
-                break;
-            }
+            if best.is_none() {
             let mut search_r = 4.0 * s.tiling.step_deg;
             loop {
                 // Search out to exactly the cap on the last round (doubling
@@ -524,15 +501,6 @@ impl App {
                 let r0 = s.tiling.ring_of(dec - radius);
                 let r1 = s.tiling.ring_of(dec + radius);
                 for r in r0..=r1 {
-                    if caps {
-                        let rd = s.tiling.ring_dec[r];
-                        let cap = if rd > turn { 1 } else if rd < -turn { -1 } else { 0 };
-                        // On duty: only the own-hemisphere cap. Off duty: no
-                        // caps until the tail.
-                        if (duty != 0 && cap != duty) || (duty == 0 && cap != 0 && !tail) {
-                            continue;
-                        }
-                    }
                     for k in s.tiling.ring_window(r, ra, radius) {
                         if s.done[k] {
                             continue;
@@ -559,7 +527,7 @@ impl App {
                         // telescopes work high in their sky (less Earthshine,
                         // longer visibility) instead of drifting to the limb.
                         let mut c = -(here.angle(d) + ZA_WEIGHT * cz.clamp(-1.0, 1.0).acos());
-                        if s.sun_first && s.sun_sky[k] {
+                        if s.sun_sky[k] {
                             c += rad(SUN_FIRST_BONUS_DEG);
                         }
                         if best.map_or(true, |b| c > b.0) && ok(d) {
@@ -747,15 +715,11 @@ impl App {
                     t95: s.t95.unwrap_or(secs),
                     bands,
                     tail_in_caps,
-                    polar: s.polar,
                     tail_in_saa,
                     saa_tiles,
                     saa_median_s,
                     saa_last_s,
-                    saa_first: s.saa_first,
                     tail_in_sun,
-                    sun_first: s.sun_first,
-                    stack: s.stack,
                     stack_joins: s.stack_joins,
                     slew_s_per_tile: s.phase_s[0] / s.tiles_completed.max(1) as f64,
                     settle_s_per_tile: s.phase_s[1] / s.tiles_completed.max(1) as f64,
@@ -783,10 +747,6 @@ impl App {
         serde_json::json!({
             "active": self.survey_active(),
             "in_queue": s.in_queue,
-            "polar": s.polar,
-            "saa_first": s.saa_first,
-            "sun_first": s.sun_first,
-            "stack": s.stack,
             "stack_joins": s.stack_joins,
             "saa_sky_tiles": s.saa_sky_n,
             "saa_sky_left": s.saa_left.len(),
@@ -864,14 +824,6 @@ impl App {
             if ui.selectable_label(self.mode == obs::Mode::AllSky, "Dedicate the fleet").on_hover_text("Every telescope not on a STARE campaign tiles the sky.").clicked() {
                 self.mode = if self.mode == obs::Mode::AllSky { obs::Mode::Queue } else { obs::Mode::AllSky };
             }
-            ui.checkbox(&mut self.survey.polar, "polar duty: satellites near the turning latitude tile the polar caps")
-                .on_hover_text("Sky beyond the shell's turning latitude (53° by default) never passes overhead. Satellites near that latitude, where the shell is densest, take the caps; the rest leave them until the tail.");
-            ui.checkbox(&mut self.survey.saa_first, "SAA first: the sky overhead the South Atlantic Anomaly is taken first, at any slew")
-                .on_hover_text("Telescopes inside the SAA are safed, so the sky above it can only be tiled from outside, looking sideways. With this on, every free telescope that can see an undone tile of that sky takes one before anything else.");
-            ui.checkbox(&mut self.survey.sun_first, "sunward first: sky just outside the Sun keep-out is preferred")
-                .on_hover_text("Tiles within 35° outside the Sun keep-out, where sunward stray light slows integrations, are taken in preference to others in reach.");
-            ui.checkbox(&mut self.survey.stack, "tail stacking: idle telescopes join the last tiles and co-add")
-                .on_hover_text("Once 2,000 or fewer tiles remain, a telescope with nothing in reach joins the tile it can finish soonest; the exposures of all telescopes on a tile are co-added.");
             ui.checkbox(&mut self.survey.in_queue, "free telescopes tile during Science operations")
                 .on_hover_text("Idle telescopes tile the sky instead of staring at the zenith.");
         });

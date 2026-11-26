@@ -55,9 +55,12 @@
       as a group, and serves a stitched overview at /api/mosaic/{group}.
 - [x] All-sky survey: day-side satellites (zenith in the Sun/Moon keep-out) now take
       tiles (passes 10–25 % faster); per-phase and per-|Dec|-band pass statistics;
-      optional polar duty (measured neutral at 1,000, slightly worse at 10,000).
-- [ ] All-sky at 10,000: the last 5 % (~1–2 min) sits at |Dec| < 30°, not the caps;
-      find out which tiles (Sun keep-out edge?) and why they come late.
+      polar duty tried (neutral at 1,000, slower at 10,000; since removed).
+- [x] All-sky at 10,000: the tail was the sky overhead the SAA (80–90 %) and, at
+      the very end, tiles the moving Moon uncovered. Survey pattern is now SAA
+      first + sunward first + tail stacking (8.7 → ~8.0 min at 10,000); a tile
+      hidden by a keep-out during the pass no longer holds it open. Polar duty
+      removed.
 - [ ] Mosaic follow-ups: roll the grid to the object's major axis (fewer tiles for
       inclined galaxies); overview at full depth per tile instead of the shallowest.
 - [ ] Galaxy models from catalogue axis ratios: near edge-on galaxies with big halos

@@ -547,7 +547,8 @@ makes the fleet actually tile the sky (`src/survey.rs`). The sphere is cut
 into fixed tiles one field of view across (rings of declination, ~10 %
 overlap; 41,172 at the default 1.05° field). Each free telescope takes the
 nearest undone tile it can see within 75° of its zenith and 32° of its
-current pointing, slews, settles and integrates through the attitude model;
+current pointing (with the priorities below), slews, settles and integrates
+through the attitude model;
 only locked, dark-sky-equivalent integration counts, so slews, the South
 Atlantic Anomaly, Earthshine and sunward stray light all cost what they
 cost. Once fewer than 8,000 tiles remain, a telescope with nothing within
@@ -557,7 +558,9 @@ by other work, hand their tiles back **with the integration so far kept**:
 an interrupted exposure is read out and stacked with whoever resumes the
 tile (an assumption). A closer free telescope may take over a tile whose
 claimant is still slewing. A pass is complete when every tile is done or
-inside a keep-out. The sky view shows coverage filling in; the panel, status
+has been inside the Sun or Moon keep-out at some point during the pass (so
+tiles the moving Moon uncovers at the end wait for the next pass instead of
+holding the fleet for a full exposure each). The sky view shows coverage filling in; the panel, status
 API and public site report each pass's time and the time to 95 %.
 
 Measured with defaults (dedicated fleet, 3 passes each): **1,000
@@ -579,17 +582,37 @@ that fix they sat out, and passes took 76–79 min (1,000) and 10.5–12 min
 per-phase time per tile, completion times by |Dec| band, and the share of
 the last 5 % of tiles in the polar caps.
 
-**Polar duty** (`--survey-polar`, off by default): the sky beyond the
-shell's turning latitude (±53° by default; about 20 % of the sky) never
-passes overhead, and without help it was most of the tail (30–74 % of the
-last 5 % of tiles). With polar duty, satellites within 8° of the turning
-latitude — the densest part of the shell — take the cap in their own
-hemisphere, searching without duty when no cap tile is in reach, and the
-rest leave the caps until the tail. Measured: the caps then finish early
-and leave the tail, but whole passes are no faster (1,000: 67–73 min, the
-same; 10,000: 9.2–10.1 min, slightly slower), because the pass is
-throughput-bound. Not offered for shells whose zeniths reach within 8° of
-the poles (sun-synchronous).
+The pattern adds three priorities to nearest-tile, chosen by measurement:
+
+* **SAA first.** Telescopes inside the South Atlantic Anomaly are safed, so
+  the sky overhead it (~3,300 tiles at any moment, moving 15° an hour in RA
+  as the Earth turns) can only be tiled from outside, looking sideways; with
+  nearest-tile alone it was 80–90 % of the last 5 % of tiles at 10,000. Every
+  free telescope that can see an undone tile of that sky takes the cheapest
+  one, at any slew. It is then finished within ~3 min (10,000) or ~25 min
+  (1,000).
+* **Sunward first.** Tiles within 35° outside the Sun keep-out, slowed by
+  stray light, are preferred (by 30° of slew-equivalent cost) wherever one is
+  in reach.
+* **Tail stacking.** Once 2,000 or fewer tiles remain, a telescope with
+  nothing in reach joins the tile whose finish it brings forward most
+  (allowing for its slew and settle), and the exposures on a tile are
+  co-added (an assumption, like resumed tiles). ~250 joins a pass at 10,000.
+
+Measured (60×, dedicated fleet, current completion rule), pass / 95 %:
+
+| | 1,000 telescopes | 10,000 telescopes |
+|---|---|---|
+| nearest-tile only | 69.3 / 64.0 min | 8.7 / 6.5 min |
+| SAA first | 69.9 / 65.1 | 8.5 / 6.7 |
+| tail stacking | 69.3 / 64.6 | 8.3 / 6.5 |
+| SAA first + stacking | 69.4 / 65.1 | 8.2 / 6.8 |
+| all three (the pattern) | **67.6 / 63.5** | **8.0 / 6.7** |
+
+At 1,000 the pass is throughput-bound and the pattern gains ~2 % at most;
+at 10,000 it saves ~8 %. Polar duty (satellites near
+the turning latitude tiling the caps) was also tried: neutral at 1,000,
+slower at 10,000; it was removed and `--survey-polar` is ignored.
 
 The option *free telescopes tile during Science operations*
 (`--survey-in-queue`) runs the same survey on telescopes the queue isn't

@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+All-sky survey: one faster tiling pattern, and a fairer end of pass.
+
+- SAA first: the sky overhead the South Atlantic Anomaly (reachable only
+  from outside it, looking sideways) was 80-90 % of the last 5 % of tiles
+  at 10,000 telescopes. Every free telescope that can see an undone tile of
+  that sky now takes the cheapest, at any slew.
+- Sunward first: tiles within 35 deg outside the Sun keep-out are preferred
+  wherever one is in reach.
+- Tail stacking: once 2,000 or fewer tiles remain, idle telescopes join the
+  tile they can bring forward most; exposures are co-added.
+- Pass completion: a tile hidden by the Sun or Moon keep-out at any check
+  during the pass no longer holds the pass open (each tile the moving Moon
+  uncovered at the end needed a full exposure with the fleet idle). Near
+  the end the check runs every 5 s, not every minute.
+- Polar duty removed (neutral at 1,000, slower at 10,000); `--survey-polar`
+  is ignored with a warning.
+- Measured (60x, dedicated fleet), pass / 95 %: 10,000 telescopes 8.7 / 6.5
+  -> 8.0 / 6.7 min; 1,000 telescopes 69.3 / 64.0 -> 67.6 / 63.5 min.
+- Pass records add tail_in_saa, tail_in_sun, SAA-sky tile completion times
+  and stack_joins; status adds saa_sky_tiles and saa_sky_left.
+
 ## 0.7.2 (2026-11-23)
 
 Queue allocator stays fast as the science-programme backlog fills. At
